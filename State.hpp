@@ -128,8 +128,8 @@ template <COLOR C> struct Attacks<KING, C> {
 
 
 // current game-state
-// consists of current board
-// and where pieces are ought to go..? I can't remember what this reaches_ does
+// board: current board
+// reaches: currently computed attack moves by each piece
 class State {
   Board b;
   std::array <piece_loc_t, Board::SIZE> reaches_;
@@ -159,6 +159,10 @@ public:
 
   decltype(auto) get_piece(PIECE p, COLOR c) {
     return b.get_piece(p, c);
+  }
+
+  decltype(auto) at_pos(pos_t ind) {
+    return b[ind];
   }
 
   piece_loc_t get_positions(COLOR color) {
