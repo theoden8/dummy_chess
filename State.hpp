@@ -141,30 +141,34 @@ public:
       reaches_[i] = 0x00;
     }
     for(pos_t i = 0; i < Board::LENGTH; ++i) {
-      b.set_pos(Board::_pos(A + i, 2), Piece::get(PAWN, WHITE)),
-      b.set_pos(Board::_pos(A + i, 7), Piece::get(PAWN, BLACK));
+      b.set_pos(Board::_pos(A + i, 2), b.get_piece(PAWN, WHITE)),
+      b.set_pos(Board::_pos(A + i, 7), b.get_piece(PAWN, BLACK));
     }
     // make initial position
     for(auto &[color, N] : {std::make_pair(WHITE, 1), std::make_pair(BLACK, 8)}) {
-      b.set_pos(Board::_pos(A, N), Piece::get(ROOK, color)),
-      b.set_pos(Board::_pos(B, N), Piece::get(KNIGHT, color)),
-      b.set_pos(Board::_pos(C, N), Piece::get(BISHOP, color)),
-      b.set_pos(Board::_pos(D, N), Piece::get(QUEEN, color)),
-      b.set_pos(Board::_pos(E, N), Piece::get(KING, color)),
-      b.set_pos(Board::_pos(F, N), Piece::get(BISHOP, color)),
-      b.set_pos(Board::_pos(G, N), Piece::get(KNIGHT, color)),
-      b.set_pos(Board::_pos(H, N), Piece::get(ROOK, color));
+      b.set_pos(Board::_pos(A, N), b.get_piece(ROOK, color)),
+      b.set_pos(Board::_pos(B, N), b.get_piece(KNIGHT, color)),
+      b.set_pos(Board::_pos(C, N), b.get_piece(BISHOP, color)),
+      b.set_pos(Board::_pos(D, N), b.get_piece(QUEEN, color)),
+      b.set_pos(Board::_pos(E, N), b.get_piece(KING, color)),
+      b.set_pos(Board::_pos(F, N), b.get_piece(BISHOP, color)),
+      b.set_pos(Board::_pos(G, N), b.get_piece(KNIGHT, color)),
+      b.set_pos(Board::_pos(H, N), b.get_piece(ROOK, color));
     }
+  }
+
+  decltype(auto) get_piece(PIECE p, COLOR c) {
+    return b.get_piece(p, c);
   }
 
   piece_loc_t get_positions(COLOR color) {
     return
-      Piece::get(PAWN, color).mask
-      | Piece::get(KNIGHT, color).mask
-      | Piece::get(BISHOP, color).mask
-      | Piece::get(ROOK, color).mask
-      | Piece::get(QUEEN, color).mask
-      | Piece::get(KING, color).mask;
+      b.get_piece(PAWN, color).mask
+      | b.get_piece(KNIGHT, color).mask
+      | b.get_piece(BISHOP, color).mask
+      | b.get_piece(ROOK, color).mask
+      | b.get_piece(QUEEN, color).mask
+      | b.get_piece(KING, color).mask;
   }
 
   COLOR enemy(COLOR c) {
@@ -175,43 +179,43 @@ public:
 
   piece_loc_t gen_ind_reach(pos_t i) {
     piece_loc_t free_moves = 0x00;
-    piece_loc_t friends = get_positions(b[i]->color);
-    piece_loc_t enemies = get_positions(enemy(b[i]->color));
-    switch(b[i]->value) {
+    piece_loc_t friends = get_positions(b[i].color);
+    piece_loc_t enemies = get_positions(enemy(b[i].color));
+    switch(b[i].value) {
       case EMPTY:break;
       case PAWN:
-        if(b[i]->color == WHITE)
+        if(b[i].color == WHITE)
           free_moves =  Attacks<PAWN, WHITE>::get(i);
         else
           free_moves =  Attacks<PAWN, BLACK>::get(i);
         break;
       case KNIGHT:
-        if(b[i]->color == WHITE)
+        if(b[i].color == WHITE)
           free_moves =  Attacks<KNIGHT, WHITE>::get(i);
         else
           free_moves =  Attacks<KNIGHT, BLACK>::get(i);
         free_moves &= ~friends;
         break;
       case BISHOP:
-        if(b[i]->color == WHITE)
+        if(b[i].color == WHITE)
           free_moves =  Attacks<BISHOP, WHITE>::get(i);
         else
           free_moves =  Attacks<BISHOP, BLACK>::get(i);
         break;
       case ROOK:
-        if(b[i]->color == WHITE)
+        if(b[i].color == WHITE)
           free_moves =  Attacks<ROOK, WHITE>::get(i);
         else
           free_moves =  Attacks<ROOK, BLACK>::get(i);
         break;
       case QUEEN:
-        if(b[i]->color == WHITE)
+        if(b[i].color == WHITE)
           free_moves =  Attacks<QUEEN, WHITE>::get(i);
         else
           free_moves =  Attacks<QUEEN, BLACK>::get(i);
         break;
       case KING:
-        if(b[i]->color == WHITE)
+        if(b[i].color == WHITE)
           free_moves =  Attacks<KING, WHITE>::get(i);
         else
           free_moves =  Attacks<KING, BLACK>::get(i);
