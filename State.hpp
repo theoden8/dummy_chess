@@ -133,9 +133,12 @@ template <COLOR C> struct Attacks<KING, C> {
 class State {
   Board b;
   std::array <piece_loc_t, Board::SIZE> reaches_;
+  COLOR activePlayer_;
 public:
+
   State():
-    b(), reaches_()
+    b(), reaches_(),
+    activePlayer_(WHITE)
   {
     for(pos_t i = 0; i < Board::SIZE; ++i) {
       reaches_[i] = 0x00;
@@ -155,6 +158,10 @@ public:
       b.set_pos(Board::_pos(G, N), b.get_piece(KNIGHT, color)),
       b.set_pos(Board::_pos(H, N), b.get_piece(ROOK, color));
     }
+  }
+
+  COLOR activePlayer() {
+    return activePlayer_;
   }
 
   decltype(auto) get_piece(PIECE p, COLOR c) {

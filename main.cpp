@@ -15,6 +15,6 @@ int main() {
     bitmask::print_mask(attacks, pos);
   });
   s.print();
-  //Interface iface(s);
-  //iface.run();
+  Interface iface(s);
+  iface.run();
 }
