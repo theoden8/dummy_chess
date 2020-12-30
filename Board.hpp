@@ -1,9 +1,10 @@
 #pragma once
 
-#include "Piece.hpp"
+#include <Piece.hpp>
 
 #include <cmath>
 #include <cassert>
+
 #include <array>
 #include <iostream>
 

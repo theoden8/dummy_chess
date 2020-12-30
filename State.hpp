@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Board.hpp"
+#include <Board.hpp>
 
 template <PIECE P, COLOR C> struct Moves;
 
@@ -28,6 +28,7 @@ template <COLOR C> struct Moves<PAWN, C> {
 
 // knight moves
 template <COLOR C> struct Moves <KNIGHT, C> {
+  // TODO fix, this is clearly wrong
   static constexpr piece_loc_t get(pos_t i) {
     piece_loc_t mask =
       piece_loc_t
@@ -37,8 +38,9 @@ template <COLOR C> struct Moves <KNIGHT, C> {
         | (0x11LLU<<24)
         | (0xA0LLU<<32);
     pos_t offset = 8*2+3-1;
-    if(i <= offset)
+    if(i <= offset) {
       return mask >> (offset - i);
+    }
     return mask << (i - offset);
   }
 };
@@ -113,11 +115,16 @@ template <COLOR C> struct Moves<KING, C> {
   }
 };
 
+
+// current game-state
+// consists of current board
+// and where pieces are ought to go..? I can't remember what this reaches_ does
 class State {
   Board b;
   std::array <piece_loc_t, Board::SIZE> reaches_;
 public:
-  State()
+  State():
+    b(), reaches_()
   {
     for(pos_t i = 0; i < Board::SIZE; ++i) {
       reaches_[i] = 0x00;
@@ -126,6 +133,7 @@ public:
       b.set_pos(Board::_pos(A + i, 2), Piece::get(PAWN, WHITE)),
       b.set_pos(Board::_pos(A + i, 7), Piece::get(PAWN, BLACK));
     }
+    // make initial position
     for(auto &[color, N] : {std::make_pair(WHITE, 1), std::make_pair(BLACK, 8)}) {
       b.set_pos(Board::_pos(A, N), Piece::get(ROOK, color)),
       b.set_pos(Board::_pos(B, N), Piece::get(KNIGHT, color)),
@@ -136,7 +144,6 @@ public:
       b.set_pos(Board::_pos(G, N), Piece::get(KNIGHT, color)),
       b.set_pos(Board::_pos(H, N), Piece::get(ROOK, color));
     }
-    Piece::get(ROOK, BLACK).print();
   }
 
   piece_loc_t get_positions(COLOR color) {

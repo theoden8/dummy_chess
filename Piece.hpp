@@ -51,7 +51,7 @@ namespace bitmask {
 
   // iterate set bits with a function F
   template <typename F>
-  constexpr void foreach(piece_loc_t mask, F &func) {
+  constexpr void foreach(piece_loc_t mask, F &&func) {
     if(!mask)
       return;
     piece_loc_t x = mask;
@@ -82,6 +82,24 @@ namespace bitmask {
     /* static auto pr = [](pos_t p) { std::cout << p << std::endl; }; */
     static const auto pr = [](pos_t p) { printf("(%c, %d)\n", 'A' + p / 8, p % 8 + 1); };
     foreach(mask, pr);
+  }
+
+  void print_mask(piece_loc_t mask, int markspot=-1) {
+    char s[256];
+    int j = 0;
+    for(int i = 0; i < 64; ++i) {
+      if(i == markspot) {
+        s[j++] = 'x';
+      } else {
+        s[j++] = (mask & (1 << i)) ? '*' : '.';
+      }
+      s[j++] = ' ';
+      if(i % 8 == 7) {
+        s[j++] = '\n';
+      }
+    }
+    s[j] = '\0';
+    puts(s);
   }
 } // namespace bitmask
 
@@ -131,7 +149,7 @@ struct Piece {
   }
 
 
-  constexpr void foreach(std::function<void(pos_t)>&func) {
+  constexpr void foreach(std::function<void(pos_t)>&&func) {
     bitmask::foreach(mask, func);
   }
 
@@ -157,8 +175,9 @@ struct Piece {
   }
 
   static constexpr Piece &get(PIECE P = EMPTY, COLOR C = NEUTRAL) {
-    if(P == EMPTY)
+    if(P == EMPTY) {
       return pieces[13-1];
+    }
     return pieces[(P - PAWN) * 2 + C - WHITE];
   }
 
