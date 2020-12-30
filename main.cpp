@@ -10,8 +10,8 @@ int main() {
   constexpr auto colorT = WHITE;
   Piece::get(pieceT, colorT).foreach([&](pos_t pos) mutable -> void {
     printf("white knight pos: %hhu\n", pos);
-    piece_loc_t moves = Moves<pieceT, colorT>::get(pos);
-    bitmask::print_mask(moves, pos);
+    piece_loc_t attacks = Attacks<pieceT, colorT>::get(pos);
+    bitmask::print_mask(attacks, pos);
   });
   s.print();
 }

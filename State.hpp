@@ -2,10 +2,10 @@
 
 #include <Board.hpp>
 
-template <PIECE P, COLOR C> struct Moves;
+template <PIECE P, COLOR C> struct Attacks;
 
-// pawn moves
-template <COLOR C> struct Moves<PAWN, C> {
+// pawn attacks
+template <COLOR C> struct Attacks<PAWN, C> {
   static constexpr piece_loc_t get(pos_t i) {
     pos_t offset = 0;
     piece_loc_t smask = 0x00 | (0x07LLU<<8);
@@ -26,27 +26,31 @@ template <COLOR C> struct Moves<PAWN, C> {
   }
 };
 
-// knight moves
-template <COLOR C> struct Moves <KNIGHT, C> {
+// knight attacks
+// https://www.chessprogramming.org/Knight_Pattern
+template <COLOR C> struct Attacks <KNIGHT, C> {
   // TODO fix, this is clearly wrong
   static constexpr piece_loc_t get(pos_t i) {
-    piece_loc_t mask =
-      piece_loc_t
-          (0xA0LLU<<0)
-        | (0x11LLU<<8)
-        | (0x00LLU)
-        | (0x11LLU<<24)
-        | (0xA0LLU<<32);
-    pos_t offset = 8*2+3-1;
-    if(i <= offset) {
-      return mask >> (offset - i);
-    }
-    return mask << (i - offset);
+    piece_loc_t I = piece_loc_t(1) << i;
+    bool not_a = Board::_x(i) != A;
+    bool not_ab = not_a && Board::_x(i) != B;
+    bool not_h = Board::_x(i) != H;
+    bool not_gh = not_h && Board::_x(i) != G;
+    piece_loc_t mask = 0x00;
+    if(not_h) mask|=I<<17; // bitmask::print_mask(mask, i);
+    if(not_gh)mask|=I<<10; // bitmask::print_mask(mask, i);
+    if(not_gh)mask|=I>>6;  // bitmask::print_mask(mask, i);
+    if(not_h) mask|=I>>15; // bitmask::print_mask(mask, i);
+    if(not_a) mask|=I<<15; // bitmask::print_mask(mask, i);
+    if(not_ab)mask|=I<<6;  // bitmask::print_mask(mask, i);
+    if(not_ab)mask|=I>>10; // bitmask::print_mask(mask, i);
+    if(not_a) mask|=I>>17; // bitmask::print_mask(mask, i);
+    return mask;
   }
 };
 
-// bishop moves
-template <COLOR C> struct Moves<BISHOP, C> {
+// bishop attacks
+template <COLOR C> struct Attacks<BISHOP, C> {
   static constexpr piece_loc_t cut(pos_t i, piece_loc_t mask, int8_t tblr) {
     pos_t shift = 0x00;
     bool top = tblr & 0x08;
@@ -77,23 +81,23 @@ template <COLOR C> struct Moves<BISHOP, C> {
   }
 };
 
-// rook moves
-template <COLOR C> struct Moves<ROOK, C> {
+// rook attacks
+template <COLOR C> struct Attacks<ROOK, C> {
   static constexpr piece_loc_t get(pos_t i) {
     return piece_loc_t(9259542123273814144LLU) >> Board::_x(i)
       | piece_loc_t(0xFF) >> (Board::LENGTH * Board::_y(i));
   }
 };
 
-// queen moves
-template <COLOR C> struct Moves<QUEEN, C> {
+// queen attacks
+template <COLOR C> struct Attacks<QUEEN, C> {
   static constexpr piece_loc_t get(pos_t i) {
-    return Moves<BISHOP, C>::get(i) | Moves<ROOK, C>::get(i);
+    return Attacks<BISHOP, C>::get(i) | Attacks<ROOK, C>::get(i);
   }
 };
 
-// king moves, generic
-template <> struct Moves<KING, NEUTRAL> {
+// king attacks, generic
+template <> struct Attacks<KING, NEUTRAL> {
   static constexpr piece_loc_t get(pos_t i) {
     constexpr piece_loc_t mask = (0x70LLU<<0) | (0x50LLU<<8) | (0x70LLU<<16);
     constexpr piece_loc_t offset = 10-1;
@@ -103,10 +107,10 @@ template <> struct Moves<KING, NEUTRAL> {
   }
 };
 
-// king moves, by a player
-template <COLOR C> struct Moves<KING, C> {
+// king attacks, by a player
+template <COLOR C> struct Attacks<KING, C> {
   static constexpr piece_loc_t get(pos_t i) {
-    piece_loc_t mask = Moves<KING, NEUTRAL>::get(i);
+    piece_loc_t mask = Attacks<KING, NEUTRAL>::get(i);
     if (C == WHITE && i == Board::_pos(E, 1))
       mask |= 0x24;
     else if (C == BLACK && i == Board::_pos(E, 8))
@@ -170,40 +174,40 @@ public:
       case EMPTY:break;
       case PAWN:
         if(b[i]->color == WHITE)
-          free_moves =  Moves<PAWN, WHITE>::get(i);
+          free_moves =  Attacks<PAWN, WHITE>::get(i);
         else
-          free_moves =  Moves<PAWN, BLACK>::get(i);
+          free_moves =  Attacks<PAWN, BLACK>::get(i);
         break;
       case KNIGHT:
         if(b[i]->color == WHITE)
-          free_moves =  Moves<KNIGHT, WHITE>::get(i);
+          free_moves =  Attacks<KNIGHT, WHITE>::get(i);
         else
-          free_moves =  Moves<KNIGHT, BLACK>::get(i);
+          free_moves =  Attacks<KNIGHT, BLACK>::get(i);
         free_moves &= ~friends;
         break;
       case BISHOP:
         if(b[i]->color == WHITE)
-          free_moves =  Moves<BISHOP, WHITE>::get(i);
+          free_moves =  Attacks<BISHOP, WHITE>::get(i);
         else
-          free_moves =  Moves<BISHOP, BLACK>::get(i);
+          free_moves =  Attacks<BISHOP, BLACK>::get(i);
         break;
       case ROOK:
         if(b[i]->color == WHITE)
-          free_moves =  Moves<ROOK, WHITE>::get(i);
+          free_moves =  Attacks<ROOK, WHITE>::get(i);
         else
-          free_moves =  Moves<ROOK, BLACK>::get(i);
+          free_moves =  Attacks<ROOK, BLACK>::get(i);
         break;
       case QUEEN:
         if(b[i]->color == WHITE)
-          free_moves =  Moves<QUEEN, WHITE>::get(i);
+          free_moves =  Attacks<QUEEN, WHITE>::get(i);
         else
-          free_moves =  Moves<QUEEN, BLACK>::get(i);
+          free_moves =  Attacks<QUEEN, BLACK>::get(i);
         break;
       case KING:
         if(b[i]->color == WHITE)
-          free_moves =  Moves<KING, WHITE>::get(i);
+          free_moves =  Attacks<KING, WHITE>::get(i);
         else
-          free_moves =  Moves<KING, BLACK>::get(i);
+          free_moves =  Attacks<KING, BLACK>::get(i);
         free_moves &= ~friends;
         break;
     }

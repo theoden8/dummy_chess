@@ -87,11 +87,12 @@ namespace bitmask {
   void print_mask(piece_loc_t mask, int markspot=-1) {
     char s[256];
     int j = 0;
+    piece_loc_t I = 1;
     for(int i = 0; i < 64; ++i) {
       if(i == markspot) {
         s[j++] = 'x';
       } else {
-        s[j++] = (mask & (1 << i)) ? '*' : '.';
+        s[j++] = (mask & (I << i)) ? '*' : '.';
       }
       s[j++] = ' ';
       if(i % 8 == 7) {
