@@ -2,6 +2,8 @@
 
 #include <Board.hpp>
 
+#include <array>
+
 template <PIECE P, COLOR C> struct Attacks;
 
 // pawn attacks
@@ -28,9 +30,13 @@ template <COLOR C> struct Attacks<PAWN, C> {
 
 // knight attacks
 // https://www.chessprogramming.org/Knight_Pattern
+std::array<piece_loc_t, 64> knightattacks = {};
 template <COLOR C> struct Attacks <KNIGHT, C> {
-  // TODO fix, this is clearly wrong
   static constexpr piece_loc_t get(pos_t i) {
+    // memoized attacks
+    if(knightattacks[i] != 0x00) {
+      return knightattacks[i];
+    }
     piece_loc_t I = piece_loc_t(1) << i;
     bool not_a = Board::_x(i) != A;
     bool not_ab = not_a && Board::_x(i) != B;
@@ -45,6 +51,7 @@ template <COLOR C> struct Attacks <KNIGHT, C> {
     if(not_ab)mask|=I<<6;  // bitmask::print_mask(mask, i);
     if(not_ab)mask|=I>>10; // bitmask::print_mask(mask, i);
     if(not_a) mask|=I>>17; // bitmask::print_mask(mask, i);
+    knightattacks[i] = mask;
     return mask;
   }
 };
