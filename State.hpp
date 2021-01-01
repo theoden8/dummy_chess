@@ -36,7 +36,7 @@ public:
     std::array <piece_bitboard_t, Board::SIZE> attacks = {UINT64_C(0x00)};
     for(auto&a:attacks)a=UINT64_C(0x00);
     piece_bitboard_t friends = b.get_piece_positions(activePlayer());
-    piece_bitboard_t foes = b.get_piece_positions(activePlayer());
+    piece_bitboard_t foes = b.get_piece_positions(enemy_of(activePlayer()));
     for(PIECE p : {PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING}) {
       for(COLOR c : {WHITE, BLACK}) {
         b.get_piece(p,c).foreach([&](pos_t pos) mutable noexcept -> void {
@@ -77,11 +77,6 @@ public:
 
   decltype(auto) at_pos(pos_t i, pos_t j) const noexcept {
     return at_pos(Board::_pos(i,j));
-  }
-
-  COLOR enemy_of(COLOR c) {
-    if(c == NEUTRAL)return NEUTRAL;
-    return (c == WHITE) ? BLACK : WHITE;
   }
 
   void print() {

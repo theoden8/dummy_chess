@@ -190,7 +190,6 @@ struct Interface {
       nc_draw_board_row_piece(y, top, LEFT);
       nc_draw_board_row_piece_margin(y, top, LEFT);
       nc_draw_board_row_margin(y, top, LEFT);
-      nc_reset_color();
       for(int i=0;i<len;++i) {
         if(y_ < Board::LENGTH - 1) {
           if(i == 0) addch(ACS_LTEE);

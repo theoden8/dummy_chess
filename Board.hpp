@@ -21,6 +21,11 @@ typedef uint64_t piece_bitboard_t;
 // player color, neutral when neither/both
 typedef enum { NEUTRAL = 0, WHITE, BLACK } COLOR;
 
+COLOR enemy_of(COLOR c) {
+  if(c == NEUTRAL)return NEUTRAL;
+  return (c == WHITE) ? BLACK : WHITE;
+}
+
 // type alias: position index on bitboard
 typedef uint8_t pos_t;
 
