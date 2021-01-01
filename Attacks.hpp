@@ -7,6 +7,12 @@
 
 
 template <PIECE P, COLOR C> struct Attacks;
+template <PIECE P, COLOR C> struct Moves {
+  // TODO never the case when piece is pinned
+  static constexpr piece_bitboard_t get_moves(piece_bitboard_t mask, piece_bitboard_t friends, piece_bitboard_t foes) {
+    return Attacks<P,C>::get_attacks(mask, friends, foes);
+  }
+};
 
 // attack mask from multiple pieces of the kind at once
 template <PIECE P, COLOR C> struct MultiAttacks {
@@ -45,6 +51,16 @@ template <COLOR C> struct Attacks<PAWN, C> {
     if(i <= offset)return mask >> (offset - i);
     return (mask << (i - offset)) & forwmask;
   }
+};
+
+template <COLOR C> struct Moves<PAWN, C> {
+  static constexpr piece_bitboard_t get_moves(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes) {
+    // TODO passing pawn
+    piece_bitboard_t attacks = Attacks<PAWN,C>::get_attacks(i) & (friends | foes);
+    // TODO can't move two points when first point blocked
+    piece_bitboard_t moves = Moves<PAWN,C>::get_basic_move(i) & (friends | foes);
+    return attacks | moves;
+  }
 
   static constexpr piece_bitboard_t get_basic_move(pos_t i) {
     piece_bitboard_t mask = 0x00;
@@ -60,6 +76,7 @@ template <COLOR C> struct Attacks<PAWN, C> {
     return mask;
   }
 };
+
 
 // knight attacks
 // https://www.chessprogramming.org/Knight_Pattern
@@ -171,28 +188,37 @@ template <COLOR C> struct Attacks<QUEEN, C> {
   }
 };
 
-// king attacks, generic
-template <> struct Attacks<KING, NEUTRAL> {
+// king attacks
+template <COLOR C> struct Attacks<KING, C> {
+  static constexpr piece_bitboard_t get_attacks(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes) {
+    return Attacks<KING, C>::get_basic(i);
+  }
+
   static constexpr piece_bitboard_t get_basic(pos_t i) {
-    constexpr piece_bitboard_t mask = (0x70ULL<<0) | (0x50ULL<<8) | (0x70ULL<<16);
-    constexpr piece_bitboard_t offset = 10-1;
+    piece_bitboard_t left =  (0x4ULL<<0) | (0x4ULL<<8) | (0x4ULL<<16);
+    piece_bitboard_t right = (0x1ULL<<0) | (0x1ULL<<8) | (0x1ULL<<16);
+    constexpr piece_bitboard_t mid = (0x2ULL<<0) | (0x2ULL<<16);
+    if(Board::_x(i)==A)left = 0x00;
+    else if(Board::_x(i)==H)right=0x00;
+    const piece_bitboard_t mask = left|mid|right;
+    constexpr pos_t offset = 8+2-1;
     if(i <= offset)return mask >> (offset - i);
     return mask << (i - offset);
   }
 };
 
-// king attacks, by a player
-template <COLOR C> struct Attacks<KING, C> {
-  static constexpr piece_bitboard_t get_attacks(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes) {
+// king moves, by a player
+template <COLOR C> struct Moves<KING, C> {
+  static constexpr piece_bitboard_t get_moves(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes) {
     return Attacks<KING,C>::get_basic(i);
   }
 
-  static constexpr piece_bitboard_t get_basic(pos_t i) {
+  static constexpr piece_bitboard_t get_basic_move(pos_t i) {
     piece_bitboard_t mask = Attacks<KING, NEUTRAL>::get_basic(i);
     if (C == WHITE && i == Board::_pos(E, 1))
-      mask |= 0x24;
+      mask |= 0x44ULL;
     else if (C == BLACK && i == Board::_pos(E, 8))
-      mask |= 0x24ULL << (Board::SIZE - Board::LENGTH);
+      mask |= 0x44ULL << (Board::SIZE - Board::LENGTH);
     return mask & ~(1ULL << i);
   }
 };
@@ -211,5 +237,5 @@ constexpr piece_bitboard_t get_piece_attacks(PIECE p, COLOR c, pos_t pos, piece_
   if(p==ROOK  &&c==BLACK)return Attacks<ROOK  ,BLACK>::get_attacks(pos,friends,foes);
   if(p==QUEEN &&c==BLACK)return Attacks<QUEEN ,BLACK>::get_attacks(pos,friends,foes);
   if(p==KING  &&c==BLACK)return Attacks<KING  ,BLACK>::get_attacks(pos,friends,foes);
-  abort();
+  return 0x00ULL;
 }

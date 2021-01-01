@@ -45,12 +45,12 @@ namespace bitmask {
   template <typename T>
   inline constexpr pos_t log2_of_exp2(T v) {
     pos_t r = 0x00;
-         if (v >= (UINT64_C(1) << 32)) { r = 32; v >>= 32; }
-    else if (v >= (UINT64_C(1) << 16)) { r = 16; v >>= 16; }
-    else if (v >= (UINT64_C(1) << 8 )) { r = 8 ; v >>= 8 ; }
-    else if (v >= (UINT64_C(1) << 4 )) { r = 4 ; v >>= 4 ; }
-    else if (v >= (UINT64_C(1) << 2 )) { r = 2 ; v >>= 2 ; }
-    else if (v >= (UINT64_C(1) << 1 )) { r = 1 ; v >>= 1 ; }
+    if (v >= (UINT64_C(1) << 32)) { r += 32; v >>= 32; }
+    if (v >= (UINT64_C(1) << 16)) { r += 16; v >>= 16; }
+    if (v >= (UINT64_C(1) << 8 )) { r += 8 ; v >>= 8 ; }
+    if (v >= (UINT64_C(1) << 4 )) { r += 4 ; v >>= 4 ; }
+    if (v >= (UINT64_C(1) << 2 )) { r += 2 ; v >>= 2 ; }
+    if (v >= (UINT64_C(1) << 1 )) { r += 1 ; v >>= 1 ; }
     return r;
   }
 
