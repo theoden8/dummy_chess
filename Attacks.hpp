@@ -56,9 +56,9 @@ template <COLOR C> struct Attacks<PAWN, C> {
 template <COLOR C> struct Moves<PAWN, C> {
   static constexpr piece_bitboard_t get_moves(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes) {
     // TODO passing pawn
-    piece_bitboard_t attacks = Attacks<PAWN,C>::get_attacks(i) & (friends | foes);
+    piece_bitboard_t attacks = Attacks<PAWN,C>::get_attacks(i) & (~friends | foes);
     // TODO can't move two points when first point blocked
-    piece_bitboard_t moves = Moves<PAWN,C>::get_basic_move(i) & (friends | foes);
+    piece_bitboard_t moves = Moves<PAWN,C>::get_basic_move(i) & ~(friends | foes);
     return attacks | moves;
   }
 
@@ -124,6 +124,7 @@ template <COLOR C> struct MultiAttacks<KNIGHT, C> {
 };
 
 // bishop attacks
+std::array<piece_bitboard_t, Board::SIZE> bishopattacks = {0x0ULL};
 template <COLOR C> struct Attacks<BISHOP, C> {
   static constexpr piece_bitboard_t get_attacks(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes) {
     // TODO change according to piece positions
@@ -141,23 +142,18 @@ template <COLOR C> struct Attacks<BISHOP, C> {
     return 0x00;
   }
   static constexpr piece_bitboard_t get_basic(pos_t i) {
-    piece_bitboard_t
-      diag1 = 9241421688590303745ULL,
-      diag2 = 72624976668147840ULL;
-    // to fix
-    // *******
-    //  *******
-    // * ******
-    // ** *****
-    // *** ****
-    // **** ***
-    // *****B**
-    // ********
-    return (diag1 << i
-      | ((i <= 7) ? diag2 >> (7 - i) : diag2 << (i - 7))
-      | ((i <= 56) ? diag2 >> (56 - i) : diag2 << (i - 56))
-      | ((i <= 63) ? diag1 >> (63 - i) : diag1 << (i - 63)))
-      & ~(1ULL << i);
+    if(bishopattacks[i])return bishopattacks[i];
+    piece_bitboard_t mask = 0x00;
+    pos_t step1 = Board::LENGTH + 1;
+    pos_t step2 = Board::LENGTH - 1;
+    int d = i; pos_t x=Board::_x(i), y=Board::_y(i);
+    while(d-step1>0){d-=step1;if(Board::_x(d)>x)break;mask|=1ULL<<d;} d=i;
+    while(d-step2>0){d-=step2;if(Board::_x(d)<x)break;mask|=1ULL<<d;} d=i;
+    while(d+step1<Board::SIZE){d+=step1;if(Board::_x(d)<x)break;mask|=1ULL<<d;} d=i;
+    while(d+step2<Board::SIZE){d+=step2;if(Board::_x(d)>x)break;mask|=1ULL<<d;} d=i;
+    mask &= ~(1ULL << i);
+    bishopattacks[i] = mask;
+    return mask;
   }
 };
 

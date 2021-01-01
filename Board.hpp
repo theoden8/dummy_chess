@@ -65,7 +65,7 @@ namespace bitmask {
   }
 
   template <typename T>
-  constexpr pos_t log2(T t) {
+  inline constexpr pos_t log2(T t) {
     pos_t shift = 0;
     pos_t r = 0;
     r =     (t > 0xFFFFFFFFLLU)?1<<5:0; t >>= r;
