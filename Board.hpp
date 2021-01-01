@@ -16,7 +16,7 @@
 typedef enum { EMPTY = 0, PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING } PIECE;
 
 // type alias: bitboard (as a mask)
-typedef uint64_t piece_loc_t;
+typedef uint64_t piece_bitboard_t;
 
 // player color, neutral when neither/both
 typedef enum { NEUTRAL = 0, WHITE, BLACK } COLOR;
@@ -37,64 +37,77 @@ struct event {
 // https://graphics.stanford.edu/~seander/bithacks.html
 // bit-hacks from stanford graphics, to be placed here
 namespace bitmask {
-  // get the number of set bits
-  constexpr pos_t size(piece_loc_t mask) {
-    if(!mask)
-      return 0;
-    if((mask & (mask - 1)) == 0)
-      return 1;
-    using i64 = piece_loc_t;
-    piece_loc_t x = mask;
-    x = x - ((x >> 1) & (i64)~(i64)0/3);
-    x = (x & (i64)~(i64)0/15*3) + ((x >> 2) & (i64)~(i64)0/15*3);
-    x = (x + (x >> 4)) & (i64)~(i64)0/255*15;
-    return (i64)(x * ((i64)~(i64)0/255)) >> (sizeof(i64) - 1) * CHAR_BIT;
+  template <typename T>
+  inline constexpr bool is_exp2(T v) {
+    return !(v & (v - 1));
+  }
+
+  template <typename T>
+  inline constexpr pos_t log2_of_exp2(T v) {
+    pos_t r = 0x00;
+         if (v >= (UINT64_C(1) << 32)) { r = 32; v >>= 32; }
+    else if (v >= (UINT64_C(1) << 16)) { r = 16; v >>= 16; }
+    else if (v >= (UINT64_C(1) << 8 )) { r = 8 ; v >>= 8 ; }
+    else if (v >= (UINT64_C(1) << 4 )) { r = 4 ; v >>= 4 ; }
+    else if (v >= (UINT64_C(1) << 2 )) { r = 2 ; v >>= 2 ; }
+    else if (v >= (UINT64_C(1) << 1 )) { r = 1 ; v >>= 1 ; }
+    return r;
+  }
+
+  template <typename T>
+  inline constexpr pos_t count_bits(T v) {
+    if(!v)return 0;
+    if(bitmask::is_exp2(v))return 1;
+    v = v - ((v >> 1) & (T)~(T)0/3);                           // temp
+    v = (v & (T)~(T)0/15*3) + ((v >> 2) & (T)~(T)0/15*3);      // temp
+    v = (v + (v >> 4)) & (T)~(T)0/255*15;                      // temp
+    return (T)(v * ((T)~(T)0/255)) >> (sizeof(T) - 1) * CHAR_BIT; // count
+  }
+
+  template <typename T>
+  constexpr pos_t log2(T t) {
+    pos_t shift = 0;
+    pos_t r = 0;
+    r =     (t > 0xFFFFFFFFLLU)?1<<5:0; t >>= r;
+    shift = (t > 0xFFFF)       ?1<<4:0; t >>= shift; r |= shift;
+    shift = (t > 0xFF)         ?1<<3:0; t >>= shift; r |= shift;
+    shift = (t > 0xF)          ?1<<2:0; t >>= shift; r |= shift;
+    shift = (t > 0x3)          ?1<<1:0; t >>= shift; r |= shift;
+                                                     r |= (t >> 1);
+    return r;
   }
 
   // iterate set bits with a function F
   template <typename F>
-  constexpr void foreach(piece_loc_t mask, F &&func) {
-    if(!mask)
+  constexpr void foreach(piece_bitboard_t mask, F &&func) {
+    if(!mask)return;
+    if(is_exp2(mask)) {
+      func(bitmask::log2_of_exp2(mask));
       return;
-    piece_loc_t x = mask;
-    if((mask & (mask - 1)) == 0) {
-      #define S(k) if (x >= (UINT64_C(1) << k)) { r += k; x >>= k; }
-      pos_t r = 0x00; S(32); S(16); S(8); S(4); S(2); S(1);
-      func(r);
-      return;
-      #undef S
     }
+    piece_bitboard_t x = mask;
     while(x) {
-      piece_loc_t t = x;
-      pos_t shift = 0;
-      pos_t r = 0x00;
-      r = (t > 0xFFFFFFFF) << 5; t >>= r;
-      shift = (t > 0xFFFF) << 4; t >>= shift; r |= shift;
-      shift = (t > 0xFF) << 3; t >>= shift; r |= shift;
-      shift = (t > 0xF) << 2; t >>= shift; r |= shift;
-      shift = (t > 0x3) << 1; t >>= shift; r |= shift;
-      r |= (t >> 1);
+      pos_t r = bitmask::log2(x);
       func(r);
-      x &= ~(1 << r);
+      // unset msb
+      x &= ~(1LLU << r);
     }
   }
 
   // print locations of each set bit
-  void print(piece_loc_t mask) {
+  void print(piece_bitboard_t mask) {
     /* static auto pr = [](pos_t p) { std::cout << p << std::endl; }; */
-    static const auto pr = [](pos_t p) { printf("(%c, %d)\n", 'A' + p / 8, p % 8 + 1); };
-    foreach(mask, pr);
+    foreach(mask, [](pos_t p) mutable { printf("(%c, %d)\n", 'A' + p / 8, p % 8 + 1); });
   }
 
-  void print_mask(piece_loc_t mask, int markspot=-1) {
+  void print_mask(piece_bitboard_t mask, int markspot=-1) {
     char s[256];
     int j = 0;
-    piece_loc_t I = 1;
     for(int i = 0; i < 64; ++i) {
       if(i == markspot) {
         s[j++] = 'x';
       } else {
-        s[j++] = (mask & (I << i)) ? '*' : '.';
+        s[j++] = (mask & (1LLU << i)) ? '*' : '.';
       }
       s[j++] = ' ';
       if(i % 8 == 7) {
@@ -111,15 +124,15 @@ namespace bitmask {
 struct Piece {
   const PIECE value;
   const COLOR color;
-  piece_loc_t mask;
+  piece_bitboard_t mask;
   event last_event;
 
-  constexpr Piece(PIECE p, COLOR c, piece_loc_t loc = 0x00):
+  constexpr Piece(PIECE p, COLOR c, piece_bitboard_t loc = 0x00):
     value(p), color(c), mask(loc), last_event()
   {}
 
   constexpr bool is_set(pos_t i) const {
-    return mask & (1 << i);
+    return mask & (1LLU << i);
   }
 
   constexpr bool empty() const {
@@ -135,12 +148,12 @@ struct Piece {
 
   constexpr void set_pos(pos_t i) {
     assert(!is_set(i));
-    mask |= 1 << i;
+    mask |= 1LLU << i;
   }
 
   constexpr void unset_pos(pos_t i) {
     assert(is_set(i));
-    mask &= ~(1 << i);
+    mask &= ~(1LLU << i);
   }
 
   constexpr void move(pos_t i, pos_t j) {
@@ -149,11 +162,15 @@ struct Piece {
   }
 
   constexpr pos_t size() const {
-    return bitmask::size(mask);
+    return bitmask::count_bits(mask);
   }
 
 
-  constexpr void foreach(std::function<void(pos_t)>&&func) {
+  void foreach(std::function<void(pos_t)>&&func) {
+    bitmask::foreach(mask, func);
+  }
+
+  void foreach(std::function<void(pos_t)>&&func) const {
     bitmask::foreach(mask, func);
   }
 
@@ -246,11 +263,22 @@ public:
     return i + (j - 1) * LENGTH;
   }
 
+  const Piece &get_piece(PIECE P = EMPTY, COLOR C = NEUTRAL) const {
+    if(P == EMPTY) {
+      return pieces[13-1];
+    }
+    return pieces[(P - PAWN) * 2 + C - WHITE];
+  }
+
   constexpr Piece &get_piece(PIECE P = EMPTY, COLOR C = NEUTRAL) {
     if(P == EMPTY) {
       return pieces[13-1];
     }
     return pieces[(P - PAWN) * 2 + C - WHITE];
+  }
+
+  const Piece get_piece(const Piece &p) const {
+    return get_piece(p.value, p.color);
   }
 
   constexpr Piece get_piece(Piece &p) {
@@ -282,6 +310,12 @@ public:
     event ev = put_pos(j, self[i]).last_event;
     self.unset_pos(i);
     return ChangeEvent(i, j, self[j].last_event, ev);
+  }
+
+  piece_bitboard_t get_piece_positions(COLOR c) const {
+    piece_bitboard_t mask = UINT64_C(0);
+    for(PIECE p : {PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING})mask |= self.get_piece(p, c).mask;
+    return mask;
   }
 
   void print() {
