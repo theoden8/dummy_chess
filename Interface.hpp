@@ -19,22 +19,24 @@ struct Interface {
   {}
 
   typedef enum {
-    COLOR_WHITE_CELL, COLOR_BLACK_CELL,
-    COLOR_NORMAL, COLOR_CHECK,
-    COLOR_SELECTION, COLOR_SELECTED,
-    COLOR_CAN_ATTACK,
+    NC_COLOR_NORMAL=1,
+    NC_COLOR_WHITE_CELL, NC_COLOR_BLACK_CELL,
+    NC_COLOR_CHECK,
+    NC_COLOR_SELECTION, NC_COLOR_SELECTED,
+    NC_COLOR_CAN_ATTACK,
   } ncurses_color_palette;
 
   void run() {
     initscr();
     start_color();
-    init_pair(COLOR_NORMAL,      COLOR_WHITE, COLOR_BLACK );
-    init_pair(COLOR_WHITE_CELL,  COLOR_WHITE, COLOR_BLACK );
-    init_pair(COLOR_BLACK_CELL,  COLOR_BLACK, COLOR_WHITE );
-    init_pair(COLOR_CHECK,       COLOR_RED,   COLOR_BLACK );
-    init_pair(COLOR_SELECTION,   COLOR_WHITE, COLOR_CYAN  );
-    init_pair(COLOR_SELECTED,    COLOR_WHITE, COLOR_BLUE  );
-    init_pair(COLOR_CAN_ATTACK,  COLOR_WHITE, COLOR_YELLOW);
+    // label, fg, bg
+    init_pair(NC_COLOR_NORMAL,      COLOR_WHITE, COLOR_BLACK );
+    init_pair(NC_COLOR_WHITE_CELL,  COLOR_BLACK, COLOR_WHITE );
+    init_pair(NC_COLOR_BLACK_CELL,  COLOR_WHITE, COLOR_BLACK );
+    init_pair(NC_COLOR_CHECK,       COLOR_RED,   COLOR_BLACK );
+    init_pair(NC_COLOR_SELECTION,   COLOR_WHITE, COLOR_CYAN  );
+    init_pair(NC_COLOR_SELECTED,    COLOR_WHITE, COLOR_BLUE  );
+    init_pair(NC_COLOR_CAN_ATTACK,  COLOR_WHITE, COLOR_YELLOW);
 
     cbreak();
     noecho(); // do not show typed characters
@@ -57,15 +59,15 @@ struct Interface {
   }
 
   void nc_set_cell_color(COLOR c) {
-    attron(COLOR_PAIR(c==WHITE ? COLOR_WHITE_CELL : COLOR_BLACK_CELL));
+    attron(COLOR_PAIR(c==WHITE ? NC_COLOR_WHITE_CELL : NC_COLOR_BLACK_CELL));
   }
 
   void nc_color_condition(COLOR c, int x, int y) {
     if(x==sel_x&&y==sel_y){
-      attron(COLOR_PAIR(COLOR_SELECTED));
+      attron(COLOR_PAIR(NC_COLOR_SELECTED));
       return;
     } else if(x==cursor_x&&y==cursor_y) {
-      attron(COLOR_PAIR(COLOR_SELECTION));
+      attron(COLOR_PAIR(NC_COLOR_SELECTION));
       return;
     }
     if(cursor_x!=-1&&cursor_y!=-1) {
@@ -73,7 +75,7 @@ struct Interface {
       pos_t hit_pos = Board::_pos(A+x, 1+y);
       piece_bitboard_t attacks = state.get_attacks_from(piece_pos);
       if(attacks & (UINT64_C(1) << (hit_pos))) {
-        attron(COLOR_PAIR(COLOR_CAN_ATTACK));
+        attron(COLOR_PAIR(NC_COLOR_CAN_ATTACK));
         return;
       }
     }
@@ -81,7 +83,7 @@ struct Interface {
   }
 
   void nc_reset_color() {
-    attron(COLOR_PAIR(COLOR_NORMAL));
+    attron(COLOR_PAIR(NC_COLOR_NORMAL));
   }
 
   void nc_draw_cell_margin_mid(COLOR cell_color, COLOR piece_color, int x, int y) {
@@ -159,7 +161,7 @@ struct Interface {
   }
 
   void display() {
-    bkgd(COLOR_PAIR(COLOR_NORMAL)); // changes the background
+    bkgd(COLOR_PAIR(NC_COLOR_NORMAL)); // changes the background
     int cols, rows;
     getmaxyx(stdscr, rows, cols); // acquires screen height and width
     const int TOP = 4, LEFT = cols * 0.03;
@@ -171,7 +173,7 @@ struct Interface {
 
   print_board:;
     int len = ((CELL_MW+CELL_PMW)*2+1 + 1)*8 + 1; // character length of a cell in the user interface
-    attron(COLOR_PAIR(COLOR_NORMAL));
+    attron(COLOR_PAIR(NC_COLOR_NORMAL));
     int top = TOP; // y coordinate of where to start writing
     move(top++, LEFT);
     for(int i=0;i<len;++i) {
@@ -180,15 +182,17 @@ struct Interface {
       else if(i%((CELL_MW+CELL_PMW)*2+2)==0) addch(ACS_TTEE);
       else addch(ACS_HLINE);
     }
-    for(int y = 0; y < Board::LENGTH; ++y) {
+    for(pos_t y_ = 0; y_ < Board::LENGTH; ++y_) {
+      pos_t y = Board::LENGTH - y_ - 1;
       move(top++, LEFT);
       nc_draw_board_row_margin(y, top, LEFT);
       nc_draw_board_row_piece_margin(y, top, LEFT);
       nc_draw_board_row_piece(y, top, LEFT);
       nc_draw_board_row_piece_margin(y, top, LEFT);
       nc_draw_board_row_margin(y, top, LEFT);
+      nc_reset_color();
       for(int i=0;i<len;++i) {
-        if(y < Board::LENGTH - 1) {
+        if(y_ < Board::LENGTH - 1) {
           if(i == 0) addch(ACS_LTEE);
           else if(i == len - 1)addch(ACS_RTEE);
           else if(i%((CELL_MW+CELL_PMW)*2+2)==0) addch(ACS_PLUS);
@@ -231,13 +235,13 @@ struct Interface {
           if(cursor_y==-1)cursor_y=0;
         } else cursor_x=-1,cursor_y=-1,sel_x=-1;
       break;
-      case KEY_UP: case 'k':
+      case KEY_DOWN: case 'k':
         if(0 < cursor_y) {
           --cursor_y;
           if(cursor_x==-1)cursor_x=0;
         } else cursor_x=-1,cursor_y=-1,sel_y=-1;
       break;
-      case KEY_DOWN: case 'j':
+      case KEY_UP: case 'j':
         if(Board::LENGTH - 1 > cursor_y) {
           ++cursor_y;
           if(cursor_x==-1)cursor_x=0;
