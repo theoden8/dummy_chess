@@ -130,7 +130,6 @@ template <COLOR C> struct Attacks <KNIGHT, C> {
 };
 
 template <COLOR C> struct MultiAttacks<KNIGHT, C> {
-  // TODO check if this is correct
   static inline constexpr piece_bitboard_t get_attacks(piece_bitboard_t knights, piece_bitboard_t friends, piece_bitboard_t foes) {
     using U64 = piece_bitboard_t;
     U64 l1 = (knights >> 1) & UINT64_C(0x7f7f7f7f7f7f7f7f);
@@ -258,6 +257,14 @@ template <COLOR C> struct Attacks<QUEEN, C> {
   static inline constexpr piece_bitboard_t get_basic(pos_t i) {
     return Attacks<BISHOP, C>::get_basic(i)
          | Attacks<ROOK, C>::get_basic(i);
+  }
+};
+
+template <COLOR C> struct MultiAttacks<QUEEN, C> {
+  // make use of bishops'/rooks' optimizations
+  static constexpr piece_bitboard_t get_attacks(piece_bitboard_t mask, piece_bitboard_t friends, piece_bitboard_t foes) {
+    return MultiAttacks<BISHOP,C>::get_attacks(mask, friends, foes)
+         | MultiAttacks<ROOK,C>::get_attacks(mask, friends, foes);
   }
 };
 
