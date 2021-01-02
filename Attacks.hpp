@@ -123,22 +123,57 @@ template <COLOR C> struct MultiAttacks<KNIGHT, C> {
 
 // bishop attacks
 std::array<piece_bitboard_t, Board::SIZE> bishopattacks = {0x0ULL};
+std::array<piece_bitboard_t, Board::LENGTH - 1> leftquadrants = {0x0ULL};
+std::array<piece_bitboard_t, Board::LENGTH - 1> bottomquadrants = {0x0ULL};
 template <COLOR C> struct Attacks<BISHOP, C> {
   static constexpr piece_bitboard_t get_attacks(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes) {
-    // TODO change according to piece positions
-    return Attacks<BISHOP,C>::get_basic(i);
+    // TODO decide how to handle king in friends/foes bitmask
+    const piece_bitboard_t occupied = friends | foes;
+    const piece_bitboard_t diags = Attacks<BISHOP, C>::get_basic(i);
+    constexpr piece_bitboard_t quadrant = ~UINT64_C(0);
+    const pos_t x = Board::_x(i), y = Board::_y(i);
+    const piece_bitboard_t vert = UINT64_C(72340172838076673);
+    const piece_bitboard_t hline = UINT64_C(0xFF);
+    const piece_bitboard_t left_quadrant = get_left_quadrant(x);
+    const piece_bitboard_t right_quadrant = quadrant & ~left_quadrant & ~(vert << x);
+    const piece_bitboard_t bottom_quadrant = get_bottom_quadrant(y);
+    const piece_bitboard_t top_quadrant = quadrant & ~bottom_quadrant & ~(hline << y*Board::LENGTH);
+
+    piece_bitboard_t top_left = diags & top_quadrant & left_quadrant;
+    top_left &= bitmask::ones_before_eq_bit(bitmask::lowest_bit(top_left & occupied));
+
+    piece_bitboard_t top_right = diags & top_quadrant & right_quadrant;
+    top_right &= bitmask::ones_before_eq_bit(bitmask::lowest_bit(top_right & occupied));
+
+    piece_bitboard_t bottom_left = diags & bottom_quadrant & left_quadrant;
+    bottom_left &= bitmask::ones_after_eq_bit(bitmask::highest_bit(bottom_left & occupied));
+
+    piece_bitboard_t bottom_right = diags & bottom_quadrant & right_quadrant;
+    bottom_right &= bitmask::ones_after_eq_bit(bitmask::highest_bit(bottom_right & occupied));
+
+    return top_left|top_right|bottom_left|bottom_right;
   }
 
-  static constexpr piece_bitboard_t cut(pos_t i, piece_bitboard_t mask, int8_t tblr) {
-    pos_t shift = 0x00;
-    bool top = tblr & 0x08;
-    bool bottom = tblr & 0x04;
-    bool left = tblr & 0x02;
-    bool right = tblr & 0x01;
-    if(top) {
-    }
-    return 0x00;
+  static piece_bitboard_t get_left_quadrant(int x) {
+    if(x == 0)return 0x00;
+    if(leftquadrants[x-1])return leftquadrants[x-1];
+    constexpr piece_bitboard_t vert = UINT64_C(72340172838076673);
+    piece_bitboard_t left_quadrant = 0x00;
+    for(int i=0;i<x;++i)left_quadrant|=vert<<i;
+    leftquadrants[x-1] = left_quadrant;
+    return left_quadrant;
   }
+
+  static piece_bitboard_t get_bottom_quadrant(int y) {
+    if(y == 0)return 0x00;
+    if(bottomquadrants[y-1])return bottomquadrants[y-1];
+    constexpr piece_bitboard_t hline = UINT64_C(0xFF);
+    piece_bitboard_t bottom_quadrant = 0x00;
+    for(int i=0;i<y;++i)bottom_quadrant|=hline<<i*Board::LENGTH;
+    bottomquadrants[y-1] = bottom_quadrant;
+    return bottom_quadrant;
+  }
+
   static constexpr piece_bitboard_t get_basic(pos_t i) {
     if(bishopattacks[i])return bishopattacks[i];
     piece_bitboard_t mask = 0x00;
