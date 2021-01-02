@@ -48,10 +48,10 @@ public:
     for(pos_t i = 0; i < SIZE; ++i) {
       self.board_[i] = &self.get_piece(EMPTY);
     }
-    for(pos_t i = 0; i < board::LEN; ++i) {
-      set_pos(board::_pos(A + i, 2), get_piece(PAWN, WHITE)),
-      set_pos(board::_pos(A + i, 7), get_piece(PAWN, BLACK));
-    }
+//    for(pos_t i = 0; i < board::LEN; ++i) {
+//      set_pos(board::_pos(A + i, 2), get_piece(PAWN, WHITE)),
+//      set_pos(board::_pos(A + i, 7), get_piece(PAWN, BLACK));
+//    }
     // make initial position
     for(const auto &[color, N] : {std::make_pair(WHITE, 1), std::make_pair(BLACK, 8)}) {
       set_pos(board::_pos(A, N), get_piece(ROOK, color)),
@@ -146,10 +146,10 @@ public:
   decltype(auto) get_attacks() const {
     std::array <piece_bitboard_t, board::SIZE> attacks = {UINT64_C(0x00)};
     for(auto&a:attacks)a=UINT64_C(0x00);
-    piece_bitboard_t friends_white = get_piece_positions(WHITE);
-    piece_bitboard_t friends_black = get_piece_positions(BLACK);
-    piece_bitboard_t foes_white = get_piece_positions(BLACK, true);
-    piece_bitboard_t foes_black = get_piece_positions(WHITE, true);
+    const piece_bitboard_t friends_white = get_piece_positions(WHITE);
+    const piece_bitboard_t friends_black = get_piece_positions(BLACK);
+    const piece_bitboard_t foes_white = get_piece_positions(BLACK, true);
+    const piece_bitboard_t foes_black = get_piece_positions(WHITE, true);
     for(PIECE p : {PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING}) {
       get_piece(p,WHITE).foreach([&](pos_t pos) mutable noexcept -> void {
         attacks[pos] |= get_piece(p,WHITE).get_attack(pos,friends_white,foes_white);
@@ -163,6 +163,40 @@ public:
 
   piece_bitboard_t get_attacks_from(pos_t pos) const {
     return get_attacks()[pos];
+  }
+
+  decltype(auto) get_moves() const {
+    std::array <piece_bitboard_t, board::SIZE> moves = {UINT64_C(0x00)};
+    for(auto&m:moves)m=UINT64_C(0x00);
+    const piece_bitboard_t friends_white = get_piece_positions(WHITE);
+    const piece_bitboard_t friends_black = get_piece_positions(BLACK);
+    const piece_bitboard_t foes_white = get_piece_positions(BLACK, true);
+    const piece_bitboard_t foes_black = get_piece_positions(WHITE, true);
+    const piece_bitboard_t attack_mask_white = get_attack_mask(WHITE);
+    const piece_bitboard_t attack_mask_black = get_attack_mask(BLACK);
+    for(PIECE p : {PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING}) {
+      get_piece(p,WHITE).foreach([&](pos_t pos) mutable noexcept -> void {
+        moves[pos] |= get_piece(p,WHITE).get_moves(pos,friends_white,foes_white, attack_mask_white);
+      });
+      get_piece(p,BLACK).foreach([&](pos_t pos) mutable noexcept -> void {
+        moves[pos] |= get_piece(p,BLACK).get_moves(pos,friends_black,foes_black, attack_mask_black);
+      });
+    }
+    return moves;
+  }
+
+  piece_bitboard_t get_moves_from(pos_t pos) const {
+    return get_moves()[pos];
+  }
+
+  piece_bitboard_t get_attack_mask(COLOR c) const {
+    const piece_bitboard_t enemy_foes = get_piece_positions(c, true);
+    const piece_bitboard_t enemy_friends = get_piece_positions(enemy_of(c));
+    piece_bitboard_t mask = 0x00;
+    for(PIECE p : {PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING}) {
+      mask |= get_piece(p, enemy_of(c)).get_attacks(enemy_friends, enemy_foes);
+    }
+    return mask;
   }
 
   void print() {

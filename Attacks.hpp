@@ -316,16 +316,8 @@ template <COLOR C> struct Attacks<KING, C> {
 
 // king moves, by a player
 template <COLOR C> struct Moves<KING, C> {
-  static inline constexpr piece_bitboard_t get_moves(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes) {
-    return Attacks<KING,C>::get_basic(i);
-  }
-
-  static inline constexpr piece_bitboard_t get_basic_move(pos_t i) {
-    piece_bitboard_t mask = Attacks<KING, NEUTRAL>::get_basic(i);
-    if (C == WHITE && i == board::_pos(E, 1))
-      mask |= 0x44ULL;
-    else if (C == BLACK && i == board::_pos(E, 8))
-      mask |= 0x44ULL << (board::SIZE - board::LEN);
-    return mask & ~(1ULL << i);
+  static inline constexpr piece_bitboard_t get_moves(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes, piece_bitboard_t attack_mask) {
+    //TODO castling
+    return Attacks<KING,C>::get_basic(i) & ~friends & ~attack_mask;
   }
 };
