@@ -1,9 +1,10 @@
 #pragma once
 
 
-#include <Board.hpp>
-
 #include <array>
+
+#include <Bitboard.hpp>
+#include <Constants.hpp>
 
 
 template <PIECE P, COLOR C> struct Attacks;
@@ -40,13 +41,13 @@ template <COLOR C> struct Attacks<PAWN, C> {
     if constexpr(C == WHITE) {
       offset = 2-1;
       lmask = smask | (0x20ULL<<16);
-      forwmask = UINT64_C(0xFF) << (Board::LENGTH * (Board::_y(i) + 1));
-      mask = (Board::_y(i) == Board::LENGTH-2) ? lmask : smask;
+      forwmask = UINT64_C(0xFF) << (board::LEN * (board::_y(i) + 1));
+      mask = (board::_y(i) == board::LEN-2) ? lmask : smask;
     } else if constexpr(C == BLACK) {
-      offset = Board::LENGTH*2+2-1;
+      offset = board::LEN*2+2-1;
       lmask = smask | (0x20ULL);
-      forwmask = UINT64_C(0xFF) << (Board::LENGTH * (Board::_y(i) - 1));
-      mask = (Board::_y(i) == 1) ? lmask : smask;
+      forwmask = UINT64_C(0xFF) << (board::LEN * (board::_y(i) - 1));
+      mask = (board::_y(i) == 1) ? lmask : smask;
     }
     if(i <= offset)return mask >> (offset - i);
     return (mask << (i - offset)) & forwmask;
@@ -65,13 +66,13 @@ template <COLOR C> struct Moves<PAWN, C> {
   static constexpr piece_bitboard_t get_basic_move(pos_t i) {
     piece_bitboard_t mask = 0x00;
     piece_bitboard_t maskpos = UINT64_C(1) << i;
-    pos_t step = Board::LENGTH;
+    pos_t step = board::LEN;
     if constexpr(C == WHITE) {
       mask |= maskpos<<step;
-      if(1+Board::_y(i) == 2)mask|=maskpos<<(2*step);
+      if(1+board::_y(i) == 2)mask|=maskpos<<(2*step);
     } else if constexpr(C==BLACK) {
       mask |= maskpos>>step;
-      if(1+Board::_y(i) == 7)mask|=maskpos>>(2*step);
+      if(1+board::_y(i) == 7)mask|=maskpos>>(2*step);
     }
     return mask;
   }
@@ -80,7 +81,7 @@ template <COLOR C> struct Moves<PAWN, C> {
 
 // knight attacks
 // https://www.chessprogramming.org/Knight_Pattern
-std::array<piece_bitboard_t, Board::SIZE> knightattacks = {0x0ULL};
+std::array<piece_bitboard_t, board::SIZE> knightattacks = {0x0ULL};
 template <COLOR C> struct Attacks <KNIGHT, C> {
   static inline constexpr piece_bitboard_t get_attacks(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes) {
     return Attacks<KNIGHT,C>::get_basic(i);
@@ -90,10 +91,10 @@ template <COLOR C> struct Attacks <KNIGHT, C> {
     // memoized attacks
     if(knightattacks[i] != 0x00)return knightattacks[i];
     piece_bitboard_t I = 1ULL << i;
-    bool not_a = Board::_x(i) != A;
-    bool not_ab = not_a && Board::_x(i) != B;
-    bool not_h = Board::_x(i) != H;
-    bool not_gh = not_h && Board::_x(i) != G;
+    bool not_a = board::_x(i) != A;
+    bool not_ab = not_a && board::_x(i) != B;
+    bool not_h = board::_x(i) != H;
+    bool not_gh = not_h && board::_x(i) != G;
     piece_bitboard_t mask = 0x00;
     if(not_h) mask|=I<<17; // bitmask::print_mask(mask, i);
     if(not_gh)mask|=I<<10; // bitmask::print_mask(mask, i);
@@ -123,22 +124,22 @@ template <COLOR C> struct MultiAttacks<KNIGHT, C> {
 };
 
 // bishop attacks
-std::array<piece_bitboard_t, Board::SIZE> bishopattacks = {0x0ULL};
-std::array<piece_bitboard_t, Board::LENGTH - 1> leftquadrants = {0x0ULL};
-std::array<piece_bitboard_t, Board::LENGTH - 1> bottomquadrants = {0x0ULL};
+std::array<piece_bitboard_t, board::SIZE> bishopattacks = {0x0ULL};
+std::array<piece_bitboard_t, board::LEN - 1> leftquadrants = {0x0ULL};
+std::array<piece_bitboard_t, board::LEN - 1> bottomquadrants = {0x0ULL};
 template <COLOR C> struct Attacks<BISHOP, C> {
   static inline constexpr piece_bitboard_t get_attacks(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes) {
     // TODO decide how to handle king in friends/foes bitmask
     const piece_bitboard_t occupied = friends | foes;
     const piece_bitboard_t diags = Attacks<BISHOP, C>::get_basic(i);
     constexpr piece_bitboard_t quadrant = ~UINT64_C(0);
-    const pos_t x = Board::_x(i), y = Board::_y(i);
+    const pos_t x = board::_x(i), y = board::_y(i);
     const piece_bitboard_t vert = UINT64_C(72340172838076673);
     const piece_bitboard_t hline = UINT64_C(0xFF);
     const piece_bitboard_t left_quadrant = get_left_quadrant(x);
     const piece_bitboard_t right_quadrant = quadrant & ~left_quadrant & ~(vert << x);
     const piece_bitboard_t bottom_quadrant = get_bottom_quadrant(y);
-    const piece_bitboard_t top_quadrant = quadrant & ~bottom_quadrant & ~(hline << y*Board::LENGTH);
+    const piece_bitboard_t top_quadrant = quadrant & ~bottom_quadrant & ~(hline << y*board::LEN);
 
     piece_bitboard_t top_left = diags & top_quadrant & left_quadrant;
     top_left &= bitmask::ones_before_eq_bit(bitmask::lowest_bit(top_left & occupied));
@@ -170,7 +171,7 @@ template <COLOR C> struct Attacks<BISHOP, C> {
     if(bottomquadrants[y-1])return bottomquadrants[y-1];
     constexpr piece_bitboard_t hline = UINT64_C(0xFF);
     piece_bitboard_t bottom_quadrant = 0x00;
-    for(int i=0;i<y;++i)bottom_quadrant|=hline<<i*Board::LENGTH;
+    for(int i=0;i<y;++i)bottom_quadrant|=hline<<i*board::LEN;
     bottomquadrants[y-1] = bottom_quadrant;
     return bottom_quadrant;
   }
@@ -178,13 +179,13 @@ template <COLOR C> struct Attacks<BISHOP, C> {
   static inline constexpr piece_bitboard_t get_basic(pos_t i) {
     if(bishopattacks[i])return bishopattacks[i];
     piece_bitboard_t mask = 0x00;
-    pos_t step1 = Board::LENGTH + 1;
-    pos_t step2 = Board::LENGTH - 1;
-    int d = i; pos_t x=Board::_x(i), y=Board::_y(i);
-    while(d-step1>0){d-=step1;if(Board::_x(d)>x)break;mask|=1ULL<<d;} d=i;
-    while(d-step2>0){d-=step2;if(Board::_x(d)<x)break;mask|=1ULL<<d;} d=i;
-    while(d+step1<Board::SIZE){d+=step1;if(Board::_x(d)<x)break;mask|=1ULL<<d;} d=i;
-    while(d+step2<Board::SIZE){d+=step2;if(Board::_x(d)>x)break;mask|=1ULL<<d;} d=i;
+    pos_t step1 = board::LEN + 1;
+    pos_t step2 = board::LEN - 1;
+    int d = i; pos_t x=board::_x(i), y=board::_y(i);
+    while(d-step1>0){d-=step1;if(board::_x(d)>x)break;mask|=1ULL<<d;} d=i;
+    while(d-step2>0){d-=step2;if(board::_x(d)<x)break;mask|=1ULL<<d;} d=i;
+    while(d+step1<board::SIZE){d+=step1;if(board::_x(d)<x)break;mask|=1ULL<<d;} d=i;
+    while(d+step2<board::SIZE){d+=step2;if(board::_x(d)>x)break;mask|=1ULL<<d;} d=i;
     mask &= ~(1ULL << i);
     bishopattacks[i] = mask;
     return mask;
@@ -196,8 +197,8 @@ template <COLOR C> struct Attacks<ROOK, C> {
   static inline constexpr piece_bitboard_t get_attacks(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes) {
     // TODO decide how to count king attacks
     piece_bitboard_t occupied = friends | foes;
-    pos_t y = Board::_y(i), x = Board::_x(i);
-    pos_t axlen = Board::LENGTH;
+    pos_t y = board::_y(i), x = board::_x(i);
+    pos_t axlen = board::LEN;
 
     // -> -> -> -> -> -> -> ->
     // a1 b1 c1 d1 e1 f1 g1 h1
@@ -221,8 +222,8 @@ template <COLOR C> struct Attacks<ROOK, C> {
   }
 
   static inline constexpr piece_bitboard_t get_basic(pos_t i) {
-    return (UINT64_C(72340172838076673) << Board::_x(i)
-          | UINT64_C(0xFF) << (Board::LENGTH * Board::_y(i)))
+    return (UINT64_C(72340172838076673) << board::_x(i)
+          | UINT64_C(0xFF) << (board::LEN * board::_y(i)))
           & ~(1ULL << i);
   }
 };
@@ -250,8 +251,8 @@ template <COLOR C> struct Attacks<KING, C> {
     piece_bitboard_t left =  (0x4ULL<<0) | (0x4ULL<<8) | (0x4ULL<<16);
     piece_bitboard_t right = (0x1ULL<<0) | (0x1ULL<<8) | (0x1ULL<<16);
     constexpr piece_bitboard_t mid = (0x2ULL<<0) | (0x2ULL<<16);
-    if(Board::_x(i)==A)left = 0x00;
-    else if(Board::_x(i)==H)right=0x00;
+    if(board::_x(i)==A)left = 0x00;
+    else if(board::_x(i)==H)right=0x00;
     const piece_bitboard_t mask = left|mid|right;
     constexpr pos_t offset = 8+2-1;
     if(i <= offset)return mask >> (offset - i);
@@ -267,27 +268,10 @@ template <COLOR C> struct Moves<KING, C> {
 
   static inline constexpr piece_bitboard_t get_basic_move(pos_t i) {
     piece_bitboard_t mask = Attacks<KING, NEUTRAL>::get_basic(i);
-    if (C == WHITE && i == Board::_pos(E, 1))
+    if (C == WHITE && i == board::_pos(E, 1))
       mask |= 0x44ULL;
-    else if (C == BLACK && i == Board::_pos(E, 8))
-      mask |= 0x44ULL << (Board::SIZE - Board::LENGTH);
+    else if (C == BLACK && i == board::_pos(E, 8))
+      mask |= 0x44ULL << (board::SIZE - board::LEN);
     return mask & ~(1ULL << i);
   }
 };
-
-
-inline constexpr piece_bitboard_t get_piece_attacks(PIECE p, COLOR c, pos_t pos, piece_bitboard_t friends, piece_bitboard_t foes) {
-  if(p==PAWN  &&c==WHITE)return Attacks<PAWN  ,WHITE>::get_attacks(pos,friends,foes);
-  if(p==KNIGHT&&c==WHITE)return Attacks<KNIGHT,WHITE>::get_attacks(pos,friends,foes);
-  if(p==BISHOP&&c==WHITE)return Attacks<BISHOP,WHITE>::get_attacks(pos,friends,foes);
-  if(p==ROOK  &&c==WHITE)return Attacks<ROOK  ,WHITE>::get_attacks(pos,friends,foes);
-  if(p==QUEEN &&c==WHITE)return Attacks<QUEEN ,WHITE>::get_attacks(pos,friends,foes);
-  if(p==KING  &&c==WHITE)return Attacks<KING  ,WHITE>::get_attacks(pos,friends,foes);
-  if(p==PAWN  &&c==BLACK)return Attacks<PAWN  ,BLACK>::get_attacks(pos,friends,foes);
-  if(p==KNIGHT&&c==BLACK)return Attacks<KNIGHT,BLACK>::get_attacks(pos,friends,foes);
-  if(p==BISHOP&&c==BLACK)return Attacks<BISHOP,BLACK>::get_attacks(pos,friends,foes);
-  if(p==ROOK  &&c==BLACK)return Attacks<ROOK  ,BLACK>::get_attacks(pos,friends,foes);
-  if(p==QUEEN &&c==BLACK)return Attacks<QUEEN ,BLACK>::get_attacks(pos,friends,foes);
-  if(p==KING  &&c==BLACK)return Attacks<KING  ,BLACK>::get_attacks(pos,friends,foes);
-  return 0x00ULL;
-}

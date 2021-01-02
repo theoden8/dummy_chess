@@ -17,9 +17,9 @@ int main() {
   // show attacks
   std::cout << "attacks" << std::endl;
   auto attacks = s.get_attacks();
-  for(pos_t y=0;y<Board::LENGTH;++y) {
-    for(pos_t x=0;x<Board::LENGTH;++x) {
-      std::cout << attacks[y*Board::LENGTH+x] << " ";
+  for(pos_t y=0;y<board::LEN;++y) {
+    for(pos_t x=0;x<board::LEN;++x) {
+      std::cout << attacks[y*board::LEN+x] << " ";
     }
     std::cout << std::endl;
   }
