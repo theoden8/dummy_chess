@@ -70,9 +70,9 @@ struct Interface {
       //piece_bitboard_t attacks = board.get_attacks_from(piece_pos);
       const auto &piece = board[piece_pos];
       // single-moves
-      piece_bitboard_t attacks = piece.get_moves(piece_pos, board.get_piece_positions(piece.color), board.get_piece_positions(enemy_of(piece.color)));
+      //piece_bitboard_t attacks = piece.get_moves(piece_pos, board.get_piece_positions(piece.color), board.get_piece_positions(enemy_of(piece.color)));
       // multi-attacks
-      //piece_bitboard_t attacks = piece.get_attacks(board.get_piece_positions(piece.color), board.get_piece_positions(enemy_of(piece.color)));
+      piece_bitboard_t attacks = piece.get_attacks(board.get_piece_positions(piece.color), board.get_piece_positions(enemy_of(piece.color)));
       if(attacks & (UINT64_C(1) << (hit_pos))) {
         attron(COLOR_PAIR(NC_COLOR_CAN_ATTACK));
         return;

@@ -74,6 +74,35 @@ template <COLOR C> struct Attacks<PAWN, C> {
   }
 };
 
+// attack mask from multiple pieces of the kind at once
+template <> struct MultiAttacks<PAWN, WHITE> {
+  static constexpr piece_bitboard_t get_attacks(piece_bitboard_t mask, piece_bitboard_t friends, piece_bitboard_t foes) {
+    constexpr piece_bitboard_t left = bitmask::vline;
+    constexpr piece_bitboard_t right = bitmask::vline << 7;
+    constexpr piece_bitboard_t mid = ~UINT64_C(0) ^ left ^ right;
+    piece_bitboard_t res = 0x00;
+    res |= (mask & left ) << (board::LEN + 1);
+    res |= (mask & mid  ) << (board::LEN + 1);
+    res |= (mask & mid  ) << (board::LEN - 1);
+    res |= (mask & right) << (board::LEN - 1);
+    return res;
+  }
+};
+// attack mask from multiple pieces of the kind at once
+template <> struct MultiAttacks<PAWN, BLACK> {
+  static constexpr piece_bitboard_t get_attacks(piece_bitboard_t mask, piece_bitboard_t friends, piece_bitboard_t foes) {
+    constexpr piece_bitboard_t left = bitmask::vline;
+    constexpr piece_bitboard_t right = bitmask::vline << 7;
+    constexpr piece_bitboard_t mid = ~UINT64_C(0) ^ left ^ right;
+    piece_bitboard_t res = 0x00;
+    res |= (mask & left ) >> (board::LEN - 1);
+    res |= (mask & mid  ) >> (board::LEN - 1);
+    res |= (mask & mid  ) >> (board::LEN + 1);
+    res |= (mask & right) >> (board::LEN + 1);
+    return res;
+  }
+};
+
 template <COLOR C> struct Moves<PAWN, C> {
   static constexpr piece_bitboard_t get_moves(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes) {
     // TODO passing pawn
@@ -155,12 +184,10 @@ template <COLOR C> struct Attacks<BISHOP, C> {
     const piece_bitboard_t diags = Attacks<BISHOP, C>::get_basic(i);
     constexpr piece_bitboard_t quadrant = ~UINT64_C(0);
     const pos_t x = board::_x(i), y = board::_y(i);
-    const piece_bitboard_t vert = UINT64_C(72340172838076673);
-    const piece_bitboard_t hline = UINT64_C(0xFF);
     const piece_bitboard_t left_quadrant = get_left_quadrant(x);
-    const piece_bitboard_t right_quadrant = quadrant & ~left_quadrant & ~(vert << x);
+    const piece_bitboard_t right_quadrant = quadrant & ~left_quadrant & ~(bitmask::vline << x);
     const piece_bitboard_t bottom_quadrant = get_bottom_quadrant(y);
-    const piece_bitboard_t top_quadrant = quadrant & ~bottom_quadrant & ~(hline << y*board::LEN);
+    const piece_bitboard_t top_quadrant = quadrant & ~bottom_quadrant & ~(bitmask::hline << y*board::LEN);
 
     piece_bitboard_t top_left = diags & top_quadrant & left_quadrant;
     top_left &= bitmask::ones_before_eq_bit(bitmask::lowest_bit(top_left & occupied));
@@ -180,9 +207,8 @@ template <COLOR C> struct Attacks<BISHOP, C> {
   static inline piece_bitboard_t get_left_quadrant(int x) {
     if(x == 0)return 0x00;
     if(leftquadrants[x-1])return leftquadrants[x-1];
-    constexpr piece_bitboard_t vert = UINT64_C(72340172838076673);
     piece_bitboard_t left_quadrant = 0x00;
-    for(int i=0;i<x;++i)left_quadrant|=vert<<i;
+    for(int i=0;i<x;++i)left_quadrant|=bitmask::vline<<i;
     leftquadrants[x-1] = left_quadrant;
     return left_quadrant;
   }
@@ -190,9 +216,8 @@ template <COLOR C> struct Attacks<BISHOP, C> {
   static inline piece_bitboard_t get_bottom_quadrant(int y) {
     if(y == 0)return 0x00;
     if(bottomquadrants[y-1])return bottomquadrants[y-1];
-    constexpr piece_bitboard_t hline = UINT64_C(0xFF);
     piece_bitboard_t bottom_quadrant = 0x00;
-    for(int i=0;i<y;++i)bottom_quadrant|=hline<<i*board::LEN;
+    for(int i=0;i<y;++i)bottom_quadrant|=bitmask::hline<<i*board::LEN;
     bottomquadrants[y-1] = bottom_quadrant;
     return bottom_quadrant;
   }
@@ -227,13 +252,13 @@ template <COLOR C> struct Attacks<ROOK, C> {
     // a8 b8 c8 d8 e8 f8 g8 h8
     // bits shifted the "other way"
 
-    piece_bitboard_t left = (UINT64_C(0xFF) >> (8 - x));
-    piece_bitboard_t right = ~(1ULL << x) & (~left & UINT64_C(0xFF));
+    piece_bitboard_t left = (bitmask::hline >> (8 - x));
+    piece_bitboard_t right = ~(1ULL << x) & (~left & bitmask::hline);
     left <<= axlen*y, right <<= axlen*y;
     right &= bitmask::ones_before_eq_bit(bitmask::lowest_bit(right & occupied));
     left &= bitmask::ones_after_eq_bit(bitmask::highest_bit(left & occupied));
 
-    const piece_bitboard_t vertical = UINT64_C(72340172838076673) << x;
+    const piece_bitboard_t vertical = bitmask::vline << x;
     piece_bitboard_t up = ~(1ULL << i) & (vertical << y*axlen);
     piece_bitboard_t down = ~(1ULL << i) & (~up & vertical);
     up &= bitmask::ones_before_eq_bit(bitmask::lowest_bit(up & occupied));
@@ -243,8 +268,8 @@ template <COLOR C> struct Attacks<ROOK, C> {
   }
 
   static inline constexpr piece_bitboard_t get_basic(pos_t i) {
-    return (UINT64_C(72340172838076673) << board::_x(i)
-          | UINT64_C(0xFF) << (board::LEN * board::_y(i)))
+    return (bitmask::vline << board::_x(i)
+          | bitmask::hline << (board::LEN * board::_y(i)))
           & ~(1ULL << i);
   }
 };

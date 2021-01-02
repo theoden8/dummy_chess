@@ -20,6 +20,9 @@ typedef uint8_t pos_t;
 // https://graphics.stanford.edu/~seander/bithacks.html
 // bit-hacks from stanford graphics, to be placed here
 namespace bitmask {
+  const uint64_t vline = UINT64_C(72340172838076673);
+  const uint64_t hline = UINT64_C(0xFF);
+
   template <typename T>
   inline constexpr bool is_exp2(T v) {
     return !(v & (v - 1));
