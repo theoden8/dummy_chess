@@ -8,10 +8,11 @@
 
 
 template <PIECE P, COLOR C> struct Attacks;
-template <PIECE P, COLOR C> struct Moves {
-  // TODO never the case when piece is pinned
-  static constexpr piece_bitboard_t get_moves(piece_bitboard_t mask, piece_bitboard_t friends, piece_bitboard_t foes) {
-    return Attacks<P,C>::get_attacks(mask, friends, foes);
+
+template <PIECE P, COLOR C> struct xRayAttacks {
+  static constexpr piece_bitboard_t get_xray_attacks(pos_t pos, piece_bitboard_t friends, piece_bitboard_t foes) {
+    piece_bitboard_t blockers = Attacks<P, C>::get_attacks(pos, friends, foes) & foes;
+    return Attacks<P, C>::get_attacks(pos, friends, foes ^ blockers);
   }
 };
 
@@ -23,6 +24,25 @@ template <PIECE P, COLOR C> struct MultiAttacks {
       res |= Attacks<P, C>::get_attacks(pos, friends, foes);
     });
     return res;
+  }
+};
+
+// attack mask from multiple pieces of the kind at once
+template <PIECE P, COLOR C> struct MultixRayAttacks {
+  static constexpr piece_bitboard_t get_xray_attacks(piece_bitboard_t mask, piece_bitboard_t friends, piece_bitboard_t foes) {
+    piece_bitboard_t res = 0x00;
+    bitmask::foreach(mask, [&](pos_t pos) mutable noexcept -> void {
+      res |= xRayAttacks<P, C>::get_xray_attacks(pos, friends, foes);
+    });
+    return res;
+  }
+};
+
+template <PIECE P, COLOR C> struct Moves {
+  // TODO never the case when piece is pinned
+  static constexpr piece_bitboard_t get_moves(piece_bitboard_t mask, piece_bitboard_t friends, piece_bitboard_t foes) {
+    // rooks, bishops and queens which are not pinned:
+    return Attacks<P,C>::get_attacks(mask, friends, foes) & ~friends;
   }
 };
 
@@ -129,7 +149,7 @@ std::array<piece_bitboard_t, board::LEN - 1> leftquadrants = {0x0ULL};
 std::array<piece_bitboard_t, board::LEN - 1> bottomquadrants = {0x0ULL};
 template <COLOR C> struct Attacks<BISHOP, C> {
   static inline constexpr piece_bitboard_t get_attacks(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes) {
-    // TODO decide how to handle king in friends/foes bitmask
+    // enemy king's line of attack is currently handled on the board level
     const piece_bitboard_t occupied = friends | foes;
     const piece_bitboard_t diags = Attacks<BISHOP, C>::get_basic(i);
     constexpr piece_bitboard_t quadrant = ~UINT64_C(0);
@@ -195,7 +215,7 @@ template <COLOR C> struct Attacks<BISHOP, C> {
 // rook attacks
 template <COLOR C> struct Attacks<ROOK, C> {
   static inline constexpr piece_bitboard_t get_attacks(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes) {
-    // TODO decide how to count king attacks
+    // enemy king's line of attack is currently handled on the board level
     piece_bitboard_t occupied = friends | foes;
     pos_t y = board::_y(i), x = board::_x(i);
     pos_t axlen = board::LEN;

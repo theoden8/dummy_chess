@@ -71,7 +71,24 @@ struct Piece {
     return 0x00ULL;
   }
 
-  // multi-attack
+  // xray-attack from specific position by this type of piece
+  inline constexpr piece_bitboard_t get_xray_attack(pos_t pos, piece_bitboard_t friends, piece_bitboard_t foes) const {
+    if(value==PAWN  &&color==WHITE)return xRayAttacks<PAWN  ,WHITE>::get_xray_attacks(pos,friends,foes);
+    if(value==KNIGHT&&color==WHITE)return xRayAttacks<KNIGHT,WHITE>::get_xray_attacks(pos,friends,foes);
+    if(value==BISHOP&&color==WHITE)return xRayAttacks<BISHOP,WHITE>::get_xray_attacks(pos,friends,foes);
+    if(value==ROOK  &&color==WHITE)return xRayAttacks<ROOK  ,WHITE>::get_xray_attacks(pos,friends,foes);
+    if(value==QUEEN &&color==WHITE)return xRayAttacks<QUEEN ,WHITE>::get_xray_attacks(pos,friends,foes);
+    if(value==KING  &&color==WHITE)return xRayAttacks<KING  ,WHITE>::get_xray_attacks(pos,friends,foes);
+    if(value==PAWN  &&color==BLACK)return xRayAttacks<PAWN  ,BLACK>::get_xray_attacks(pos,friends,foes);
+    if(value==KNIGHT&&color==BLACK)return xRayAttacks<KNIGHT,BLACK>::get_xray_attacks(pos,friends,foes);
+    if(value==BISHOP&&color==BLACK)return xRayAttacks<BISHOP,BLACK>::get_xray_attacks(pos,friends,foes);
+    if(value==ROOK  &&color==BLACK)return xRayAttacks<ROOK  ,BLACK>::get_xray_attacks(pos,friends,foes);
+    if(value==QUEEN &&color==BLACK)return xRayAttacks<QUEEN ,BLACK>::get_xray_attacks(pos,friends,foes);
+    if(value==KING  &&color==BLACK)return xRayAttacks<KING  ,BLACK>::get_xray_attacks(pos,friends,foes);
+    return 0x00ULL;
+  }
+
+  // multi-attacks
   inline constexpr piece_bitboard_t get_attacks(piece_bitboard_t friends, piece_bitboard_t foes) const {
     if(value==PAWN  &&color==WHITE)return MultiAttacks<PAWN  ,WHITE>::get_attacks(this->mask,friends,foes);
     if(value==KNIGHT&&color==WHITE)return MultiAttacks<KNIGHT,WHITE>::get_attacks(this->mask,friends,foes);
@@ -85,6 +102,23 @@ struct Piece {
     if(value==ROOK  &&color==BLACK)return MultiAttacks<ROOK  ,BLACK>::get_attacks(this->mask,friends,foes);
     if(value==QUEEN &&color==BLACK)return MultiAttacks<QUEEN ,BLACK>::get_attacks(this->mask,friends,foes);
     if(value==KING  &&color==BLACK)return MultiAttacks<KING  ,BLACK>::get_attacks(this->mask,friends,foes);
+    return 0x00ULL;
+  }
+
+  // multi xray-attacks
+  inline constexpr piece_bitboard_t get_xray_attacks(piece_bitboard_t friends, piece_bitboard_t foes) const {
+    if(value==PAWN  &&color==WHITE)return MultixRayAttacks<PAWN  ,WHITE>::get_xray_attacks(this->mask,friends,foes);
+    if(value==KNIGHT&&color==WHITE)return MultixRayAttacks<KNIGHT,WHITE>::get_xray_attacks(this->mask,friends,foes);
+    if(value==BISHOP&&color==WHITE)return MultixRayAttacks<BISHOP,WHITE>::get_xray_attacks(this->mask,friends,foes);
+    if(value==ROOK  &&color==WHITE)return MultixRayAttacks<ROOK  ,WHITE>::get_xray_attacks(this->mask,friends,foes);
+    if(value==QUEEN &&color==WHITE)return MultixRayAttacks<QUEEN ,WHITE>::get_xray_attacks(this->mask,friends,foes);
+    if(value==KING  &&color==WHITE)return MultixRayAttacks<KING  ,WHITE>::get_xray_attacks(this->mask,friends,foes);
+    if(value==PAWN  &&color==BLACK)return MultixRayAttacks<PAWN  ,BLACK>::get_xray_attacks(this->mask,friends,foes);
+    if(value==KNIGHT&&color==BLACK)return MultixRayAttacks<KNIGHT,BLACK>::get_xray_attacks(this->mask,friends,foes);
+    if(value==BISHOP&&color==BLACK)return MultixRayAttacks<BISHOP,BLACK>::get_xray_attacks(this->mask,friends,foes);
+    if(value==ROOK  &&color==BLACK)return MultixRayAttacks<ROOK  ,BLACK>::get_xray_attacks(this->mask,friends,foes);
+    if(value==QUEEN &&color==BLACK)return MultixRayAttacks<QUEEN ,BLACK>::get_xray_attacks(this->mask,friends,foes);
+    if(value==KING  &&color==BLACK)return MultixRayAttacks<KING  ,BLACK>::get_xray_attacks(this->mask,friends,foes);
     return 0x00ULL;
   }
 

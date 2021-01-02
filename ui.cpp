@@ -2,8 +2,8 @@
 
 
 int main(int argc, char *argv[]) {
-  State s;
-  Interface iface(s);
+  Board b;
+  Interface iface(b);
   iface.run();
   return 0;
 }

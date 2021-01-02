@@ -3,19 +3,19 @@
 
 #include <ncurses.h>
 
-#include <State.hpp>
+#include <Board.hpp>
 
 
 struct Interface {
-  State &state;
+  Board &board;
   bool shouldClose = false;
   int CELL_MW = 2,
       CELL_MH = 1,
       CELL_PMW = 1,
       CELL_PMH = 0;
 
-  Interface(State &state):
-    state(state)
+  Interface(Board &board):
+    board(board)
   {}
 
   typedef enum {
@@ -55,7 +55,7 @@ struct Interface {
   }
 
   std::string activePlayer() const {
-    return (state.activePlayer() == WHITE) ? "WHITE":"BLACK";
+    return (board.activePlayer() == WHITE) ? "WHITE":"BLACK";
   }
 
   void nc_set_cell_color(COLOR c) {
@@ -66,7 +66,7 @@ struct Interface {
     if(cursor_x!=-1&&cursor_y!=-1) {
       pos_t piece_pos = board::_pos(A+cursor_x, 1+cursor_y);
       pos_t hit_pos = board::_pos(A+x, 1+y);
-      piece_bitboard_t attacks = state.get_attacks_from(piece_pos);
+      piece_bitboard_t attacks = board.get_attacks_from(piece_pos);
       if(attacks & (UINT64_C(1) << (hit_pos))) {
         attron(COLOR_PAIR(NC_COLOR_CAN_ATTACK));
         return;
@@ -136,7 +136,7 @@ struct Interface {
     for(int mh = 0; mh < CELL_PMH; ++mh) {
       for(int x = 0; x < board::LEN; ++x) {
         addch(ACS_VLINE);
-        auto piece = state.at_pos(A+x, 1+y);
+        auto piece = board.at_pos(A+x, 1+y);
         COLOR cell_color = (x+y)&1?WHITE:BLACK;
         nc_draw_cell_margin_mid(cell_color,piece.color,x,y);
       }
@@ -148,9 +148,9 @@ struct Interface {
   void nc_draw_board_row_piece(int y, int &top, const int LEFT) {
     for(int x = 0; x < board::LEN; ++x) {
       addch(ACS_VLINE);
-      if(state.at_pos(A+x, 1+y).value != EMPTY) {
+      if(board.at_pos(A+x, 1+y).value != EMPTY) {
         nc_draw_cell_margin_side((x + y) & 1 ? WHITE : BLACK,x,y);
-        nc_draw_cell_piece_unicode(state.at_pos(A+x, 1+y),x,y);
+        nc_draw_cell_piece_unicode(board.at_pos(A+x, 1+y),x,y);
         nc_draw_cell_margin_side((x + y) & 1 ? WHITE : BLACK,x,y);
       } else {
         nc_draw_cell_margin_both((x + y) & 1 ? WHITE : BLACK,x,y);

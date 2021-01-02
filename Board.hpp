@@ -25,6 +25,7 @@ public:
 private:
   Board &self = *this;
   std::array <Piece *, SIZE> board_;
+  COLOR activePlayer_;
 public:
   std::array<Piece, 2*6+1>  pieces = {
     Piece(PAWN, WHITE),
@@ -41,19 +42,48 @@ public:
     Piece(KING, BLACK),
     Piece(EMPTY, NEUTRAL, 0xff)
   };
-  Board()
+  Board(COLOR activePlayer=WHITE):
+    activePlayer_(activePlayer)
   {
     for(pos_t i = 0; i < SIZE; ++i) {
       self.board_[i] = &self.get_piece(EMPTY);
     }
+    for(pos_t i = 0; i < board::LEN; ++i) {
+      set_pos(board::_pos(A + i, 2), get_piece(PAWN, WHITE)),
+      set_pos(board::_pos(A + i, 7), get_piece(PAWN, BLACK));
+    }
+    // make initial position
+    for(const auto &[color, N] : {std::make_pair(WHITE, 1), std::make_pair(BLACK, 8)}) {
+      set_pos(board::_pos(A, N), get_piece(ROOK, color)),
+      set_pos(board::_pos(B, N), get_piece(KNIGHT, color)),
+      set_pos(board::_pos(C, N), get_piece(BISHOP, color)),
+      set_pos(board::_pos(D, N), get_piece(QUEEN, color)),
+      set_pos(board::_pos(E, N), get_piece(KING, color)),
+      set_pos(board::_pos(F, N), get_piece(BISHOP, color)),
+      set_pos(board::_pos(G, N), get_piece(KNIGHT, color)),
+      set_pos(board::_pos(H, N), get_piece(ROOK, color));
+    }
+    set_pos(board::_pos(E, 4), get_piece(QUEEN, WHITE));
+  }
+
+  constexpr bool activePlayer() const {
+    return activePlayer_;
   }
 
   inline Piece &operator[](pos_t i) {
     return *board_[i];
   }
 
+  inline Piece &at_pos(pos_t i, pos_t j) {
+    return *board_[board::_pos(i,j)];
+  }
+
   inline const Piece &operator[](pos_t i) const {
     return *board_[i];
+  }
+
+  inline const Piece &at_pos(pos_t i, pos_t j) const {
+    return *board_[board::_pos(i,j)];
   }
 
   const Piece &get_piece(PIECE P = EMPTY, COLOR C = NEUTRAL) const {
@@ -102,13 +132,37 @@ public:
     assert(!self[i].empty());
     event ev = put_pos(j, self[i]).last_event;
     self.unset_pos(i);
+    activePlayer_ = enemy_of(activePlayer_);
     return ChangeEvent(i, j, self[j].last_event, ev);
   }
 
-  piece_bitboard_t get_piece_positions(COLOR c) const {
+  piece_bitboard_t get_piece_positions(COLOR c, bool enemy=false) const {
     piece_bitboard_t mask = UINT64_C(0);
     for(PIECE p : {PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING})mask |= self.get_piece(p, c).mask;
+    if(enemy)mask&=~get_piece(KING, c).mask;
     return mask;
+  }
+
+  decltype(auto) get_attacks() const {
+    std::array <piece_bitboard_t, board::SIZE> attacks = {UINT64_C(0x00)};
+    for(auto&a:attacks)a=UINT64_C(0x00);
+    piece_bitboard_t friends_white = get_piece_positions(WHITE);
+    piece_bitboard_t friends_black = get_piece_positions(BLACK);
+    piece_bitboard_t foes_white = get_piece_positions(BLACK, true);
+    piece_bitboard_t foes_black = get_piece_positions(WHITE, true);
+    for(PIECE p : {PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING}) {
+      get_piece(p,WHITE).foreach([&](pos_t pos) mutable noexcept -> void {
+        attacks[pos] |= get_piece(p,WHITE).get_attack(pos,friends_white,foes_white);
+      });
+      get_piece(p,BLACK).foreach([&](pos_t pos) mutable noexcept -> void {
+        attacks[pos] |= get_piece(p,BLACK).get_attack(pos,friends_black,foes_black);
+      });
+    }
+    return attacks;
+  }
+
+  piece_bitboard_t get_attacks_from(pos_t pos) const {
+    return get_attacks()[pos];
   }
 
   void print() {
@@ -119,87 +173,5 @@ public:
       }
       std::cout << std::endl;
     }
-  }
-};
-
-
-// current game-state
-// board: current board
-// attacks: currently computed attack moves by each piece
-class State {
-  Board b;
-  COLOR activePlayer_;
-public:
-  State():
-    b(),
-    activePlayer_(WHITE)
-  {
-    for(pos_t i = 0; i < board::LEN; ++i) {
-      b.set_pos(board::_pos(A + i, 2), b.get_piece(PAWN, WHITE)),
-      b.set_pos(board::_pos(A + i, 7), b.get_piece(PAWN, BLACK));
-    }
-    // make initial position
-    for(const auto &[color, N] : {std::make_pair(WHITE, 1), std::make_pair(BLACK, 8)}) {
-      b.set_pos(board::_pos(A, N), b.get_piece(ROOK, color)),
-      b.set_pos(board::_pos(B, N), b.get_piece(KNIGHT, color)),
-      b.set_pos(board::_pos(C, N), b.get_piece(BISHOP, color)),
-      b.set_pos(board::_pos(D, N), b.get_piece(QUEEN, color)),
-      b.set_pos(board::_pos(E, N), b.get_piece(KING, color)),
-      b.set_pos(board::_pos(F, N), b.get_piece(BISHOP, color)),
-      b.set_pos(board::_pos(G, N), b.get_piece(KNIGHT, color)),
-      b.set_pos(board::_pos(H, N), b.get_piece(ROOK, color));
-    }
-    b.set_pos(board::_pos(E, 4), b.get_piece(QUEEN, WHITE));
-  }
-
-  decltype(auto) get_attacks() const {
-    std::array <piece_bitboard_t, board::SIZE> attacks = {UINT64_C(0x00)};
-    for(auto&a:attacks)a=UINT64_C(0x00);
-    piece_bitboard_t friends = b.get_piece_positions(activePlayer());
-    piece_bitboard_t foes = b.get_piece_positions(enemy_of(activePlayer()));
-    for(PIECE p : {PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING}) {
-      for(COLOR c : {WHITE, BLACK}) {
-        b.get_piece(p,c).foreach([&](pos_t pos) mutable noexcept -> void {
-          attacks[pos] |= b.get_piece(p,c).get_attack(pos,friends,foes);
-        });
-      }
-    }
-    return attacks;
-  }
-
-  piece_bitboard_t get_attacks_from(pos_t pos) const {
-    return get_attacks()[pos];
-  }
-
-  COLOR activePlayer() const {
-    return activePlayer_;
-  }
-
-  decltype(auto) get_piece(PIECE p, COLOR c) noexcept {
-    return b.get_piece(p, c);
-  }
-
-  decltype(auto) get_piece(PIECE p, COLOR c) const noexcept {
-    return b.get_piece(p, c);
-  }
-
-  decltype(auto) at_pos(pos_t ind) noexcept {
-    return b[ind];
-  }
-
-  decltype(auto) at_pos(pos_t ind) const noexcept {
-    return b[ind];
-  }
-
-  decltype(auto) at_pos(pos_t i, pos_t j) noexcept {
-    return at_pos(board::_pos(i,j));
-  }
-
-  decltype(auto) at_pos(pos_t i, pos_t j) const noexcept {
-    return at_pos(board::_pos(i,j));
-  }
-
-  void print() {
-    b.print();
   }
 };
