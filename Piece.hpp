@@ -24,7 +24,7 @@ struct Piece {
     return mask & (1LLU << i);
   }
 
-  constexpr bool empty() const {
+  constexpr bool is_empty() const {
     return value == EMPTY;
   }
 
@@ -89,19 +89,21 @@ struct Piece {
   }
 
   // attack from specific position by this type of piece
-  inline constexpr piece_bitboard_t get_moves(pos_t pos, piece_bitboard_t friends, piece_bitboard_t foes, piece_bitboard_t attack_mask=0x00) const {
+  inline constexpr piece_bitboard_t get_moves(pos_t pos, piece_bitboard_t friends, piece_bitboard_t foes,
+                                              piece_bitboard_t attack_mask=0x00, piece_bitboard_t castlings=0x00) const
+  {
     if(value==PAWN  &&color==WHITE)return Moves<PAWN  ,WHITE>::get_moves(pos,friends,foes);
     if(value==KNIGHT&&color==WHITE)return Moves<KNIGHT,WHITE>::get_moves(pos,friends,foes);
     if(value==BISHOP&&color==WHITE)return Moves<BISHOP,WHITE>::get_moves(pos,friends,foes);
     if(value==ROOK  &&color==WHITE)return Moves<ROOK  ,WHITE>::get_moves(pos,friends,foes);
     if(value==QUEEN &&color==WHITE)return Moves<QUEEN ,WHITE>::get_moves(pos,friends,foes);
-    if(value==KING  &&color==WHITE)return Moves<KING  ,WHITE>::get_moves(pos,friends,foes, attack_mask);
+    if(value==KING  &&color==WHITE)return Moves<KING  ,WHITE>::get_moves(pos,friends,foes, attack_mask, castlings);
     if(value==PAWN  &&color==BLACK)return Moves<PAWN  ,BLACK>::get_moves(pos,friends,foes);
     if(value==KNIGHT&&color==BLACK)return Moves<KNIGHT,BLACK>::get_moves(pos,friends,foes);
     if(value==BISHOP&&color==BLACK)return Moves<BISHOP,BLACK>::get_moves(pos,friends,foes);
     if(value==ROOK  &&color==BLACK)return Moves<ROOK  ,BLACK>::get_moves(pos,friends,foes);
     if(value==QUEEN &&color==BLACK)return Moves<QUEEN ,BLACK>::get_moves(pos,friends,foes);
-    if(value==KING  &&color==BLACK)return Moves<KING  ,BLACK>::get_moves(pos,friends,foes, attack_mask);
+    if(value==KING  &&color==BLACK)return Moves<KING  ,BLACK>::get_moves(pos,friends,foes, attack_mask, castlings);
     return 0x00ULL;
   }
 

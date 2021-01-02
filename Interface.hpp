@@ -63,8 +63,17 @@ struct Interface {
   }
 
   void nc_color_condition(COLOR c, int x, int y) {
-    if(cursor_x!=-1&&cursor_y!=-1) {
-      pos_t piece_pos = board::_pos(A+cursor_x, 1+cursor_y);
+    if(x==sel_x&&y==sel_y){
+      attron(COLOR_PAIR(NC_COLOR_SELECTED));
+      return;
+    } else if(x==cursor_x&&y==cursor_y) {
+      attron(COLOR_PAIR(NC_COLOR_SELECTION));
+      return;
+    }
+    if((cursor_x!=-1&&cursor_y!=-1) || (sel_x!=-1&&sel_y!=-1)) {
+      pos_t piece_pos = 0;
+      if(sel_x!=-1&&sel_y!=-1)piece_pos = board::_pos(A+sel_x, 1+sel_y);
+      else piece_pos = board::_pos(A+cursor_x, 1+cursor_y);
       pos_t hit_pos = board::_pos(A+x, 1+y);
       // single-attacks
       //piece_bitboard_t attacks = board.get_attacks_from(piece_pos);
@@ -77,13 +86,6 @@ struct Interface {
         attron(COLOR_PAIR(NC_COLOR_CAN_ATTACK));
         return;
       }
-    }
-    if(x==sel_x&&y==sel_y){
-      attron(COLOR_PAIR(NC_COLOR_SELECTED));
-      return;
-    } else if(x==cursor_x&&y==cursor_y) {
-      attron(COLOR_PAIR(NC_COLOR_SELECTION));
-      return;
     }
     nc_set_cell_color(c);
   }
@@ -253,8 +255,18 @@ struct Interface {
         } else cursor_x=-1,cursor_y=-1,sel_y=-1;
       break;
       case 10:
-        if(sel_x==cursor_x&&sel_y==cursor_y)sel_x=-1,sel_y=-1;
-        else sel_x=cursor_x,sel_y=cursor_y;
+        if(sel_x==-1&&sel_y==-1)sel_x=cursor_x,sel_y=cursor_y;
+        else {
+          pos_t pos_from = board::_pos(A+sel_x, 1+sel_y);
+          pos_t pos_to = board::_pos(A+cursor_x, 1+cursor_y);
+          auto moves = board.get_moves_from(pos_from);
+          if((1ULL << pos_to) & moves && board[pos_from].color == board.activePlayer()) {
+            board.move(pos_from, pos_to);
+            sel_x=-1,sel_y=-1;
+          } else {
+            sel_x=cursor_x,sel_y=cursor_y;
+          }
+        }
       break;
     }
   }

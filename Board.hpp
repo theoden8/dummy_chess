@@ -19,13 +19,11 @@ struct ChangeEvent {
 
 // board view of the game
 class Board {
-public:
-  static constexpr const pos_t LEN = 8;
-  static constexpr const pos_t SIZE = 64;
 private:
   Board &self = *this;
-  std::array <Piece *, SIZE> board_;
+  std::array <Piece *, board::SIZE> board_;
   COLOR activePlayer_;
+  piece_bitboard_t castlings_ = 0x44ULL | 0x44ULL << (board::SIZE - board::LEN);
 public:
   std::array<Piece, 2*6+1>  pieces = {
     Piece(PAWN, WHITE),
@@ -40,33 +38,32 @@ public:
     Piece(QUEEN, BLACK),
     Piece(KING, WHITE),
     Piece(KING, BLACK),
-    Piece(EMPTY, NEUTRAL, 0xff)
+    Piece(EMPTY, NEUTRAL)
   };
   Board(COLOR activePlayer=WHITE):
     activePlayer_(activePlayer)
   {
-    for(pos_t i = 0; i < SIZE; ++i) {
-      self.board_[i] = &self.get_piece(EMPTY);
+    for(pos_t i = 0; i < board::SIZE; ++i) {
+      set_pos(i, get_piece(EMPTY, NEUTRAL));
     }
-//    for(pos_t i = 0; i < board::LEN; ++i) {
-//      set_pos(board::_pos(A + i, 2), get_piece(PAWN, WHITE)),
-//      set_pos(board::_pos(A + i, 7), get_piece(PAWN, BLACK));
-//    }
     // make initial position
-    for(const auto &[color, N] : {std::make_pair(WHITE, 1), std::make_pair(BLACK, 8)}) {
-      set_pos(board::_pos(A, N), get_piece(ROOK, color)),
-      set_pos(board::_pos(B, N), get_piece(KNIGHT, color)),
-      set_pos(board::_pos(C, N), get_piece(BISHOP, color)),
-      set_pos(board::_pos(D, N), get_piece(QUEEN, color)),
-      set_pos(board::_pos(E, N), get_piece(KING, color)),
-      set_pos(board::_pos(F, N), get_piece(BISHOP, color)),
-      set_pos(board::_pos(G, N), get_piece(KNIGHT, color)),
-      set_pos(board::_pos(H, N), get_piece(ROOK, color));
+    for(pos_t i = 0; i < board::LEN; ++i) {
+      put_pos(board::_pos(A + i, 2), get_piece(PAWN, WHITE)),
+      put_pos(board::_pos(A + i, 7), get_piece(PAWN, BLACK));
     }
-    set_pos(board::_pos(E, 4), get_piece(QUEEN, WHITE));
+    for(const auto &[color, N] : {std::make_pair(WHITE, 1), std::make_pair(BLACK, 8)}) {
+      put_pos(board::_pos(A, N), get_piece(ROOK, color)),
+      put_pos(board::_pos(B, N), get_piece(KNIGHT, color)),
+      put_pos(board::_pos(C, N), get_piece(BISHOP, color)),
+      put_pos(board::_pos(D, N), get_piece(QUEEN, color)),
+      put_pos(board::_pos(E, N), get_piece(KING, color)),
+      put_pos(board::_pos(F, N), get_piece(BISHOP, color)),
+      put_pos(board::_pos(G, N), get_piece(KNIGHT, color)),
+      put_pos(board::_pos(H, N), get_piece(ROOK, color));
+    }
   }
 
-  constexpr bool activePlayer() const {
+  constexpr COLOR activePlayer() const {
     return activePlayer_;
   }
 
@@ -120,19 +117,20 @@ public:
 
   Piece &put_pos(pos_t i, Piece &p) {
     Piece &target = self[i];
-    if(!target.empty()) {
+    if(!self[i].is_empty()) {
       p.set_event(KILL);
-      target.set_event(DEATH);
+      self[i].set_event(DEATH);
     }
+    self[i].unset_pos(i);
     set_pos(i, p);
     return target;
   }
 
   ChangeEvent move(pos_t i, pos_t j) {
-    assert(!self[i].empty());
+    assert(!self[i].is_empty());
     event ev = put_pos(j, self[i]).last_event;
-    self.unset_pos(i);
-    activePlayer_ = enemy_of(activePlayer_);
+    unset_pos(i);
+    activePlayer_ = enemy_of(activePlayer());
     return ChangeEvent(i, j, self[j].last_event, ev);
   }
 
@@ -176,10 +174,10 @@ public:
     const piece_bitboard_t attack_mask_black = get_attack_mask(BLACK);
     for(PIECE p : {PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING}) {
       get_piece(p,WHITE).foreach([&](pos_t pos) mutable noexcept -> void {
-        moves[pos] |= get_piece(p,WHITE).get_moves(pos,friends_white,foes_white, attack_mask_white);
+        moves[pos] |= get_piece(p,WHITE).get_moves(pos,friends_white,foes_white, attack_mask_white, castlings_);
       });
       get_piece(p,BLACK).foreach([&](pos_t pos) mutable noexcept -> void {
-        moves[pos] |= get_piece(p,BLACK).get_moves(pos,friends_black,foes_black, attack_mask_black);
+        moves[pos] |= get_piece(p,BLACK).get_moves(pos,friends_black,foes_black, attack_mask_black, castlings_);
       });
     }
     return moves;
@@ -200,9 +198,9 @@ public:
   }
 
   void print() {
-    for(pos_t i = LEN; i > 0; --i) {
-      for(pos_t j = 0; j < LEN; ++j) {
-        Piece &p = self[(i-1) * LEN + j];
+    for(pos_t i = board::LEN; i > 0; --i) {
+      for(pos_t j = 0; j < board::LEN; ++j) {
+        Piece &p = self[(i-1) * board::LEN + j];
         std::cout << p.str() << " ";
       }
       std::cout << std::endl;

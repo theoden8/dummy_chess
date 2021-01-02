@@ -108,10 +108,10 @@ template <COLOR C> struct Moves<PAWN, C> {
     // TODO passing pawn
     const piece_bitboard_t attacks = Attacks<PAWN,C>::get_attacks(i, friends, foes) & foes;
     piece_bitboard_t moves = Moves<PAWN,C>::get_basic_move(i) & ~(friends | foes);
-    if(bitmask::count_bits(moves) != 1 || std::abs(bitmask::log2_of_exp2(moves) - i) < 2*board::LEN) {
-      moves = 0x00;
-    }
-    return attacks | moves;
+    if(bitmask::count_bits(moves) != 1)return attacks|moves;
+    int pos_to=bitmask::log2_of_exp2(moves), pos_from=i;
+    if(std::abs(pos_to - pos_from) == board::LEN)return attacks|moves;
+    return attacks;
   }
 
   static constexpr piece_bitboard_t get_basic_move(pos_t i) {
@@ -314,10 +314,13 @@ template <COLOR C> struct Attacks<KING, C> {
   }
 };
 
-// king moves, by a player
+// king moves
 template <COLOR C> struct Moves<KING, C> {
-  static inline constexpr piece_bitboard_t get_moves(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes, piece_bitboard_t attack_mask) {
+  static inline constexpr piece_bitboard_t get_moves(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes,
+                                                     piece_bitboard_t attack_mask, piece_bitboard_t castlings)
+  {
     //TODO castling
+    castlings &= (C == WHITE) ? bitmask::hline : (bitmask::hline << (board::SIZE-board::LEN));
     return Attacks<KING,C>::get_basic(i) & ~friends & ~attack_mask;
   }
 };
