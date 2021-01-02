@@ -261,7 +261,7 @@ struct Interface {
           pos_t pos_to = board::_pos(A+cursor_x, 1+cursor_y);
           auto moves = board.get_moves_from(pos_from);
           if((1ULL << pos_to) & moves && board[pos_from].color == board.activePlayer()) {
-            board.move(pos_from, pos_to);
+            board.make_move(pos_from, pos_to);
             sel_x=-1,sel_y=-1;
           } else {
             sel_x=cursor_x,sel_y=cursor_y;

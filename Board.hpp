@@ -1,6 +1,8 @@
 #pragma once
 
 
+#include <vector>
+
 #include <Piece.hpp>
 #include <Event.hpp>
 
@@ -8,6 +10,7 @@
 struct ChangeEvent {
   pos_t from, to;
   event ev_from, ev_to;
+  event supp_ev_from, supp_ev_to;
   constexpr ChangeEvent(pos_t from, pos_t to, event ev_from, event ev_to):
     from(from), to(to), ev_from(ev_from), ev_to(ev_to)
   {
@@ -53,12 +56,12 @@ public:
     }
     for(const auto &[color, N] : {std::make_pair(WHITE, 1), std::make_pair(BLACK, 8)}) {
       put_pos(board::_pos(A, N), get_piece(ROOK, color)),
-      put_pos(board::_pos(B, N), get_piece(KNIGHT, color)),
-      put_pos(board::_pos(C, N), get_piece(BISHOP, color)),
-      put_pos(board::_pos(D, N), get_piece(QUEEN, color)),
+//      put_pos(board::_pos(B, N), get_piece(KNIGHT, color)),
+//      put_pos(board::_pos(C, N), get_piece(BISHOP, color)),
+//      put_pos(board::_pos(D, N), get_piece(QUEEN, color)),
       put_pos(board::_pos(E, N), get_piece(KING, color)),
-      put_pos(board::_pos(F, N), get_piece(BISHOP, color)),
-      put_pos(board::_pos(G, N), get_piece(KNIGHT, color)),
+//      put_pos(board::_pos(F, N), get_piece(BISHOP, color)),
+//      put_pos(board::_pos(G, N), get_piece(KNIGHT, color)),
       put_pos(board::_pos(H, N), get_piece(ROOK, color));
     }
   }
@@ -126,12 +129,36 @@ public:
     return target;
   }
 
+  bool is_castling_move(pos_t i, pos_t j) {
+    if(self[i].value != KING)return false;
+    if(self[i].color == WHITE)return Moves<KING, WHITE>::is_castling_move(i, j);
+    if(self[i].color == BLACK)return Moves<KING, BLACK>::is_castling_move(i, j);
+    return false;
+  }
+
   ChangeEvent move(pos_t i, pos_t j) {
     assert(!self[i].is_empty());
     event ev = put_pos(j, self[i]).last_event;
     unset_pos(i);
-    activePlayer_ = enemy_of(activePlayer());
     return ChangeEvent(i, j, self[j].last_event, ev);
+  }
+
+  std::vector<ChangeEvent> make_move(pos_t i, pos_t j) {
+    std::vector<ChangeEvent> events;
+    if(is_castling_move(i, j)) {
+      pos_pair_t rookmove = 0x00;
+      if(self[i].color == WHITE)rookmove = Moves<KING,WHITE>::castle_rook_move(i,j);
+      if(self[i].color == BLACK)rookmove = Moves<KING,BLACK>::castle_rook_move(i,j);
+      pos_t r_i = bitmask::first(rookmove),
+            r_j = bitmask::second(rookmove);
+      events.push_back(move(r_i, r_j));
+    }
+    if(self[i].value == KING) {
+      castlings_ &= ~(0xFFULL << ((self[i].color == WHITE) ? 0 : board::SIZE-board::LEN));
+    }
+    events.push_back(move(i, j));
+    activePlayer_ = enemy_of(activePlayer());
+    return events;
   }
 
   piece_bitboard_t get_piece_positions(COLOR c, bool enemy=false) const {

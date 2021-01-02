@@ -27,15 +27,15 @@ namespace board {
   constexpr pos_t LEN = 8;
   constexpr pos_t SIZE = LEN*LEN;
 
-  static constexpr pos_t _x(pos_t i) {
+  inline constexpr pos_t _x(pos_t i) {
     return i % LEN;
   }
 
-  static constexpr pos_t _y(pos_t i) {
+  inline constexpr pos_t _y(pos_t i) {
     return i / LEN;
   }
 
-  static constexpr pos_t _pos(pos_t i, pos_t j) {
+  inline constexpr pos_t _pos(pos_t i, pos_t j) {
     return i + (j - 1) * LEN;
   }
 } // namespace board

@@ -15,6 +15,7 @@
 
 // type alias: position index on bitboard
 typedef uint8_t pos_t;
+typedef uint16_t pos_pair_t;
 
 
 // https://graphics.stanford.edu/~seander/bithacks.html
@@ -22,6 +23,18 @@ typedef uint8_t pos_t;
 namespace bitmask {
   const uint64_t vline = UINT64_C(72340172838076673);
   const uint64_t hline = UINT64_C(0xFF);
+
+  inline constexpr pos_pair_t _pos_pair(pos_t a, pos_t b) {
+    return pos_pair_t(a) << 8 | b;
+  }
+
+  inline constexpr pos_t first(pos_pair_t p) {
+    return p >> 8;
+  }
+
+  inline constexpr pos_t second(pos_pair_t p) {
+    return p & 0xFF;
+  }
 
   template <typename T>
   inline constexpr bool is_exp2(T v) {
