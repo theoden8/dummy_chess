@@ -67,9 +67,11 @@ struct Interface {
       pos_t piece_pos = board::_pos(A+cursor_x, 1+cursor_y);
       pos_t hit_pos = board::_pos(A+x, 1+y);
       // single-attacks
-      piece_bitboard_t attacks = board.get_attacks_from(piece_pos);
+      //piece_bitboard_t attacks = board.get_attacks_from(piece_pos);
+      const auto &piece = board[piece_pos];
+      // single-moves
+      piece_bitboard_t attacks = piece.get_moves(piece_pos, board.get_piece_positions(piece.color), board.get_piece_positions(enemy_of(piece.color)));
       // multi-attacks
-      //const auto &piece = board[piece_pos];
       //piece_bitboard_t attacks = piece.get_attacks(board.get_piece_positions(piece.color), board.get_piece_positions(enemy_of(piece.color)));
       if(attacks & (UINT64_C(1) << (hit_pos))) {
         attron(COLOR_PAIR(NC_COLOR_CAN_ATTACK));
@@ -115,7 +117,7 @@ struct Interface {
     if(p.value == EMPTY) {
       addch(' ');
     } else {
-      addch(tolower(p.str()));
+      addch(toupper(p.str()));
     }
     for(int c=0;c<CELL_PMW;++c)addch(' ');
     nc_reset_color();

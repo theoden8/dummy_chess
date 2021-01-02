@@ -77,9 +77,11 @@ template <COLOR C> struct Attacks<PAWN, C> {
 template <COLOR C> struct Moves<PAWN, C> {
   static constexpr piece_bitboard_t get_moves(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes) {
     // TODO passing pawn
-    piece_bitboard_t attacks = Attacks<PAWN,C>::get_attacks(i) & (~friends | foes);
-    // TODO can't move two points when first point blocked
+    const piece_bitboard_t attacks = Attacks<PAWN,C>::get_attacks(i, friends, foes) & foes;
     piece_bitboard_t moves = Moves<PAWN,C>::get_basic_move(i) & ~(friends | foes);
+    if(bitmask::count_bits(moves) != 1 || std::abs(bitmask::log2_of_exp2(moves) - i) < 2*board::LEN) {
+      moves = 0x00;
+    }
     return attacks | moves;
   }
 
