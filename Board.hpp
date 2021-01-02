@@ -82,6 +82,50 @@ namespace bitmask {
     return r;
   }
 
+  // https://www.chessprogramming.org/BitScan#DeBruijnMultiplation
+  inline constexpr piece_bitboard_t lowest_bit(uint64_t v) {
+    if(!v)return 0ULL;
+    constexpr int index64[64] = {
+        0, 47,  1, 56, 48, 27,  2, 60,
+       57, 49, 41, 37, 28, 16,  3, 61,
+       54, 58, 35, 52, 50, 42, 21, 44,
+       38, 32, 29, 23, 17, 11,  4, 62,
+       46, 55, 26, 59, 40, 36, 15, 53,
+       34, 51, 20, 43, 31, 22, 10, 45,
+       25, 39, 14, 33, 19, 30,  9, 24,
+       13, 18,  8, 12,  7,  6,  5, 63
+    };
+    const uint64_t debruijn64 = UINT64_C(0x03f79d71b4cb0a89);
+    assert(v);
+    return 1ULL << index64[((v ^ (v-1)) * debruijn64) >> 58];
+  }
+
+  template <typename T>
+  inline constexpr piece_bitboard_t highest_bit(T v) {
+    if(!v)return 0ULL;
+    v |= (v >>  1);
+    v |= (v >>  2);
+    v |= (v >>  4);
+    v |= (v >>  8);
+    v |= (v >> 16);
+    v |= (v >> 32);
+    return v - (v >> 1);
+  }
+
+  template <typename T>
+  inline constexpr piece_bitboard_t ones_before_eq_bit(T v) {
+    if(!v)return UINT64_MAX;
+    assert(bitmask::is_exp2(v));
+    return (v - 1) << 1;
+  }
+
+  template <typename T>
+  inline constexpr piece_bitboard_t ones_after_eq_bit(T v) {
+    if(!v)return UINT64_MAX;
+    assert(bitmask::is_exp2(v));
+    return ~(v - 1);
+  }
+
   // iterate set bits with a function F
   template <typename F>
   constexpr void foreach(piece_bitboard_t mask, F &&func) {

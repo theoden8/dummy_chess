@@ -88,9 +88,7 @@ template <COLOR C> struct Attacks <KNIGHT, C> {
 
   static constexpr piece_bitboard_t get(pos_t i) {
     // memoized attacks
-    if(knightattacks[i] != 0x00) {
-      return knightattacks[i];
-    }
+    if(knightattacks[i] != 0x00)return knightattacks[i];
     piece_bitboard_t I = 1ULL << i;
     bool not_a = Board::_x(i) != A;
     bool not_ab = not_a && Board::_x(i) != B;
@@ -160,8 +158,30 @@ template <COLOR C> struct Attacks<BISHOP, C> {
 // rook attacks
 template <COLOR C> struct Attacks<ROOK, C> {
   static constexpr piece_bitboard_t get_attacks(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes) {
-    // TODO change according to piece positions
-    return Attacks<ROOK,C>::get_basic(i);
+    // TODO decide how to count king attacks
+    piece_bitboard_t occupied = friends | foes;
+    pos_t y = Board::_y(i), x = Board::_x(i);
+    pos_t axlen = Board::LENGTH;
+
+    // -> -> -> -> -> -> -> ->
+    // a1 b1 c1 d1 e1 f1 g1 h1
+    // ..
+    // a8 b8 c8 d8 e8 f8 g8 h8
+    // bits shifted the "other way"
+
+    piece_bitboard_t left = (UINT64_C(0xFF) >> (8 - x));
+    piece_bitboard_t right = ~(1ULL << x) & (~left & UINT64_C(0xFF));
+    left <<= axlen*y, right <<= axlen*y;
+    right &= bitmask::ones_before_eq_bit(bitmask::lowest_bit(right & occupied));
+    left &= bitmask::ones_after_eq_bit(bitmask::highest_bit(left & occupied));
+
+    const piece_bitboard_t vertical = UINT64_C(72340172838076673) << x;
+    piece_bitboard_t up = ~(1ULL << i) & (vertical << y*axlen);
+    piece_bitboard_t down = ~(1ULL << i) & (~up & vertical);
+    up &= bitmask::ones_before_eq_bit(bitmask::lowest_bit(up & occupied));
+    down &= bitmask::ones_after_eq_bit(bitmask::highest_bit(down & occupied));
+
+    return left|right|up|down;
   }
 
   static constexpr piece_bitboard_t get_basic(pos_t i) {

@@ -30,6 +30,7 @@ public:
       b.set_pos(Board::_pos(G, N), b.get_piece(KNIGHT, color)),
       b.set_pos(Board::_pos(H, N), b.get_piece(ROOK, color));
     }
+    b.set_pos(Board::_pos(E, 4), b.get_piece(ROOK, WHITE));
   }
 
   decltype(auto) get_attacks() const {

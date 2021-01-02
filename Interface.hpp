@@ -63,13 +63,6 @@ struct Interface {
   }
 
   void nc_color_condition(COLOR c, int x, int y) {
-    if(x==sel_x&&y==sel_y){
-      attron(COLOR_PAIR(NC_COLOR_SELECTED));
-      return;
-    } else if(x==cursor_x&&y==cursor_y) {
-      attron(COLOR_PAIR(NC_COLOR_SELECTION));
-      return;
-    }
     if(cursor_x!=-1&&cursor_y!=-1) {
       pos_t piece_pos = Board::_pos(A+cursor_x, 1+cursor_y);
       pos_t hit_pos = Board::_pos(A+x, 1+y);
@@ -78,6 +71,13 @@ struct Interface {
         attron(COLOR_PAIR(NC_COLOR_CAN_ATTACK));
         return;
       }
+    }
+    if(x==sel_x&&y==sel_y){
+      attron(COLOR_PAIR(NC_COLOR_SELECTED));
+      return;
+    } else if(x==cursor_x&&y==cursor_y) {
+      attron(COLOR_PAIR(NC_COLOR_SELECTION));
+      return;
     }
     nc_set_cell_color(c);
   }
