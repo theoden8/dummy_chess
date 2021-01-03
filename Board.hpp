@@ -5,6 +5,7 @@
 
 #include <Piece.hpp>
 #include <Event.hpp>
+#include <FEN.hpp>
 
 
 // board view of the game
@@ -32,27 +33,29 @@ public:
     Piece(KING, BLACK),
     Piece(EMPTY, NEUTRAL)
   };
-  Board(COLOR activePlayer=WHITE):
-    activePlayer_(activePlayer)
+  Board(const fen::FEN f=fen::castling_pos):
+    activePlayer_(f.active_player)
   {
     for(pos_t i = 0; i < board::SIZE; ++i) {
       set_pos(i, get_piece(EMPTY, NEUTRAL));
     }
-    // make initial position
-    for(pos_t i = 0; i < board::LEN; ++i) {
-      put_pos(board::_pos(A + i, 2), get_piece(PAWN, WHITE)),
-      put_pos(board::_pos(A + i, 7), get_piece(PAWN, BLACK));
+    for(pos_t i = 0; i < f.board.length(); ++i) {
+      if(f.board[i]==' ')continue;
+      COLOR c = islower(f.board[i]) ? BLACK : WHITE;
+      PIECE p = EMPTY;
+      switch(tolower(f.board[i])) {
+        case 'p':p=PAWN;break;
+        case 'n':p=KNIGHT;break;
+        case 'b':p=BISHOP;break;
+        case 'r':p=ROOK;break;
+        case 'q':p=QUEEN;break;
+        case 'k':p=KING;break;
+      }
+      pos_t x = board::_x(i), y = board::LEN - board::_y(i) - 1;
+      put_pos(board::_pos(A+x, 1+y), get_piece(p, c));
     }
-    for(const auto &[color, N] : {std::make_pair(WHITE, 1), std::make_pair(BLACK, 8)}) {
-      put_pos(board::_pos(A, N), get_piece(ROOK, color)),
-//      put_pos(board::_pos(B, N), get_piece(KNIGHT, color)),
-//      put_pos(board::_pos(C, N), get_piece(BISHOP, color)),
-//      put_pos(board::_pos(D, N), get_piece(QUEEN, color)),
-      put_pos(board::_pos(E, N), get_piece(KING, color)),
-//      put_pos(board::_pos(F, N), get_piece(BISHOP, color)),
-//      put_pos(board::_pos(G, N), get_piece(KNIGHT, color)),
-      put_pos(board::_pos(H, N), get_piece(ROOK, color));
-    }
+    enpassant_ = f.enpassant;
+    castlings_ = event::decompress_castlings(f.castling_compressed);
   }
 
   constexpr COLOR activePlayer() const {
