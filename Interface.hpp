@@ -172,21 +172,10 @@ struct Interface {
     move(top++, LEFT);
   }
 
-  void display() {
-    bkgd(COLOR_PAIR(NC_COLOR_NORMAL)); // changes the background
-    int cols, rows;
-    getmaxyx(stdscr, rows, cols); // acquires screen height and width
-    const int TOP = 4, LEFT = cols * 0.03;
-
-    move(2, LEFT); // move sets the position of the cursor (where printw and addch will write)
-    printw("Press ESC to leave.");
-    move(3, LEFT);
-    printw("Use arrows to navigate.");
-
-  print_board:;
+  void draw_board(const int TOP, const int LEFT, int &top, int &right) {
     int len = ((CELL_MW+CELL_PMW)*2+1 + 1)*8 + 1; // character length of a cell in the user interface
+    right = LEFT + len;
     attron(COLOR_PAIR(NC_COLOR_NORMAL));
-    int top = TOP; // y coordinate of where to start writing
     move(top++, LEFT);
     for(int i=0;i<len;++i) {
       if(i == 0) addch(ACS_ULCORNER);
@@ -216,7 +205,9 @@ struct Interface {
         }
       }
     }
-  print_statusbar:;
+  }
+
+  void draw_statusbar(const int LEFT, int &top) {
     move(top + 2, LEFT);
     attron(A_BOLD);
     //set_statusbar_message
@@ -224,10 +215,27 @@ struct Interface {
     pos_t marker = event::extract_byte(lastevent);
     pos_t from = event::extract_byte(lastevent);
     pos_t to = event::extract_byte(lastevent);
-    len = printw("[ %s %hhu, (%hhu) %hhu->%hhu ]", activePlayer().c_str(), event::compress_castlings(board.castlings_), marker, from, to);
+    int len = printw("[ %s %hhu, (%hhu) %hhu->%hhu ]", activePlayer().c_str(), event::compress_castlings(board.castlings_), marker, from, to);
     nc_reset_color();
     for(int i = 0; i < 20 - len; ++i)
       addch(' ');
+  }
+
+  void display() {
+    bkgd(COLOR_PAIR(NC_COLOR_NORMAL)); // changes the background
+    int cols, rows;
+    getmaxyx(stdscr, rows, cols); // acquires screen height and width
+    const int TOP = 4, LEFT = cols * 0.03;
+
+    move(2, LEFT); // move sets the position of the cursor (where printw and addch will write)
+    printw("Press ESC to leave.");
+    move(3, LEFT);
+    printw("Use arrows to navigate.");
+
+    int top = TOP; // y coordinate of where to start writing
+    int right;
+    draw_board(TOP, LEFT, top, right);
+    draw_statusbar(LEFT, top);
     refresh();
   }
 
