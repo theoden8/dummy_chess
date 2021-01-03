@@ -94,6 +94,16 @@ namespace fen {
     return f;
   }
 
+  FEN load_from_file(std::string fname) {
+    FILE *fp = fopen(fname.c_str(), "r");
+    assert(fp != nullptr);
+    std::string s;
+    char c;
+    while((c=fgetc(fp))!=EOF)s+=c;
+    fclose(fp);
+    return load_from_string(s);;
+  }
+
   const FEN starting_pos = fen::load_from_string("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"s);
   const FEN castling_pos = fen::load_from_string("r3k2r/pppppppp/8/8/8/8/PPPPPPPP/R3K2R w KQkq - 0 1"s);
 } // namespace fen

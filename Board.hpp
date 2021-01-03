@@ -34,7 +34,9 @@ public:
     Piece(EMPTY, NEUTRAL)
   };
   Board(const fen::FEN f=fen::castling_pos):
-    activePlayer_(f.active_player)
+    activePlayer_(f.active_player),
+    castlings_(event::decompress_castlings(f.castling_compressed)),
+    enpassant_(f.enpassant)
   {
     for(pos_t i = 0; i < board::SIZE; ++i) {
       set_pos(i, get_piece(EMPTY, NEUTRAL));
@@ -51,11 +53,10 @@ public:
         case 'q':p=QUEEN;break;
         case 'k':p=KING;break;
       }
-      pos_t x = board::_x(i), y = board::LEN - board::_y(i) - 1;
+      pos_t x = board::_x(i),
+            y = board::LEN - board::_y(i) - 1;
       put_pos(board::_pos(A+x, 1+y), get_piece(p, c));
     }
-    enpassant_ = f.enpassant;
-    castlings_ = event::decompress_castlings(f.castling_compressed);
   }
 
   constexpr COLOR activePlayer() const {
