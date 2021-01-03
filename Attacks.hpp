@@ -118,10 +118,10 @@ template <COLOR CC> struct Moves<PAWN, CC> {
     return std::abs(i - j) == 2*board::LEN;
   }
 
-  static constexpr piece_bitboard_t get_enpassant_bit(pos_t i, pos_t j) {
+  static constexpr pos_t get_enpassant_trace(pos_t i, pos_t j) {
     assert(is_enpassant_move(i, j));
-    if constexpr(CC == WHITE)return 1ULL << (j-board::LEN);
-    else if constexpr(CC == BLACK)return 1ULL << (j+board::LEN);
+    if constexpr(CC == WHITE)return j-board::LEN;
+    else if constexpr(CC == BLACK)return j+board::LEN;
     assert(false);
     return 0x00ULL;
   }
@@ -331,18 +331,28 @@ template <COLOR CC> struct Moves<KING, CC> {
   static inline constexpr piece_bitboard_t get_moves(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes,
                                                      piece_bitboard_t attack_mask, piece_bitboard_t castlings)
   {
-    //TODO castling
+    const piece_bitboard_t occupied = friends | foes;
     constexpr pos_t shift = (CC == WHITE) ? 0 : (board::SIZE-board::LEN);
     castlings &= bitmask::hline << shift;
-    // can't castle when checked
-    if(attack_mask & (1ULL << i))castlings=0x00;
-    constexpr piece_bitboard_t castleleft = 0x40ULL << shift;
-    constexpr piece_bitboard_t castleleftcheck = 0x20ULL << shift;
-    constexpr piece_bitboard_t castleright = 0x04ULL << shift;
-    constexpr piece_bitboard_t castlerightcheck = 0x08ULL << shift;
     piece_bitboard_t castlemoves = 0x00;
-    if((castlings & castleleft) && ~(attack_mask & castleleftcheck))castlemoves|=castleleft;
-    if((castlings & castleright) && ~(attack_mask & castlerightcheck))castlemoves|=castleright;
+    if(castlings) {
+      // can't castle when checked
+      if(attack_mask & (1ULL << i))castlings=0x00;
+      constexpr piece_bitboard_t castleleft = 0x40ULL << shift;
+      constexpr piece_bitboard_t castleleftcheck = 0x20ULL << shift;
+      constexpr piece_bitboard_t castleleftcheckocc = 0x60ULL << shift;
+      constexpr piece_bitboard_t castleright = 0x04ULL << shift;
+      constexpr piece_bitboard_t castlerightcheck = 0x08ULL << shift;
+      constexpr piece_bitboard_t castlerightcheckocc = (0x0EULL) << shift;
+      if((castlings & castleleft)
+          && !(attack_mask & castleleftcheck)
+          && !(occupied & castleleftcheckocc))
+        castlemoves|=castleleft;
+      if((castlings & castleright)
+          && !(attack_mask & castlerightcheck)
+          && !(occupied & castlerightcheckocc))
+        castlemoves|=castleright;
+    }
     return (Attacks<KING, CC>::get_basic(i) & ~friends & ~attack_mask) | castlemoves;
   }
 

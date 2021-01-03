@@ -5,13 +5,13 @@
 
 
 // pieces
-typedef enum { EMPTY = 0, PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING } PIECE;
+typedef enum { PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING, EMPTY, NO_PIECES=EMPTY } PIECE;
 
 // type alias: bitboard (as a mask)
 typedef uint64_t piece_bitboard_t;
 
 // player color, neutral when neither/both
-typedef enum { NEUTRAL = 0, WHITE, BLACK } COLOR;
+typedef enum { WHITE, BLACK, NEUTRAL, NO_COLORS=NEUTRAL } COLOR;
 
 COLOR enemy_of(COLOR c) {
   if(c == NEUTRAL)return NEUTRAL;

@@ -7,25 +7,6 @@
 #include <Event.hpp>
 
 
-struct ChangeEvent {
-  pos_t from, to;
-  event ev_from, ev_to;
-  piece_bitboard_t castlings, enpassants;
-  pos_t enpassantlayman;
-  constexpr ChangeEvent(pos_t from, pos_t to, event ev_from, event ev_to,
-                        piece_bitboard_t castlings=0x00, piece_bitboard_t enpassants=0x00,
-                        pos_t enpassantlayman=0):
-    from(from), to(to), ev_from(ev_from), ev_to(ev_to),
-    castlings(castlings), enpassants(enpassants),
-    enpassantlayman(enpassantlayman)
-  {
-    if(ev_from.type == KILL) {
-      assert(ev_to.type == DEATH);
-    }
-  }
-};
-
-
 // board view of the game
 class Board {
 private:
@@ -33,6 +14,7 @@ private:
   std::array <Piece *, board::SIZE> board_;
   COLOR activePlayer_;
   piece_bitboard_t castlings_ = 0x44ULL | 0x44ULL << (board::SIZE - board::LEN);
+  std::vector<event_t> history;
 public:
   piece_bitboard_t enpassants_ = 0x00ULL;
   pos_t enpassantlayman_ = 0;
@@ -128,68 +110,57 @@ public:
 
   Piece &put_pos(pos_t i, Piece &p) {
     Piece &target = self[i];
-    if(!self[i].is_empty()) {
-      p.set_event(KILL);
-      self[i].set_event(DEATH);
-    }
     self[i].unset_pos(i);
     set_pos(i, p);
     return target;
   }
 
-  bool is_castling_move(pos_t i, pos_t j) {
+  bool is_castling_move(pos_t i, pos_t j) const {
     if(self[i].value != KING)return false;
     if(self[i].color == WHITE)return Moves<KING, WHITE>::is_castling_move(i, j);
     if(self[i].color == BLACK)return Moves<KING, BLACK>::is_castling_move(i, j);
     return false;
   }
 
-  bool is_enpassant_move(pos_t i, pos_t j) {
+  bool is_enpassant_move(pos_t i, pos_t j) const {
     if(self[i].value != PAWN)return false;
     if(self[i].color == WHITE)return Moves<PAWN, WHITE>::is_enpassant_move(i, j);
     if(self[i].color == BLACK)return Moves<PAWN, BLACK>::is_enpassant_move(i, j);
     return false;
   }
 
-  ChangeEvent move(pos_t i, pos_t j) {
-    assert(!self[i].is_empty());
-    event ev = put_pos(j, self[i]).last_event;
+  void move_pos(pos_t i, pos_t j) {
+    put_pos(j, self[i]);
     unset_pos(i);
-    return ChangeEvent(i, j, self[j].last_event, ev, castlings_, enpassants_, enpassantlayman_);
   }
 
-  ChangeEvent remove(pos_t i) {
+  event_t ev_basic(pos_t i, pos_t j) const {
     assert(!self[i].is_empty());
-    event ev = put_pos(i, self.get_piece(EMPTY)).last_event;
-    return ChangeEvent(i, i, self[i].last_event, ev, castlings_, enpassants_, enpassantlayman_);
+    pos_t killwhat = event::killnothing;
+    pos_t enpassant_trace = event::enpassantnotrace;
+    pos_t enpassant_layman = 0;
+    if(self[j].value != EMPTY) {
+      killwhat = self[j].piece_index;
+    }
+    if(is_enpassant_move(i, j)) {
+      if(self[i].color==WHITE)enpassant_trace=Moves<PAWN,WHITE>::get_enpassant_trace(i,j);
+      if(self[i].color==BLACK)enpassant_trace=Moves<PAWN,BLACK>::get_enpassant_trace(i,j);
+      enpassant_layman = j;
+    }
+    return event::basic(i, j, killwhat, castlings_, enpassant_trace, enpassant_layman);
   }
 
-  std::vector<ChangeEvent> move_castle(pos_t i, pos_t j) {
-    std::vector<ChangeEvent> events;
+  event_t ev_castle(pos_t i, pos_t j) const {
     pos_pair_t rookmove = 0x00;
     if(self[i].color == WHITE)rookmove = Moves<KING,WHITE>::castle_rook_move(i,j);
     if(self[i].color == BLACK)rookmove = Moves<KING,BLACK>::castle_rook_move(i,j);
     pos_t r_i = bitmask::first(rookmove),
           r_j = bitmask::second(rookmove);
-    events.push_back(move(r_i, r_j));
-    events.push_back(move(i, j));
-    reset_enpassants();
-    return events;
+    return event::castling(i, j, r_i, r_j, castlings_);
   }
 
-  std::vector<ChangeEvent> take_enpassant(pos_t i, pos_t j) {
-    std::vector<ChangeEvent> events;
-    events.push_back(remove(enpassantlayman_));
-    events.push_back(move(i, j));
-    reset_enpassants();
-    return events;
-  }
-
-  ChangeEvent move_enpassant(pos_t i, pos_t j) {
-    if(self[i].color==WHITE)enpassants_=Moves<PAWN,WHITE>::get_enpassant_bit(i,j);
-    if(self[i].color==BLACK)enpassants_=Moves<PAWN,BLACK>::get_enpassant_bit(i,j);
-    enpassantlayman_ = j;
-    return move(i, j);
+  event_t ev_take_enpassant(pos_t i, pos_t j) const {
+    return event::enpassant(i, j, enpassantlayman_, castlings_, enpassants_, enpassantlayman_);
   }
 
   void reset_enpassants() {
@@ -197,23 +168,156 @@ public:
   }
 
   void update_castling(pos_t i, pos_t j) {
+    const pos_t shift = (self[i].color == WHITE) ? 0 : board::SIZE-board::LEN;
     if(self[i].value == KING) {
-      castlings_ &= ~(0xFFULL << ((self[i].color == WHITE) ? 0 : board::SIZE-board::LEN));
+      castlings_ &= ~(0xFFULL << shift);
+    } else if(self[i].value == ROOK && i == board::_pos(A, 1) + shift) {
+      castlings_ &= ~(0x04 << shift);
+    } else if(self[i].value == ROOK && i == board::_pos(H, 1) + shift) {
+      castlings_ &= ~(0x40 << shift);
     }
   }
 
-  std::vector<ChangeEvent> make_move(pos_t i, pos_t j) {
-    std::vector<ChangeEvent> events;
-    if(is_castling_move(i, j))events=move_castle(i, j);
-    else if(self[i].value == PAWN && (1ULL << j) == enpassants_)events=take_enpassant(i, j);
-    else {
-      reset_enpassants();
-      update_castling(i, j);
-      if(is_enpassant_move(i, j))events.push_back(move_enpassant(i, j));
-      else events.push_back(move(i, j));
+  void act_event(event_t ev) {
+    pos_t marker = event::extract_byte(ev);
+    history.push_back(ev);
+    switch(marker) {
+      case event::BASIC_MARKER:
+        {
+          pos_t i = event::extract_byte(ev);
+          pos_t j = event::extract_byte(ev);
+          pos_t killwhat = event::extract_byte(ev);
+          castlings_ = event::extract_castlings(ev);
+          enpassants_ = 1ULL << event::extract_byte(ev);
+          enpassantlayman_ = event::extract_byte(ev);
+          update_castling(i, j);
+          move_pos(i, j);
+        }
+      break;
+      case event::CASTLING_MARKER:
+        {
+          pos_t i = event::extract_byte(ev);
+          pos_t j = event::extract_byte(ev);
+          pos_t r_i = event::extract_byte(ev);
+          pos_t r_j = event::extract_byte(ev);
+          auto castlings_ = event::extract_castlings(ev);
+          auto enpassants_ = 1ULL << event::extract_byte(ev);
+          auto enpassantlayman_ = event::extract_byte(ev);
+          move_pos(i, j);
+          move_pos(r_i, r_j);
+          update_castling(i, j);
+          reset_enpassants();
+        }
+      break;
+      case event::ENPASSANT_MARKER:
+        {
+          pos_t i = event::extract_byte(ev);
+          pos_t j = event::extract_byte(ev);
+          pos_t killwhere = event::extract_byte(ev);
+          auto castlings_ = event::decompress_castlings(event::extract_byte(ev));
+          auto enpassants_ = 1ULL << event::extract_byte(ev);
+          auto enpassantlayman_ = event::extract_byte(ev);
+          put_pos(killwhere, self.get_piece(EMPTY));
+          move_pos(i, j);
+          reset_enpassants();
+        }
+      break;
+      case event::PROMOTION_MARKER:
+        {
+          pos_t i = event::extract_byte(ev);
+          pos_t j = event::extract_byte(ev);
+          pos_t killwhat = event::extract_byte(ev);
+          auto castlings_ = event::extract_castlings(ev);
+          auto enpassants_ = 1ULL << event::extract_byte(ev);
+          auto enpassantlayman_ = event::extract_byte(ev);
+          pos_t becomewhat = event::extract_byte(ev);
+          put_pos(i, self.get_piece(EMPTY));
+          put_pos(j, self.pieces[becomewhat]);
+          reset_enpassants();
+        }
+      break;
     }
+  }
+
+  void unact_event() {
+    if(history.empty())return;
+    event_t ev = history.back();
+    pos_t marker = event::extract_byte(ev);
+    switch(marker) {
+      case event::BASIC_MARKER:
+        {
+          pos_t i = event::extract_byte(ev);
+          pos_t j = event::extract_byte(ev);
+          pos_t killwhat = event::extract_byte(ev);
+          castlings_ = event::extract_castlings(ev);
+          enpassants_ = 1ULL << event::extract_byte(ev);
+          enpassantlayman_ = event::extract_byte(ev);
+          move_pos(j, i);
+          if(killwhat != event::killnothing) {
+            put_pos(j, self.pieces[killwhat]);
+          }
+        }
+      break;
+      case event::CASTLING_MARKER:
+        {
+          pos_t i = event::extract_byte(ev);
+          pos_t j = event::extract_byte(ev);
+          pos_t r_i = event::extract_byte(ev);
+          pos_t r_j = event::extract_byte(ev);
+          castlings_ = event::extract_castlings(ev);
+          enpassants_ = 1ULL << event::extract_byte(ev);
+          enpassantlayman_ = event::extract_byte(ev);
+          move_pos(j, i);
+          move_pos(r_j, r_i);
+        }
+      break;
+      case event::ENPASSANT_MARKER:
+        {
+          pos_t i = event::extract_byte(ev);
+          pos_t j = event::extract_byte(ev);
+          pos_t killwhere = event::extract_byte(ev);
+          castlings_ = event::decompress_castlings(event::extract_byte(ev));
+          enpassants_ = 1ULL << event::extract_byte(ev);
+          enpassantlayman_ = event::extract_byte(ev);
+          put_pos(killwhere, self.get_piece(PAWN, enemy_of(self[j].color)));
+          move_pos(j, i);
+          enpassants_ = 1ULL << j;
+          enpassantlayman_ = killwhere;
+        }
+      break;
+      case event::PROMOTION_MARKER:
+        {
+          pos_t i = event::extract_byte(ev);
+          pos_t j = event::extract_byte(ev);
+          pos_t killwhat = event::extract_byte(ev);
+          castlings_ = event::extract_castlings(ev);
+          enpassants_ = 1ULL << event::extract_byte(ev);
+          enpassantlayman_ = event::extract_byte(ev);
+          pos_t becomewhat = event::extract_byte(ev);
+
+          COLOR c = self[j].color;
+          if(killwhat != event::killnothing) {
+            put_pos(j, self.pieces[killwhat]);
+          } else {
+            put_pos(j, self.get_piece(EMPTY));
+          }
+          put_pos(i, self.get_piece(PAWN, c));
+        }
+      break;
+    }
+  }
+
+  void make_move(pos_t i, pos_t j, PIECE as=EMPTY) {
+    event_t ev = 0x00;
+    if(is_castling_move(i, j)) {
+      ev = ev_castle(i, j);
+    } else if(self[i].value == PAWN && (1ULL << j) == enpassants_) {
+      ev = event::enpassant(i, j, enpassantlayman_, castlings_);
+    } else {
+      ev = ev_basic(i, j);
+    }
+    act_event(ev);
     activePlayer_ = enemy_of(activePlayer());
-    return events;
   }
 
   inline piece_bitboard_t get_piece_positions(COLOR c, bool enemy=false) const {
@@ -264,12 +368,12 @@ public:
     const piece_bitboard_t foes_black = get_piece_positions(WHITE, true);
     const piece_bitboard_t attack_mask_white = get_attack_mask(WHITE);
     const piece_bitboard_t attack_mask_black = get_attack_mask(BLACK);
-    for(PIECE p : {PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING}) {
-      get_piece(p,WHITE).foreach([&](pos_t pos) mutable noexcept -> void {
-        moves[pos] |= get_piece(p,WHITE).get_moves(pos,friends_white,foes_white, attack_mask_white, castlings_, enpassants_);
+    for(int p = 0; p < NO_PIECES; ++p) {
+      get_piece((PIECE)p,WHITE).foreach([&](pos_t pos) mutable noexcept -> void {
+        moves[pos] |= get_piece((PIECE)p,WHITE).get_moves(pos,friends_white,foes_white, attack_mask_white, castlings_, enpassants_);
       });
-      get_piece(p,BLACK).foreach([&](pos_t pos) mutable noexcept -> void {
-        moves[pos] |= get_piece(p,BLACK).get_moves(pos,friends_black,foes_black, attack_mask_black, castlings_, enpassants_);
+      get_piece((PIECE)p,BLACK).foreach([&](pos_t pos) mutable noexcept -> void {
+        moves[pos] |= get_piece((PIECE)p,BLACK).get_moves(pos,friends_black,foes_black, attack_mask_black, castlings_, enpassants_);
       });
     }
     return moves;
@@ -295,8 +399,8 @@ public:
     const piece_bitboard_t enemy_foes = get_piece_positions(c, true);
     const piece_bitboard_t enemy_friends = get_piece_positions(enemy_of(c));
     piece_bitboard_t mask = 0x00;
-    for(PIECE p : {PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING}) {
-      mask |= get_piece(p, enemy_of(c)).get_attacks(enemy_friends, enemy_foes);
+    for(int p = 0; p < NO_PIECES; ++p) {
+      mask |= get_piece((PIECE)p, enemy_of(c)).get_attacks(enemy_friends, enemy_foes);
     }
     return mask;
   }

@@ -13,11 +13,12 @@
 struct Piece {
   const PIECE value;
   const COLOR color;
+  const pos_t piece_index;
   piece_bitboard_t mask;
-  event last_event;
 
-  constexpr Piece(PIECE p, COLOR c, piece_bitboard_t loc = 0x00):
-    value(p), color(c), mask(loc), last_event()
+  constexpr Piece(PIECE p, COLOR c, piece_bitboard_t loc=0x00):
+    value(p), color(c), mask(loc),
+    piece_index((p==EMPTY) ? int(NO_PIECES)*int(NO_COLORS) : int(p)*(int)NO_COLORS+c)
   {}
 
   constexpr bool is_set(pos_t i) const {
@@ -26,13 +27,6 @@ struct Piece {
 
   constexpr bool is_empty() const {
     return value == EMPTY;
-  }
-
-  constexpr void set_event(pos_t i, EVENT e = NOEVENT) {
-    if(e != NOEVENT) {
-      last_event.type = e;
-      last_event.position = i;
-    }
   }
 
   constexpr void set_pos(pos_t i) {
