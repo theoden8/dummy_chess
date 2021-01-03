@@ -69,6 +69,9 @@ struct Interface {
     } else if(x==cursor_x&&y==cursor_y) {
       attron(COLOR_PAIR(NC_COLOR_SELECTION));
       return;
+    } else if(board.enpassants_ & board::_pos(A+x,1+y)) {
+      attron(COLOR_PAIR(NC_COLOR_CAN_ATTACK));
+      return;
     }
     if((cursor_x!=-1&&cursor_y!=-1) || (sel_x!=-1&&sel_y!=-1)) {
       pos_t piece_pos = 0;

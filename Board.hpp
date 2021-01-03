@@ -10,12 +10,18 @@
 struct ChangeEvent {
   pos_t from, to;
   event ev_from, ev_to;
-  event supp_ev_from, supp_ev_to;
-  constexpr ChangeEvent(pos_t from, pos_t to, event ev_from, event ev_to):
-    from(from), to(to), ev_from(ev_from), ev_to(ev_to)
+  piece_bitboard_t castlings, enpassants;
+  pos_t enpassantlayman;
+  constexpr ChangeEvent(pos_t from, pos_t to, event ev_from, event ev_to,
+                        piece_bitboard_t castlings=0x00, piece_bitboard_t enpassants=0x00,
+                        pos_t enpassantlayman=0):
+    from(from), to(to), ev_from(ev_from), ev_to(ev_to),
+    castlings(castlings), enpassants(enpassants),
+    enpassantlayman(enpassantlayman)
   {
-    if(ev_from.type == KILL)
+    if(ev_from.type == KILL) {
       assert(ev_to.type == DEATH);
+    }
   }
 };
 
@@ -28,6 +34,8 @@ private:
   COLOR activePlayer_;
   piece_bitboard_t castlings_ = 0x44ULL | 0x44ULL << (board::SIZE - board::LEN);
 public:
+  piece_bitboard_t enpassants_ = 0x00ULL;
+  pos_t enpassantlayman_ = 0;
   std::array<Piece, 2*6+1>  pieces = {
     Piece(PAWN, WHITE),
     Piece(PAWN, BLACK),
@@ -136,34 +144,81 @@ public:
     return false;
   }
 
+  bool is_enpassant_move(pos_t i, pos_t j) {
+    if(self[i].value != PAWN)return false;
+    if(self[i].color == WHITE)return Moves<PAWN, WHITE>::is_enpassant_move(i, j);
+    if(self[i].color == BLACK)return Moves<PAWN, BLACK>::is_enpassant_move(i, j);
+    return false;
+  }
+
   ChangeEvent move(pos_t i, pos_t j) {
     assert(!self[i].is_empty());
     event ev = put_pos(j, self[i]).last_event;
     unset_pos(i);
-    return ChangeEvent(i, j, self[j].last_event, ev);
+    return ChangeEvent(i, j, self[j].last_event, ev, castlings_, enpassants_, enpassantlayman_);
+  }
+
+  ChangeEvent remove(pos_t i) {
+    assert(!self[i].is_empty());
+    event ev = put_pos(i, self.get_piece(EMPTY)).last_event;
+    return ChangeEvent(i, i, self[i].last_event, ev, castlings_, enpassants_, enpassantlayman_);
+  }
+
+  std::vector<ChangeEvent> move_castle(pos_t i, pos_t j) {
+    std::vector<ChangeEvent> events;
+    pos_pair_t rookmove = 0x00;
+    if(self[i].color == WHITE)rookmove = Moves<KING,WHITE>::castle_rook_move(i,j);
+    if(self[i].color == BLACK)rookmove = Moves<KING,BLACK>::castle_rook_move(i,j);
+    pos_t r_i = bitmask::first(rookmove),
+          r_j = bitmask::second(rookmove);
+    events.push_back(move(r_i, r_j));
+    events.push_back(move(i, j));
+    reset_enpassants();
+    return events;
+  }
+
+  std::vector<ChangeEvent> take_enpassant(pos_t i, pos_t j) {
+    std::vector<ChangeEvent> events;
+    events.push_back(remove(enpassantlayman_));
+    events.push_back(move(i, j));
+    reset_enpassants();
+    return events;
+  }
+
+  ChangeEvent move_enpassant(pos_t i, pos_t j) {
+    if(self[i].color==WHITE)enpassants_=Moves<PAWN,WHITE>::get_enpassant_bit(i,j);
+    if(self[i].color==BLACK)enpassants_=Moves<PAWN,BLACK>::get_enpassant_bit(i,j);
+    enpassantlayman_ = j;
+    return move(i, j);
+  }
+
+  void reset_enpassants() {
+    enpassants_ = 0x00, enpassantlayman_ = 0;
+  }
+
+  void update_castling(pos_t i, pos_t j) {
+    if(self[i].value == KING) {
+      castlings_ &= ~(0xFFULL << ((self[i].color == WHITE) ? 0 : board::SIZE-board::LEN));
+    }
   }
 
   std::vector<ChangeEvent> make_move(pos_t i, pos_t j) {
     std::vector<ChangeEvent> events;
-    if(is_castling_move(i, j)) {
-      pos_pair_t rookmove = 0x00;
-      if(self[i].color == WHITE)rookmove = Moves<KING,WHITE>::castle_rook_move(i,j);
-      if(self[i].color == BLACK)rookmove = Moves<KING,BLACK>::castle_rook_move(i,j);
-      pos_t r_i = bitmask::first(rookmove),
-            r_j = bitmask::second(rookmove);
-      events.push_back(move(r_i, r_j));
+    if(is_castling_move(i, j))events=move_castle(i, j);
+    else if(self[i].value == PAWN && (1ULL << j) == enpassants_)events=take_enpassant(i, j);
+    else {
+      reset_enpassants();
+      update_castling(i, j);
+      if(is_enpassant_move(i, j))events.push_back(move_enpassant(i, j));
+      else events.push_back(move(i, j));
     }
-    if(self[i].value == KING) {
-      castlings_ &= ~(0xFFULL << ((self[i].color == WHITE) ? 0 : board::SIZE-board::LEN));
-    }
-    events.push_back(move(i, j));
     activePlayer_ = enemy_of(activePlayer());
     return events;
   }
 
-  piece_bitboard_t get_piece_positions(COLOR c, bool enemy=false) const {
+  inline piece_bitboard_t get_piece_positions(COLOR c, bool enemy=false) const {
     piece_bitboard_t mask = UINT64_C(0);
-    for(PIECE p : {PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING})mask |= self.get_piece(p, c).mask;
+    for(PIECE p : {PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING})mask|=self.get_piece(p, c).mask;
     if(enemy)mask&=~get_piece(KING, c).mask;
     return mask;
   }
@@ -186,8 +241,18 @@ public:
     return attacks;
   }
 
-  piece_bitboard_t get_attacks_from(pos_t pos) const {
-    return get_attacks()[pos];
+  inline piece_bitboard_t get_attacks_from(pos_t pos) const {
+    if(self[pos].is_empty())return 0x00;
+    else if(self[pos].color==WHITE) {
+      const piece_bitboard_t friends_white = get_piece_positions(WHITE);
+      const piece_bitboard_t foes_white = get_piece_positions(BLACK, true);
+      return self[pos].get_attack(pos,friends_white,foes_white);
+    } else if(self[pos].color==BLACK) {
+      const piece_bitboard_t friends_black = get_piece_positions(BLACK);
+      const piece_bitboard_t foes_black = get_piece_positions(WHITE, true);
+      return self[pos].get_attack(pos,friends_black,foes_black);
+    }
+    return 0x00;
   }
 
   decltype(auto) get_moves() const {
@@ -201,17 +266,29 @@ public:
     const piece_bitboard_t attack_mask_black = get_attack_mask(BLACK);
     for(PIECE p : {PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING}) {
       get_piece(p,WHITE).foreach([&](pos_t pos) mutable noexcept -> void {
-        moves[pos] |= get_piece(p,WHITE).get_moves(pos,friends_white,foes_white, attack_mask_white, castlings_);
+        moves[pos] |= get_piece(p,WHITE).get_moves(pos,friends_white,foes_white, attack_mask_white, castlings_, enpassants_);
       });
       get_piece(p,BLACK).foreach([&](pos_t pos) mutable noexcept -> void {
-        moves[pos] |= get_piece(p,BLACK).get_moves(pos,friends_black,foes_black, attack_mask_black, castlings_);
+        moves[pos] |= get_piece(p,BLACK).get_moves(pos,friends_black,foes_black, attack_mask_black, castlings_, enpassants_);
       });
     }
     return moves;
   }
 
-  piece_bitboard_t get_moves_from(pos_t pos) const {
-    return get_moves()[pos];
+  inline piece_bitboard_t get_moves_from(pos_t pos) const {
+    if(self[pos].is_empty())return 0x00;
+    else if(self[pos].color==WHITE) {
+      const piece_bitboard_t friends_white = get_piece_positions(WHITE);
+      const piece_bitboard_t foes_white = get_piece_positions(BLACK, true);
+      const piece_bitboard_t attack_mask_white = get_attack_mask(WHITE);
+      return self[pos].get_moves(pos,friends_white,foes_white,attack_mask_white,castlings_,enpassants_);
+    } else if(self[pos].color==BLACK) {
+      const piece_bitboard_t friends_black = get_piece_positions(BLACK);
+      const piece_bitboard_t foes_black = get_piece_positions(WHITE, true);
+      const piece_bitboard_t attack_mask_black = get_attack_mask(BLACK);
+      return self[pos].get_moves(pos,friends_black,foes_black,attack_mask_black,castlings_,enpassants_);
+    }
+    return 0x00;
   }
 
   piece_bitboard_t get_attack_mask(COLOR c) const {

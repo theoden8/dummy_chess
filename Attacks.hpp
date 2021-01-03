@@ -104,14 +104,26 @@ template <> struct MultiAttacks<PAWN, BLACK> {
 };
 
 template <COLOR CC> struct Moves<PAWN, CC> {
-  static constexpr piece_bitboard_t get_moves(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes) {
+  static constexpr piece_bitboard_t get_moves(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes, piece_bitboard_t enpassants) {
     // TODO passing pawn
-    const piece_bitboard_t attacks = Attacks<PAWN, CC>::get_attacks(i, friends, foes) & foes;
+    const piece_bitboard_t attacks = Attacks<PAWN, CC>::get_attacks(i, friends, foes) & (foes|enpassants);
     piece_bitboard_t moves = Moves<PAWN, CC>::get_basic_move(i) & ~(friends | foes);
     if(bitmask::count_bits(moves) != 1)return attacks|moves;
     int pos_to=bitmask::log2_of_exp2(moves), pos_from=i;
-    if(std::abs(pos_to - pos_from) == board::LEN)return attacks|moves;
+    if(std::abs(pos_from - pos_to) == board::LEN)return attacks|moves;
     return attacks;
+  }
+
+  static constexpr bool is_enpassant_move(pos_t i, pos_t j) {
+    return std::abs(i - j) == 2*board::LEN;
+  }
+
+  static constexpr piece_bitboard_t get_enpassant_bit(pos_t i, pos_t j) {
+    assert(is_enpassant_move(i, j));
+    if constexpr(CC == WHITE)return 1ULL << (j-board::LEN);
+    else if constexpr(CC == BLACK)return 1ULL << (j+board::LEN);
+    assert(false);
+    return 0x00ULL;
   }
 
   static constexpr piece_bitboard_t get_basic_move(pos_t i) {
