@@ -23,7 +23,7 @@ struct Interface {
     NC_COLOR_WHITE_CELL, NC_COLOR_BLACK_CELL,
     NC_COLOR_CHECK,
     NC_COLOR_SELECTION, NC_COLOR_SELECTED,
-    NC_COLOR_CAN_ATTACK,
+    NC_COLOR_CAN_ATTACK, NC_COLOR_ENPASSANT
   } ncurses_color_palette;
 
   void run() {
@@ -37,6 +37,7 @@ struct Interface {
     init_pair(NC_COLOR_SELECTION,   COLOR_WHITE, COLOR_CYAN  );
     init_pair(NC_COLOR_SELECTED,    COLOR_WHITE, COLOR_BLUE  );
     init_pair(NC_COLOR_CAN_ATTACK,  COLOR_WHITE, COLOR_YELLOW);
+    init_pair(NC_COLOR_ENPASSANT,   COLOR_WHITE, COLOR_GREEN);
 
     cbreak();
     noecho(); // do not show typed characters
@@ -69,8 +70,8 @@ struct Interface {
     } else if(x==cursor_x&&y==cursor_y) {
       attron(COLOR_PAIR(NC_COLOR_SELECTION));
       return;
-    } else if(board.enpassants_ & board::_pos(A+x,1+y)) {
-      attron(COLOR_PAIR(NC_COLOR_CAN_ATTACK));
+    } else if(board.enpassant_ == board::_pos(A+x,1+y)) {
+      attron(COLOR_PAIR(NC_COLOR_ENPASSANT));
       return;
     }
     if((cursor_x!=-1&&cursor_y!=-1) || (sel_x!=-1&&sel_y!=-1)) {
@@ -219,7 +220,7 @@ struct Interface {
     move(top + 2, LEFT);
     attron(A_BOLD);
     //set_statusbar_message
-    len = printw("[ %s ]", activePlayer().c_str());
+    len = printw("[ %s %hhu ]", activePlayer().c_str(), event::compress_castlings(board.castlings_));
     nc_reset_color();
     for(int i = 0; i < 20 - len; ++i)
       addch(' ');
@@ -258,7 +259,7 @@ struct Interface {
         } else cursor_x=-1,cursor_y=-1,sel_y=-1;
       break;
       case 10:
-        if(sel_x==-1&&sel_y==-1)sel_x=cursor_x,sel_y=cursor_y;
+        if(sel_x==-1||sel_y==-1)sel_x=cursor_x,sel_y=cursor_y;
         else {
           pos_t pos_from = board::_pos(A+sel_x, 1+sel_y);
           pos_t pos_to = board::_pos(A+cursor_x, 1+cursor_y);

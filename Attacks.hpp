@@ -5,6 +5,7 @@
 
 #include <Bitboard.hpp>
 #include <Constants.hpp>
+#include <Event.hpp>
 
 
 template <PIECE P, COLOR CC> struct Attacks;
@@ -41,7 +42,7 @@ template <PIECE P, COLOR CC> struct MultixRayAttacks {
 template <PIECE P, COLOR CC> struct Moves {
   // TODO never the case when piece is pinned
   static constexpr piece_bitboard_t get_moves(piece_bitboard_t mask, piece_bitboard_t friends, piece_bitboard_t foes) {
-    // rooks, bishops and queens which are not pinned:
+    // knights, rooks, bishops and queens which are not pinned:
     return Attacks<P,CC>::get_attacks(mask, friends, foes) & ~friends;
   }
 };
@@ -104,9 +105,9 @@ template <> struct MultiAttacks<PAWN, BLACK> {
 };
 
 template <COLOR CC> struct Moves<PAWN, CC> {
-  static constexpr piece_bitboard_t get_moves(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes, piece_bitboard_t enpassants) {
-    // TODO passing pawn
-    const piece_bitboard_t attacks = Attacks<PAWN, CC>::get_attacks(i, friends, foes) & (foes|enpassants);
+  static constexpr piece_bitboard_t get_moves(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes, pos_t enpassant) {
+    const piece_bitboard_t enpassant_mask = (enpassant == event::enpassantnotrace) ? 0x00 : 1ULL << enpassant;
+    const piece_bitboard_t attacks = Attacks<PAWN, CC>::get_attacks(i, friends, foes) & (foes|enpassant_mask);
     piece_bitboard_t moves = Moves<PAWN, CC>::get_basic_move(i) & ~(friends | foes);
     if(bitmask::count_bits(moves) != 1)return attacks|moves;
     int pos_to=bitmask::log2_of_exp2(moves), pos_from=i;
@@ -344,14 +345,15 @@ template <COLOR CC> struct Moves<KING, CC> {
       constexpr piece_bitboard_t castleright = 0x04ULL << shift;
       constexpr piece_bitboard_t castlerightcheck = 0x08ULL << shift;
       constexpr piece_bitboard_t castlerightcheckocc = (0x0EULL) << shift;
-      if((castlings & castleleft)
-          && !(attack_mask & castleleftcheck)
-          && !(occupied & castleleftcheckocc))
-        castlemoves|=castleleft;
-      if((castlings & castleright)
-          && !(attack_mask & castlerightcheck)
-          && !(occupied & castlerightcheckocc))
-        castlemoves|=castleright;
+//      if((castlings & castleleft)
+//          && !(attack_mask & castleleftcheck)
+//          && !(occupied & castleleftcheckocc))
+//        castlemoves|=castleleft;
+//      if((castlings & castleright)
+//          && !(attack_mask & castlerightcheck)
+//          && !(occupied & castlerightcheckocc))
+//        castlemoves|=castleright;
+      castlemoves = castlings;
     }
     return (Attacks<KING, CC>::get_basic(i) & ~friends & ~attack_mask) | castlemoves;
   }
