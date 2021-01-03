@@ -12,7 +12,7 @@
 class Board {
 private:
   Board &self = *this;
-  std::array <Piece *, board::SIZE> board_;
+  std::array <pos_t, board::SIZE> board_;
   COLOR activePlayer_;
   std::vector<event_t> history;
 public:
@@ -63,19 +63,19 @@ public:
   }
 
   inline Piece &operator[](pos_t i) {
-    return *board_[i];
+    return pieces[board_[i]];
   }
 
   inline Piece &at_pos(pos_t i, pos_t j) {
-    return *board_[board::_pos(i,j)];
+    return pieces[board_[board::_pos(i,j)]];
   }
 
   inline const Piece &operator[](pos_t i) const {
-    return *board_[i];
+    return pieces[board_[i]];
   }
 
   inline const Piece &at_pos(pos_t i, pos_t j) const {
-    return *board_[board::_pos(i,j)];
+    return pieces[board_[board::_pos(i,j)]];
   }
 
   const Piece &get_piece(PIECE P = EMPTY, COLOR C = NEUTRAL) const {
@@ -107,7 +107,7 @@ public:
 
   void set_pos(pos_t i, Piece &p) {
     p.set_pos(i);
-    self.board_[i] = &p;
+    self.board_[i] = p.piece_index;
   }
 
   Piece &put_pos(pos_t i, Piece &p) {
