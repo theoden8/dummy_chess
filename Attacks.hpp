@@ -345,14 +345,14 @@ template <COLOR CC> struct Moves<KING, CC> {
       constexpr piece_bitboard_t castleright = 0x04ULL << shift;
       constexpr piece_bitboard_t castlerightcheck = 0x08ULL << shift;
       constexpr piece_bitboard_t castlerightcheckocc = (0x0EULL) << shift;
-//      if((castlings & castleleft)
-//          && !(attack_mask & castleleftcheck)
-//          && !(occupied & castleleftcheckocc))
-//        castlemoves|=castleleft;
-//      if((castlings & castleright)
-//          && !(attack_mask & castlerightcheck)
-//          && !(occupied & castlerightcheckocc))
-//        castlemoves|=castleright;
+      if((castlings & castleleft)
+          && !(attack_mask & castleleftcheck)
+          && !(occupied & castleleftcheckocc))
+        castlemoves|=castleleft;
+      if((castlings & castleright)
+          && !(attack_mask & castlerightcheck)
+          && !(occupied & castlerightcheckocc))
+        castlemoves|=castleright;
       castlemoves = castlings;
     }
     return (Attacks<KING, CC>::get_basic(i) & ~friends & ~attack_mask) | castlemoves;
