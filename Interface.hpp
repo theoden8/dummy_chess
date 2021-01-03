@@ -4,10 +4,12 @@
 #include <ncurses.h>
 
 #include <Board.hpp>
+#include <PGN.hpp>
 
 
 struct Interface {
   Board &board;
+  pgn::PGN pgn;
   bool shouldClose = false;
   int CELL_MW = 2,
       CELL_MH = 1,
@@ -15,7 +17,7 @@ struct Interface {
       CELL_PMH = 0;
 
   Interface(Board &board):
-    board(board)
+    board(board), pgn(board)
   {}
 
   typedef enum {
@@ -221,6 +223,15 @@ struct Interface {
       addch(' ');
   }
 
+  void draw_pgn(const int LEFT, const int TOP, int &top) {
+    move(top, LEFT);
+    for(size_t i = 0; i < pgn.size(); ++i) {
+      move(top, (i & 1) ? LEFT + 10 : LEFT);
+      addstr(pgn.ply[i].c_str());
+      if(i & 1)++top;
+    }
+  }
+
   void display() {
     bkgd(COLOR_PAIR(NC_COLOR_NORMAL)); // changes the background
     int cols, rows;
@@ -236,6 +247,8 @@ struct Interface {
     int right;
     draw_board(TOP, LEFT, top, right);
     draw_statusbar(LEFT, top);
+    top = TOP;
+    draw_pgn(right + 5, TOP, top);
     refresh();
   }
 
@@ -277,7 +290,9 @@ struct Interface {
           pos_t pos_to = board::_pos(A+cursor_x, 1+cursor_y);
           auto moves = board.get_moves_from(pos_from);
           if((1ULL << pos_to) & moves && board[pos_from].color == board.activePlayer()) {
-            board.make_move(pos_from, pos_to);
+            event_t ev = board.get_move_event(pos_from, pos_to);
+            pgn.write_event(ev);
+            board.act_event(ev);
             sel_x=-1,sel_y=-1;
           } else {
             sel_x=cursor_x,sel_y=cursor_y;
@@ -286,6 +301,7 @@ struct Interface {
       break;
       case KEY_BACKSPACE:
         board.retract_move();
+        pgn.retract_event();
       break;
     }
   }

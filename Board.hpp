@@ -322,7 +322,7 @@ public:
     history.pop_back();
   }
 
-  void make_move(pos_t i, pos_t j, PIECE as=EMPTY) {
+  event_t get_move_event(pos_t i, pos_t j, PIECE as=EMPTY) {
     event_t ev = 0x00;
     if(is_castling_move(i, j)) {
       ev = ev_castle(i, j);
@@ -331,7 +331,11 @@ public:
     } else {
       ev = ev_basic(i, j);
     }
-    act_event(ev);
+    return ev;
+  }
+
+  void make_move(pos_t i, pos_t j, PIECE as=EMPTY) {
+    act_event(get_move_event(i, j, as));
   }
 
   void retract_move() {

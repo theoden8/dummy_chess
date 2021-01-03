@@ -159,8 +159,7 @@ struct Piece {
       case QUEEN: c = 'q'; break;
       case KING: c = 'k'; break;
     }
-    if(color == WHITE)
-      c = toupper(c);
+    if(color == WHITE)c = toupper(c);
     return c;
   }
 };
