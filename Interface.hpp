@@ -220,7 +220,11 @@ struct Interface {
     move(top + 2, LEFT);
     attron(A_BOLD);
     //set_statusbar_message
-    len = printw("[ %s %hhu ]", activePlayer().c_str(), event::compress_castlings(board.castlings_));
+    event_t lastevent = board.last_event();
+    pos_t marker = event::extract_byte(lastevent);
+    pos_t from = event::extract_byte(lastevent);
+    pos_t to = event::extract_byte(lastevent);
+    len = printw("[ %s %hhu, (%hhu) %hhu->%hhu ]", activePlayer().c_str(), event::compress_castlings(board.castlings_), marker, from, to);
     nc_reset_color();
     for(int i = 0; i < 20 - len; ++i)
       addch(' ');
@@ -271,6 +275,9 @@ struct Interface {
             sel_x=cursor_x,sel_y=cursor_y;
           }
         }
+      break;
+      case KEY_BACKSPACE:
+        board.retract_move();
       break;
     }
   }

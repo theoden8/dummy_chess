@@ -144,7 +144,7 @@ public:
       if(self[i].color==WHITE)enpassant_trace=Moves<PAWN,WHITE>::get_enpassant_trace(i,j);
       if(self[i].color==BLACK)enpassant_trace=Moves<PAWN,BLACK>::get_enpassant_trace(i,j);
     }
-    return event::basic(i, j, killwhat, castlings_, enpassant_trace);
+    return event::basic(i, j, killwhat, castlings_, enpassant_, enpassant_trace);
   }
 
   event_t ev_castle(pos_t i, pos_t j) const {
@@ -153,7 +153,7 @@ public:
     if(self[i].color == BLACK)rookmove = Moves<KING,BLACK>::castle_rook_move(i,j);
     pos_t r_i = bitmask::first(rookmove),
           r_j = bitmask::second(rookmove);
-    return event::castling(i, j, r_i, r_j, castlings_);
+    return event::castling(i, j, r_i, r_j, castlings_, enpassant_);
   }
 
   event_t ev_take_enpassant(pos_t i, pos_t j) const {
@@ -185,16 +185,19 @@ public:
   }
 
   void act_event(event_t ev) {
-    pos_t marker = event::extract_byte(ev);
     history.push_back(ev);
+    pos_t marker = event::extract_byte(ev);
+    assert(event::decompress_castlings(event::compress_castlings(castlings_)) == castlings_);
     switch(marker) {
       case event::BASIC_MARKER:
         {
           pos_t i = event::extract_byte(ev);
           pos_t j = event::extract_byte(ev);
-          pos_t killwhat = event::extract_byte(ev);
+          auto killwhat = event::extract_byte(ev);
           auto castlings_ = event::extract_castlings(ev);
-          enpassant_ = event::extract_byte(ev);
+          auto enpassant_old = event::extract_byte(ev);
+          auto enpassant_trace = event::extract_byte(ev);
+          enpassant_ = enpassant_trace;
           update_castlings(i);
           move_pos(i, j);
         }
@@ -232,6 +235,7 @@ public:
           pos_t killwhat = event::extract_byte(ev);
           auto castlings_ = event::extract_castlings(ev);
           auto enpassant_ = event::extract_byte(ev);
+          auto enpassant_trace = event::extract_byte(ev);
           pos_t becomewhat = event::extract_byte(ev);
           put_pos(i, self.get_piece(EMPTY));
           put_pos(j, self.pieces[becomewhat]);
@@ -242,11 +246,15 @@ public:
     activePlayer_ = enemy_of(activePlayer());
   }
 
+  event_t last_event() const {
+    if(history.empty())return 0x00;
+    return history.back();
+  }
+
   void unact_event() {
     if(history.empty())return;
     event_t ev = history.back();
     pos_t marker = event::extract_byte(ev);
-    assert(event::decompress_castlings(event::compress_castlings(castlings_)) == castlings_);
     switch(marker) {
       case event::BASIC_MARKER:
         {
@@ -254,11 +262,12 @@ public:
           pos_t j = event::extract_byte(ev);
           pos_t killwhat = event::extract_byte(ev);
           castlings_ = event::extract_castlings(ev);
-          enpassant_ = event::extract_byte(ev);
           move_pos(j, i);
           if(killwhat != event::killnothing) {
             put_pos(j, self.pieces[killwhat]);
           }
+          enpassant_ = event::extract_byte(ev);
+          auto enpassant_trace = event::extract_byte(ev);
         }
       break;
       case event::CASTLING_MARKER:
@@ -292,7 +301,8 @@ public:
           pos_t killwhat = event::extract_byte(ev);
           castlings_ = event::extract_castlings(ev);
           enpassant_ = event::extract_byte(ev);
-          pos_t becomewhat = event::extract_byte(ev);
+          auto enpassant_trace = event::extract_byte(ev);
+          auto becomewhat = event::extract_byte(ev);
 
           COLOR c = self[j].color;
           if(killwhat != event::killnothing) {
@@ -305,6 +315,7 @@ public:
       break;
     }
     activePlayer_ = enemy_of(activePlayer());
+    history.pop_back();
   }
 
   void make_move(pos_t i, pos_t j, PIECE as=EMPTY) {
@@ -312,11 +323,15 @@ public:
     if(is_castling_move(i, j)) {
       ev = ev_castle(i, j);
     } else if(self[i].value == PAWN && j == enpassant_) {
-      ev = event::enpassant(i, j, enpassant_layman(), castlings_);
+      ev = ev_take_enpassant(i, j);
     } else {
       ev = ev_basic(i, j);
     }
     act_event(ev);
+  }
+
+  void retract_move() {
+    unact_event();
   }
 
   inline piece_bitboard_t get_piece_positions(COLOR c, bool enemy=false) const {
