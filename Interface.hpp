@@ -225,10 +225,17 @@ struct Interface {
 
   void draw_pgn(const int LEFT, const int TOP, int &top) {
     move(top, LEFT);
+    int turn = 1;
     for(size_t i = 0; i < pgn.size(); ++i) {
-      move(top, (i & 1) ? LEFT + 10 : LEFT);
+      if(!(i & 1)) {
+        move(top, LEFT);
+        printw("%d.", turn);
+      }
+      move(top, (i & 1) ? LEFT + 15 : LEFT + 5);
       addstr(pgn.ply[i].c_str());
-      if(i & 1)++top;
+      if(i & 1) {
+        ++top, ++turn;
+      }
     }
   }
 
