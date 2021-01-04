@@ -12,8 +12,14 @@ template <PIECE P, COLOR CC> struct Attacks;
 
 template <PIECE P, COLOR CC> struct xRayAttacks {
   static constexpr piece_bitboard_t get_xray_attacks(pos_t pos, piece_bitboard_t friends, piece_bitboard_t foes) {
-    piece_bitboard_t blockers = Attacks<P, CC>::get_attacks(pos, friends, foes) & foes;
+    const piece_bitboard_t blockers = Attacks<P, CC>::get_attacks(pos, friends, foes) & foes;
     return Attacks<P, CC>::get_attacks(pos, friends, foes ^ blockers);
+  }
+
+  static inline piece_bitboard_t get_attacking_xray(pos_t i, pos_t j, piece_bitboard_t friends, piece_bitboard_t foes) {
+    const piece_bitboard_t blockers = Attacks<P, CC>::get_attacks(i, friends, foes) & foes;
+    const piece_bitboard_t occupied = friends | (foes ^ blockers);
+    return Attacks<P, CC>::get_attacking_ray(i, j, occupied);
   }
 };
 
@@ -73,6 +79,8 @@ template <COLOR CC> struct Attacks<PAWN, CC> {
     if(i <= offset)return mask >> (offset - i);
     return (mask << (i - offset)) & forwmask;
   }
+
+  static inline piece_bitboard_t get_attacking_ray(pos_t i, pos_t j, piece_bitboard_t occupied){return 0x00;}
 };
 
 // attack mask from multiple pieces of the kind at once
@@ -171,6 +179,8 @@ template <COLOR CC> struct Attacks <KNIGHT, CC> {
     knightattacks[i] = mask;
     return mask;
   }
+
+  static inline piece_bitboard_t get_attacking_ray(pos_t i, pos_t j, piece_bitboard_t occupied){return 0x00;}
 };
 
 template <COLOR CC> struct MultiAttacks<KNIGHT, CC> {
@@ -194,27 +204,40 @@ template <COLOR CC> struct Attacks<BISHOP, CC> {
   static inline constexpr piece_bitboard_t get_attacks(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes) {
     // enemy king's line of attack is currently handled on the board level
     const piece_bitboard_t occupied = friends | foes;
-    const piece_bitboard_t diags = Attacks<BISHOP, CC>::get_basic(i);
-    constexpr piece_bitboard_t quadrant = ~UINT64_C(0);
+    return get_topleft_ray(i, occupied) | get_topright_ray(i, occupied)
+           | get_bottomleft_ray(i, occupied) | get_bottomright_ray(i, occupied);
+  }
+
+  static inline piece_bitboard_t get_topleft_ray(int i, piece_bitboard_t occupied) {
     const pos_t x = board::_x(i), y = board::_y(i);
-    const piece_bitboard_t left_quadrant = get_left_quadrant(x);
-    const piece_bitboard_t right_quadrant = quadrant & ~left_quadrant & ~(bitmask::vline << x);
-    const piece_bitboard_t bottom_quadrant = get_bottom_quadrant(y);
-    const piece_bitboard_t top_quadrant = quadrant & ~bottom_quadrant & ~(bitmask::hline << y*board::LEN);
-
-    piece_bitboard_t top_left = diags & top_quadrant & left_quadrant;
+    const piece_bitboard_t diags = Attacks<BISHOP, CC>::get_basic(i);
+    piece_bitboard_t top_left = diags & get_top_quadrant(y) & get_left_quadrant(x);
     top_left &= bitmask::ones_before_eq_bit(bitmask::lowest_bit(top_left & occupied));
+    return top_left;
+  }
 
-    piece_bitboard_t top_right = diags & top_quadrant & right_quadrant;
+  static inline piece_bitboard_t get_topright_ray(int i, piece_bitboard_t occupied) {
+    const pos_t x = board::_x(i), y = board::_y(i);
+    const piece_bitboard_t diags = Attacks<BISHOP, CC>::get_basic(i);
+    piece_bitboard_t top_right = diags & get_top_quadrant(y) & get_right_quadrant(x);
     top_right &= bitmask::ones_before_eq_bit(bitmask::lowest_bit(top_right & occupied));
+    return top_right;
+  }
 
-    piece_bitboard_t bottom_left = diags & bottom_quadrant & left_quadrant;
+  static inline piece_bitboard_t get_bottomleft_ray(int i, piece_bitboard_t occupied) {
+    const pos_t x = board::_x(i), y = board::_y(i);
+    const piece_bitboard_t diags = Attacks<BISHOP, CC>::get_basic(i);
+    piece_bitboard_t bottom_left = diags & get_bottom_quadrant(y) & get_left_quadrant(x);
     bottom_left &= bitmask::ones_after_eq_bit(bitmask::highest_bit(bottom_left & occupied));
+    return bottom_left;
+  }
 
-    piece_bitboard_t bottom_right = diags & bottom_quadrant & right_quadrant;
+  static inline piece_bitboard_t get_bottomright_ray(int i, piece_bitboard_t occupied) {
+    const pos_t x = board::_x(i), y = board::_y(i);
+    const piece_bitboard_t diags = Attacks<BISHOP, CC>::get_basic(i);
+    piece_bitboard_t bottom_right = diags & get_bottom_quadrant(y) & get_right_quadrant(x);
     bottom_right &= bitmask::ones_after_eq_bit(bitmask::highest_bit(bottom_right & occupied));
-
-    return top_left|top_right|bottom_left|bottom_right;
+    return bottom_right;
   }
 
   static inline piece_bitboard_t get_left_quadrant(int x) {
@@ -226,6 +249,10 @@ template <COLOR CC> struct Attacks<BISHOP, CC> {
     return left_quadrant;
   }
 
+  static inline piece_bitboard_t get_right_quadrant(int x) {
+    return ~0ULL & ~get_left_quadrant(x) & ~(bitmask::vline << x);
+  }
+
   static inline piece_bitboard_t get_bottom_quadrant(int y) {
     if(y == 0)return 0x00;
     if(bottomquadrants[y-1])return bottomquadrants[y-1];
@@ -234,6 +261,29 @@ template <COLOR CC> struct Attacks<BISHOP, CC> {
     bottomquadrants[y-1] = bottom_quadrant;
     return bottom_quadrant;
   }
+
+  static inline piece_bitboard_t get_top_quadrant(int y) {
+    return ~0ULL & ~get_bottom_quadrant(y) & ~(bitmask::hline << y*board::LEN);
+  }
+
+
+  static inline piece_bitboard_t get_attacking_ray(pos_t i, pos_t j, piece_bitboard_t occupied) {
+    piece_bitboard_t attacked_bit = 1ULL << j;
+    pos_t x_i=board::_x(i), y_i=board::_y(i),
+          x_j=board::_x(j), y_j=board::_y(j);
+    piece_bitboard_t r = 0x00;
+    if(x_j < x_i && y_i < y_j) {
+      r = get_topleft_ray(i, occupied);
+    } else if(x_i < x_j && y_i < y_j) {
+      r = get_topright_ray(i, occupied);
+    } else if(x_j < x_i && y_j < y_i) {
+      r = get_bottomleft_ray(i, occupied);
+    } else if(x_i < x_j && y_j < y_i) {
+      r = get_bottomright_ray(i, occupied);
+    }
+    return (r & attacked_bit) ? r : 0x00;
+  }
+
 
   static inline constexpr piece_bitboard_t get_basic(pos_t i) {
     if(bishopattacks[i])return bishopattacks[i];
@@ -256,28 +306,68 @@ template <COLOR CC> struct Attacks<ROOK, CC> {
   static inline constexpr piece_bitboard_t get_attacks(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes) {
     // enemy king's line of attack is currently handled on the board level
     piece_bitboard_t occupied = friends | foes;
-    pos_t y = board::_y(i), x = board::_x(i);
-    pos_t axlen = board::LEN;
+    return get_left_ray(i,occupied)|get_right_ray(i,occupied)|get_top_ray(i,occupied)|get_bottom_ray(i,occupied);
+  }
 
-    // -> -> -> -> -> -> -> ->
-    // a1 b1 c1 d1 e1 f1 g1 h1
-    // ..
-    // a8 b8 c8 d8 e8 f8 g8 h8
-    // bits shifted the "other way"
-
+  // -> -> -> -> -> -> -> ->
+  // a1 b1 c1 d1 e1 f1 g1 h1
+  // ..
+  // a8 b8 c8 d8 e8 f8 g8 h8
+  // bits shifted the "other way"
+  static inline piece_bitboard_t get_left_ray(pos_t i, piece_bitboard_t occupied) {
+    const pos_t y = board::_y(i), x = board::_x(i);
+    constexpr pos_t axlen = board::LEN;
     piece_bitboard_t left = (bitmask::hline >> (8 - x));
-    piece_bitboard_t right = ~(1ULL << x) & (~left & bitmask::hline);
-    left <<= axlen*y, right <<= axlen*y;
-    right &= bitmask::ones_before_eq_bit(bitmask::lowest_bit(right & occupied));
+    left <<= axlen*y;
     left &= bitmask::ones_after_eq_bit(bitmask::highest_bit(left & occupied));
+    return left;
+  }
 
+  static inline piece_bitboard_t get_right_ray(pos_t i, piece_bitboard_t occupied) {
+    const pos_t y = board::_y(i), x = board::_x(i);
+    constexpr pos_t axlen = board::LEN;
+    const piece_bitboard_t left = (bitmask::hline >> (8 - x));
+    piece_bitboard_t right = ~(1ULL << x) & (~left & bitmask::hline);
+    right <<= axlen*y;
+    right &= bitmask::ones_before_eq_bit(bitmask::lowest_bit(right & occupied));
+    return right;
+  }
+
+  static inline piece_bitboard_t get_top_ray(pos_t i, piece_bitboard_t occupied) {
+    const pos_t y = board::_y(i), x = board::_x(i);
+    constexpr pos_t axlen = board::LEN;
     const piece_bitboard_t vertical = bitmask::vline << x;
     piece_bitboard_t up = ~(1ULL << i) & (vertical << y*axlen);
-    piece_bitboard_t down = ~(1ULL << i) & (~up & vertical);
     up &= bitmask::ones_before_eq_bit(bitmask::lowest_bit(up & occupied));
-    down &= bitmask::ones_after_eq_bit(bitmask::highest_bit(down & occupied));
+    return up;
+  }
 
-    return left|right|up|down;
+  static inline piece_bitboard_t get_bottom_ray(pos_t i, piece_bitboard_t occupied) {
+    const pos_t y = board::_y(i), x = board::_x(i);
+    constexpr pos_t axlen = board::LEN;
+    const piece_bitboard_t vertical = bitmask::vline << x;
+    const piece_bitboard_t up = ~(1ULL << i) & (vertical << y*axlen);
+    piece_bitboard_t down = ~(1ULL << i) & (~up & vertical);
+    down &= bitmask::ones_after_eq_bit(bitmask::highest_bit(down & occupied));
+    return down;
+  }
+
+  static inline piece_bitboard_t get_attacking_ray(pos_t i, pos_t j, piece_bitboard_t occupied) {
+    piece_bitboard_t attacked_bit = 1ULL << j;
+    pos_t x_i=board::_x(i), y_i=board::_y(i),
+          x_j=board::_x(j), y_j=board::_y(j);
+    if(x_i != x_j && y_i != y_j)return 0x00;
+    piece_bitboard_t r = 0x00;;
+    if(x_j < x_i) {
+      r = get_left_ray(i, occupied);
+    } else if(x_i < x_j) {
+      r = get_right_ray(i, occupied);
+    } else if(y_i < y_j) {
+      r = get_top_ray(i, occupied);
+    } else if(y_j < y_i) {
+      r = get_bottom_ray(i, occupied);
+    }
+    return (r & attacked_bit) ? r : 0x00;
   }
 
   static inline constexpr piece_bitboard_t get_basic(pos_t i) {
@@ -292,6 +382,14 @@ template <COLOR CC> struct Attacks<QUEEN, CC> {
   static inline constexpr piece_bitboard_t get_attacks(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes) {
     return Attacks<BISHOP, CC>::get_attacks(i, friends, foes)
          | Attacks<ROOK, CC>::get_attacks(i, friends, foes);
+  }
+
+  static inline piece_bitboard_t get_attacking_ray(pos_t i, pos_t j, piece_bitboard_t occupied) {
+    piece_bitboard_t diag = Attacks<BISHOP, CC>::get_attacking_ray(i, j, occupied);
+    if(diag)return diag;
+    piece_bitboard_t axes = Attacks<ROOK, CC>::get_attacking_ray(i, j, occupied);
+    if(axes)return axes;
+    return 0x00ULL;
   }
 
   static inline constexpr piece_bitboard_t get_basic(pos_t i) {
@@ -325,6 +423,8 @@ template <COLOR CC> struct Attacks<KING, CC> {
     if(i <= offset)return mask >> (offset - i);
     return mask << (i - offset);
   }
+
+  static inline piece_bitboard_t get_attacking_ray(pos_t i, pos_t j, piece_bitboard_t occupied){return 0x00;}
 };
 
 // king moves
@@ -344,7 +444,7 @@ template <COLOR CC> struct Moves<KING, CC> {
       constexpr piece_bitboard_t castleleftcheckocc = 0x60ULL << shift;
       constexpr piece_bitboard_t castleright = 0x04ULL << shift;
       constexpr piece_bitboard_t castlerightcheck = 0x08ULL << shift;
-      constexpr piece_bitboard_t castlerightcheckocc = (0x0EULL) << shift;
+      constexpr piece_bitboard_t castlerightcheckocc = 0x0EULL << shift;
       if((castlings & castleleft)
           && !(attack_mask & castleleftcheck)
           && !(occupied & castleleftcheckocc))
@@ -353,7 +453,6 @@ template <COLOR CC> struct Moves<KING, CC> {
           && !(attack_mask & castlerightcheck)
           && !(occupied & castlerightcheckocc))
         castlemoves|=castleright;
-      castlemoves = castlings;
     }
     return (Attacks<KING, CC>::get_basic(i) & ~friends & ~attack_mask) | castlemoves;
   }

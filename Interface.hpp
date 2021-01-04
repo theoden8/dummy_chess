@@ -25,7 +25,8 @@ struct Interface {
     NC_COLOR_WHITE_CELL, NC_COLOR_BLACK_CELL,
     NC_COLOR_CHECK,
     NC_COLOR_SELECTION, NC_COLOR_SELECTED,
-    NC_COLOR_CAN_ATTACK, NC_COLOR_ENPASSANT
+    NC_COLOR_ENPASSANT, NC_COLOR_PINS,
+    NC_COLOR_CAN_ATTACK,
   } ncurses_color_palette;
 
   void run() {
@@ -38,8 +39,9 @@ struct Interface {
     init_pair(NC_COLOR_CHECK,       COLOR_RED,   COLOR_BLACK );
     init_pair(NC_COLOR_SELECTION,   COLOR_WHITE, COLOR_CYAN  );
     init_pair(NC_COLOR_SELECTED,    COLOR_WHITE, COLOR_BLUE  );
-    init_pair(NC_COLOR_CAN_ATTACK,  COLOR_WHITE, COLOR_YELLOW);
     init_pair(NC_COLOR_ENPASSANT,   COLOR_WHITE, COLOR_GREEN);
+    init_pair(NC_COLOR_PINS,        COLOR_WHITE, COLOR_RED);
+    init_pair(NC_COLOR_CAN_ATTACK,  COLOR_WHITE, COLOR_YELLOW);
 
     cbreak();
     noecho(); // do not show typed characters
@@ -66,6 +68,7 @@ struct Interface {
   }
 
   void nc_color_condition(COLOR c, int x, int y) {
+    const piece_bitboard_t pins = board.get_pins();
     if(x==sel_x&&y==sel_y){
       attron(COLOR_PAIR(NC_COLOR_SELECTED));
       return;
@@ -92,6 +95,11 @@ struct Interface {
         attron(COLOR_PAIR(NC_COLOR_CAN_ATTACK));
         return;
       }
+    }
+    if(pins & (1ULL << board::_pos(A+x,1+y))) {
+    //if(board.state_checkline & (1ULL < board::_pos(A+x,1+y))) {
+      attron(COLOR_PAIR(NC_COLOR_PINS));
+      return;
     }
     nc_set_cell_color(c);
   }
@@ -217,7 +225,9 @@ struct Interface {
     pos_t marker = event::extract_byte(lastevent);
     pos_t from = event::extract_byte(lastevent);
     pos_t to = event::extract_byte(lastevent);
-    int len = printw("[ %s %hhu, (%hhu) %hhu->%hhu ]", activePlayer().c_str(), event::compress_castlings(board.castlings_), marker, from, to);
+    int len = printw("[ %s ]", activePlayer().c_str());
+    //int len = printw("[ %s %hhu, (%hhu) %hhu->%hhu ]", activePlayer().c_str(), event::compress_castlings(board.castlings_), marker, from, to);
+    //int len = printw("[ %s %llx ]", activePlayer().c_str(), board.state_checkline);
     nc_reset_color();
     for(int i = 0; i < 20 - len; ++i)
       addch(' ');
@@ -232,7 +242,11 @@ struct Interface {
         printw("%d.", turn);
       }
       move(top, (i & 1) ? LEFT + 15 : LEFT + 5);
-      addstr(pgn.ply[i].c_str());
+      nc_set_cell_color((i & 1) ? BLACK : WHITE);
+      std::string s = " "s + pgn.ply[i] + " "s;
+      while(s.length()<7)s+=' ';
+      addstr(s.c_str());
+      nc_reset_color();
       if(i & 1) {
         ++top, ++turn;
       }

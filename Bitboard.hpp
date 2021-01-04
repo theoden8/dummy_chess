@@ -114,10 +114,20 @@ namespace bitmask {
   }
 
   template <typename T>
+  inline constexpr T ones_before_bit(T v) {
+    return ones_before_eq_bit(v >> 1);
+  }
+
+  template <typename T>
   inline constexpr T ones_after_eq_bit(T v) {
     if(!v)return UINT64_MAX;
     assert(bitmask::is_exp2(v));
     return ~(v - 1);
+  }
+
+  template <typename T>
+  inline constexpr T ones_after_bit(T v) {
+    return ones_after_eq_bit(v << 1);
   }
 
   // iterate set bits with a function F

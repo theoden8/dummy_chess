@@ -16,8 +16,9 @@ struct Piece {
   piece_bitboard_t mask;
 
   constexpr Piece(PIECE p, COLOR c, piece_bitboard_t loc=0x00):
-    value(p), color(c), mask(loc),
-    piece_index((p==EMPTY) ? int(NO_PIECES)*int(NO_COLORS) : int(p)*(int)NO_COLORS+c)
+    value(p), color(c),
+    piece_index((p==EMPTY) ? int(NO_PIECES)*int(NO_COLORS) : int(p)*(int)NO_COLORS+c),
+    mask(loc)
   {}
 
   constexpr bool is_set(pos_t i) const {
