@@ -13,7 +13,7 @@ typedef uint64_t piece_bitboard_t;
 // player color, neutral when neither/both
 typedef enum { WHITE, BLACK, NEUTRAL, NO_COLORS=NEUTRAL } COLOR;
 
-COLOR enemy_of(COLOR c) {
+inline constexpr COLOR enemy_of(COLOR c) {
   if(c == NEUTRAL)return NEUTRAL;
   return (c == WHITE) ? BLACK : WHITE;
 }
