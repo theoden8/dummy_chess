@@ -136,11 +136,11 @@ struct Piece {
     return 0x00ULL;
   }
 
-  void foreach(std::function<void(pos_t)>&&func) {
+  inline void foreach(std::function<void(pos_t)>&&func) {
     bitmask::foreach(mask, func);
   }
 
-  void foreach(std::function<void(pos_t)>&&func) const {
+  inline void foreach(std::function<void(pos_t)>&&func) const {
     bitmask::foreach(mask, func);
   }
 

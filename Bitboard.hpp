@@ -132,7 +132,7 @@ namespace bitmask {
 
   // iterate set bits with a function F
   template <typename F>
-  constexpr void foreach(uint64_t mask, F &&func) {
+  inline constexpr void foreach(uint64_t mask, F &&func) {
     if(!mask)return;
     if(is_exp2(mask)) {
       func(bitmask::log2_of_exp2(mask));
