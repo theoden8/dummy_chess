@@ -93,6 +93,21 @@ struct PGN {
     ply.push_back(p);
   }
 
+  void handle_event(event_t ev) {
+    write_event(ev);
+    board.act_event(ev);
+    const COLOR c = board.activePlayer();
+    bool checkmate = true;
+    for(const auto &m : board.state_moves)if(m){checkmate=false;break;}
+    const pos_t no_checks = board.state_attacks_count[enemy_of(c)][board.get_king_pos(c)];
+    if(checkmate) {
+      ply.back() += '#';
+    } else if(no_checks > 0) {
+      ply.back()+='+';
+      if(no_checks>1)ply.back()+='+';
+    }
+  }
+
   void retract_event() {
     if(cur_ply != 0) {
       --cur_ply;

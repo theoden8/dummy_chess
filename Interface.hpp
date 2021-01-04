@@ -96,8 +96,8 @@ struct Interface {
         return;
       }
     }
-    if(pins & (1ULL << board::_pos(A+x,1+y))) {
-    //if(board.state_checkline & (1ULL < board::_pos(A+x,1+y))) {
+    //if(pins & (1ULL << board::_pos(A+x,1+y))) {
+    if(board.state_checkline & (1ULL << board::_pos(A+x,1+y))) {
       attron(COLOR_PAIR(NC_COLOR_PINS));
       return;
     }
@@ -225,9 +225,10 @@ struct Interface {
     pos_t marker = event::extract_byte(lastevent);
     pos_t from = event::extract_byte(lastevent);
     pos_t to = event::extract_byte(lastevent);
-    int len = printw("[ %s ]", activePlayer().c_str());
+    //int len = printw("[ %s ]", activePlayer().c_str());
     //int len = printw("[ %s %hhu, (%hhu) %hhu->%hhu ]", activePlayer().c_str(), event::compress_castlings(board.castlings_), marker, from, to);
     //int len = printw("[ %s %llx ]", activePlayer().c_str(), board.state_checkline);
+    int len = printw("[ %s %llx ]", activePlayer().c_str(), board.state_checkline);
     nc_reset_color();
     for(int i = 0; i < 20 - len; ++i)
       addch(' ');
@@ -244,7 +245,7 @@ struct Interface {
       move(top, (i & 1) ? LEFT + 15 : LEFT + 5);
       nc_set_cell_color((i & 1) ? BLACK : WHITE);
       std::string s = " "s + pgn.ply[i] + " "s;
-      while(s.length()<7)s+=' ';
+      while(s.length()<9)s+=' ';
       addstr(s.c_str());
       nc_reset_color();
       if(i & 1) {
@@ -312,8 +313,7 @@ struct Interface {
           auto moves = board.get_moves_from(pos_from);
           if((1ULL << pos_to) & moves && board[pos_from].color == board.activePlayer()) {
             event_t ev = board.get_move_event(pos_from, pos_to);
-            pgn.write_event(ev);
-            board.act_event(ev);
+            pgn.handle_event(ev);
             sel_x=-1,sel_y=-1;
           } else {
             sel_x=cursor_x,sel_y=cursor_y;

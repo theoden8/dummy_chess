@@ -33,7 +33,7 @@ public:
     Piece(KING, BLACK),
     Piece(EMPTY, NEUTRAL)
   };
-  Board(const fen::FEN f=fen::starting_pos):
+  Board(const fen::FEN f=fen::doublecheck_test_pos):
     activePlayer_(f.active_player),
     castlings_(event::decompress_castlings(f.castling_compressed)),
     enpassant_(f.enpassant)
@@ -392,27 +392,6 @@ public:
   inline piece_bitboard_t get_attacks_from(pos_t pos) const { return state_attacks[pos]; }
 
   template <typename F>
-  inline void iter_attacking_rays(pos_t j, F &&func, COLOR c=NEUTRAL) const {
-    if(c==NEUTRAL)return;
-    const piece_bitboard_t friends = get_piece_positions(enemy_of(c)),
-                           foes = get_piece_positions(c);
-    // apply func only to non-zero rays
-    #define APPLY_TO_RAY(PIECE, COLOR) \
-        piece_bitboard_t r = Attacks<PIECE,COLOR>::get_attacking_ray(i, j, friends | foes); \
-        if(r != 0x00ULL)func(i, r);
-    if(c!=WHITE) {
-      get_piece(BISHOP,WHITE).foreach([&](pos_t i)mutable->void{APPLY_TO_RAY(BISHOP,WHITE);}),
-      get_piece(ROOK,WHITE).foreach([&](pos_t i)mutable->void{APPLY_TO_RAY(ROOK,WHITE);}),
-      get_piece(QUEEN,WHITE).foreach([&](pos_t i)mutable->void{APPLY_TO_RAY(QUEEN,WHITE);});
-    } else {
-      get_piece(BISHOP,BLACK).foreach([&](pos_t i)mutable->void{APPLY_TO_RAY(BISHOP,BLACK);}),
-      get_piece(ROOK,BLACK).foreach([&](pos_t i)mutable->void{APPLY_TO_RAY(ROOK,BLACK);}),
-      get_piece(QUEEN,BLACK).foreach([&](pos_t i)mutable->void{APPLY_TO_RAY(QUEEN,BLACK);});
-    }
-    #undef APPLY_TO_RAY
-  }
-
-  template <typename F>
   inline void iter_attacking_xrays(pos_t j, F &&func, COLOR c=NEUTRAL) const {
     if(c==NEUTRAL)return;
     const piece_bitboard_t friends = get_piece_positions(enemy_of(c)),
@@ -504,13 +483,24 @@ public:
       state_checkline = 0x00;
       return;
     }
+    const pos_t kingpos = get_king_pos(c);
+    pos_t attacker = 0xFF;
+    for(pos_t i=0;i<board::SIZE;++i) {
+      if(self[i].color!=enemy_of(c))continue;
+      if(state_attacks[i] & (1ULL << kingpos)) {
+        attacker = i;
+      }
+    }
+    const PIECE p = self[attacker].value;
+    const piece_bitboard_t occupied = get_piece_positions(c) | get_piece_positions(enemy_of(c), true);
     piece_bitboard_t res = 0x00;
-    iter_attacking_rays(get_king_pos(c), [&](pos_t i, piece_bitboard_t r) mutable -> void {
-      if(r)assert(!res);
-      res = r;
-      res |= 1ULL << i;
-    }, c);
-    state_checkline = res;
+    if(p == BISHOP && enemy_of(c) == WHITE)res=Attacks<BISHOP,WHITE>::get_attacking_ray(kingpos,attacker,occupied);
+    if(p == ROOK   && enemy_of(c) == WHITE)res=Attacks<ROOK  ,WHITE>::get_attacking_ray(kingpos,attacker,occupied);
+    if(p == QUEEN  && enemy_of(c) == WHITE)res=Attacks<QUEEN ,WHITE>::get_attacking_ray(kingpos,attacker,occupied);
+    if(p == BISHOP && enemy_of(c) == BLACK)res=Attacks<BISHOP,BLACK>::get_attacking_ray(kingpos,attacker,occupied);
+    if(p == ROOK   && enemy_of(c) == BLACK)res=Attacks<ROOK  ,BLACK>::get_attacking_ray(kingpos,attacker,occupied);
+    if(p == QUEEN  && enemy_of(c) == BLACK)res=Attacks<QUEEN ,BLACK>::get_attacking_ray(kingpos,attacker,occupied);
+    state_checkline = res | (1ULL << attacker);
   }
 
   std::array <piece_bitboard_t, board::SIZE> state_moves = {UINT64_C(0x00)};
@@ -521,7 +511,7 @@ public:
           foes  = get_piece_positions(enemy_of(c), true),
           attack_mask = get_attack_mask(c),
           pins = state_pins[c];
-    const bool doublecheck = state_attacks_count[enemy_of(c)][c] > 1;
+    const bool doublecheck = state_attacks_count[enemy_of(c)][get_king_pos(c)] > 1;
     for(pos_t p = 0; p < NO_PIECES; ++p) {
       if(doublecheck && p != KING)continue;
       get_piece((PIECE)p,c).foreach([&](pos_t pos) mutable noexcept -> void {
