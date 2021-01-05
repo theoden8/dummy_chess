@@ -188,17 +188,39 @@ struct Interface {
     move(top++, LEFT);
   }
 
+  typedef enum { ROW_SEP_TOP, ROW_SEP_MID, ROW_SEP_BOTTOM } ROW_SEP;
+  void nc_draw_row_sep(ROW_SEP rowsep) {
+    const int len = ((CELL_MW+CELL_PMW)*2+1 + 1)*8 + 1; // character length of a cell in the user interface
+    for(int i=0;i<len;++i) {
+      switch(rowsep) {
+        case ROW_SEP_TOP:
+          if(i == 0) addch(ACS_ULCORNER);
+          else if(i == len - 1)addch(ACS_URCORNER);
+          else if(i%((CELL_MW+CELL_PMW)*2+2)==0) addch(ACS_TTEE);
+          else addch(ACS_HLINE);
+        break;
+        case ROW_SEP_MID:
+          if(i == 0) addch(ACS_LTEE);
+          else if(i == len - 1)addch(ACS_RTEE);
+          else if(i%((CELL_MW+CELL_PMW)*2+2)==0) addch(ACS_PLUS);
+          else addch(ACS_HLINE);
+        break;
+        case ROW_SEP_BOTTOM:
+          if(i == 0) addch(ACS_LLCORNER);
+          else if(i == len - 1)addch(ACS_LRCORNER);
+          else if(i%((CELL_MW+CELL_PMW)*2+2)==0) addch(ACS_BTEE);
+          else addch(ACS_HLINE);
+        break;
+      }
+    }
+  }
+
   void draw_board(const int TOP, const int LEFT, int &top, int &right) {
-    int len = ((CELL_MW+CELL_PMW)*2+1 + 1)*8 + 1; // character length of a cell in the user interface
+    const int len = ((CELL_MW+CELL_PMW)*2+1 + 1)*8 + 1; // character length of a cell in the user interface
     right = LEFT + len;
     attron(COLOR_PAIR(NC_COLOR_NORMAL));
     move(top++, LEFT);
-    for(int i=0;i<len;++i) {
-      if(i == 0) addch(ACS_ULCORNER);
-      else if(i == len - 1)addch(ACS_URCORNER);
-      else if(i%((CELL_MW+CELL_PMW)*2+2)==0) addch(ACS_TTEE);
-      else addch(ACS_HLINE);
-    }
+    nc_draw_row_sep(ROW_SEP_TOP);
     for(pos_t y_ = 0; y_ < board::LEN; ++y_) {
       pos_t y = board::LEN - y_ - 1;
       move(top++, LEFT);
@@ -207,37 +229,25 @@ struct Interface {
       nc_draw_board_row_piece(y, top, LEFT);
       nc_draw_board_row_piece_margin(y, top, LEFT);
       nc_draw_board_row_margin(y, top, LEFT);
-      for(int i=0;i<len;++i) {
-        if(y_ < board::LEN - 1) {
-          if(i == 0) addch(ACS_LTEE);
-          else if(i == len - 1)addch(ACS_RTEE);
-          else if(i%((CELL_MW+CELL_PMW)*2+2)==0) addch(ACS_PLUS);
-          else addch(ACS_HLINE);
-        } else {
-          if(i == 0) addch(ACS_LLCORNER);
-          else if(i == len - 1)addch(ACS_LRCORNER);
-          else if(i%((CELL_MW+CELL_PMW)*2+2)==0) addch(ACS_BTEE);
-          else addch(ACS_HLINE);
-        }
-      }
+      if(y_+1!=board::LEN)nc_draw_row_sep(ROW_SEP_MID);
     }
+    nc_draw_row_sep(ROW_SEP_BOTTOM);
   }
 
   void draw_statusbar(const int LEFT, int &top) {
     move(top + 2, LEFT);
     attron(A_BOLD);
-    //set_statusbar_message
-    event_t lastevent = board.last_event();
-    pos_t marker = event::extract_byte(lastevent);
-    pos_t from = event::extract_byte(lastevent);
-    pos_t to = event::extract_byte(lastevent);
+    //set statusbar message
+    //event_t lastevent = board.last_event();
+    //const pos_t marker = event::extract_byte(lastevent);
+    //const pos_t from = event::extract_byte(lastevent);
+    //const pos_t to = event::extract_byte(lastevent);
     //int len = printw("[ %s ]", activePlayer().c_str());
     //int len = printw("[ %s %hhu, (%hhu) %hhu->%hhu ]", activePlayer().c_str(), event::compress_castlings(board.castlings_), marker, from, to);
     //int len = printw("[ %s %llx ]", activePlayer().c_str(), board.state_checkline);
     int len = printw("[ %s %llx ]", activePlayer().c_str(), board.state_checkline);
     nc_reset_color();
-    for(int i = 0; i < 20 - len; ++i)
-      addch(' ');
+    for(int i = 0; i < 20 - len; ++i)addch(' ');
   }
 
   void draw_pgn(const int LEFT, const int TOP, int &top) {
@@ -287,7 +297,7 @@ struct Interface {
     printw("Use arrows to navigate.");
 
     int top = TOP; // y coordinate of where to start writing
-    int right;
+    int right = LEFT;
     draw_board(TOP, LEFT, top, right);
     draw_statusbar(LEFT, top);
     top = TOP;
