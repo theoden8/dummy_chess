@@ -391,26 +391,24 @@ public:
   template <typename F>
   inline void iter_attacking_xrays(pos_t j, F &&func, COLOR c=NEUTRAL) const {
     if(c==NEUTRAL)return;
-    const piece_bitboard_t friends = get_piece_positions(enemy_of(c)),
+    const piece_bitboard_t dstbit = 1ULL << j;
+    const piece_bitboard_t friends = get_piece_positions(enemy_of(c)) | dstbit,
                            foes = get_piece_positions(c);
     // apply func to non-zero attacking xrays
-    get_piece(BISHOP,enemy_of(c)).foreach([&](pos_t i) mutable -> void {
-      piece_bitboard_t r = xRayAttacks<BISHOPM>::get_attacking_xray(i, j, friends | (1ULL << j), foes); \
-      if(r != 0x00ULL) {
-        func(i, r | (1ULL << j));
-      }
+    const Piece &bishops = get_piece(BISHOP, enemy_of(c)),
+                &rooks = get_piece(ROOK, enemy_of(c)),
+                &queens = get_piece(QUEEN, enemy_of(c));
+    bishops.foreach([&](pos_t i) mutable -> void {
+      const piece_bitboard_t r = bishops.get_attacking_xray(i,j,friends,foes);
+      if(r != 0x00ULL)func(i, r | dstbit);
     }),
-    get_piece(ROOK,  enemy_of(c)).foreach([&](pos_t i) mutable -> void {
-      piece_bitboard_t r = xRayAttacks<ROOKM>::get_attacking_xray(i, j, friends | (1ULL << j), foes); \
-      if(r != 0x00ULL) {
-        func(i, r | (1ULL << j));
-      }
+    rooks.foreach([&](pos_t i) mutable -> void {
+      const piece_bitboard_t r = rooks.get_attacking_xray(i,j,friends,foes);
+      if(r != 0x00ULL)func(i, r | dstbit);
     }),
-    get_piece(QUEEN, enemy_of(c)).foreach([&](pos_t i) mutable -> void {
-      piece_bitboard_t r = xRayAttacks<QUEENM>::get_attacking_xray(i, j, friends | (1ULL << j), foes); \
-      if(r != 0x00ULL) {
-        func(i, r | (1ULL << j));
-      }
+    queens.foreach([&](pos_t i) mutable -> void {
+      const piece_bitboard_t r = queens.get_attacking_xray(i,j,friends,foes);
+      if(r != 0x00ULL)func(i, r | dstbit);
     });
   }
 

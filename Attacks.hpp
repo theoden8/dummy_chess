@@ -40,11 +40,6 @@ inline constexpr MPIECE get_mpiece_value(PIECE p, COLOR c) {
 template <MPIECE MP> struct Attacks;
 
 template <MPIECE MP> struct xRayAttacks {
-  static constexpr piece_bitboard_t get_xray_attacks(pos_t pos, piece_bitboard_t friends, piece_bitboard_t foes) {
-    const piece_bitboard_t blockers = Attacks<MP>::get_attacks(pos, friends, foes) & foes;
-    return Attacks<MP>::get_attacks(pos, friends, foes ^ blockers);
-  }
-
   static inline piece_bitboard_t get_attacking_xray(pos_t i, pos_t j, piece_bitboard_t friends, piece_bitboard_t foes) {
     const piece_bitboard_t blockers = Attacks<MP>::get_attacks(i, friends, foes) & foes;
     const piece_bitboard_t occupied = friends | (foes ^ blockers);
@@ -58,17 +53,6 @@ template <MPIECE MP> struct MultiAttacks {
     piece_bitboard_t res = 0x00;
     bitmask::foreach(mask, [&](pos_t pos) mutable noexcept -> void {
       res |= Attacks<MP>::get_attacks(pos, friends, foes);
-    });
-    return res;
-  }
-};
-
-// attack mask from multiple pieces of the kind at once
-template <MPIECE MP> struct MultixRayAttacks {
-  static constexpr piece_bitboard_t get_xray_attacks(piece_bitboard_t mask, piece_bitboard_t friends, piece_bitboard_t foes) {
-    piece_bitboard_t res = 0x00;
-    bitmask::foreach(mask, [&](pos_t pos) mutable noexcept -> void {
-      res |= xRayAttacks<MP>::get_xray_attacks(pos, friends, foes);
     });
     return res;
   }
