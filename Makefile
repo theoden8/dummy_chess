@@ -1,5 +1,5 @@
 OPTFLAGS = -g3
-# OPTFLAGS = -Ofast
+# OPTFLAGS = -Ofast -DNDEBUG
 CXXFLAGS = $(OPTFLAGS) -std=c++17 -I. -fopt-info -Wall -Wextra -Wno-unused -m64
 LDFLAGS =
 HPPFILES = $(wildcard *.hpp)

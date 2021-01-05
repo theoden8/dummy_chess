@@ -162,13 +162,13 @@ public:
   }
 
   event_t ev_take_enpassant(pos_t i, pos_t j) const {
-    return event::enpassant(i, j, enpassant_layman(), castlings_, enpassant_);
+    return event::enpassant(i, j, enpassant_pawn(), castlings_, enpassant_);
   }
 
-  pos_t enpassant_layman() const {
+  pos_t enpassant_pawn() const {
     if(enpassant_ == event::enpassantnotrace)return 0xFF;
     const pos_t x = board::_x(enpassant_);
-    return board::_y(enpassant_ == 3-1) ? board::_pos(A+x, 4) : board::_pos(A+x, 5);
+    return board::_y(enpassant_) == 3-1 ? board::_pos(A+x, 4) : board::_pos(A+x, 5);
   }
 
   void reset_enpassants() {
@@ -325,7 +325,7 @@ public:
     history.pop_back();
   }
 
-  event_t get_move_event(pos_t i, pos_t j, PIECE as=EMPTY) {
+  event_t get_move_event(pos_t i, pos_t j, PIECE as=EMPTY) const {
     event_t ev = 0x00;
     if(is_castling_move(i, j)) {
       ev = ev_castle(i, j);
