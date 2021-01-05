@@ -61,11 +61,11 @@ struct Piece {
     return 0x00ULL;
   }
 
-  inline constexpr piece_bitboard_t get_attacking_ray(pos_t i, pos_t j, piece_bitboard_t friends, piece_bitboard_t foes) const {
+  inline constexpr piece_bitboard_t get_attacking_ray(pos_t i, pos_t j, piece_bitboard_t occupied) const {
     const MPIECE mp = get_mpiece_value(value, color);
-    if(mp==BISHOPM)return Attacks<BISHOPM>::get_attacking_ray(i,j,friends|foes);
-    if(mp==ROOKM)  return Attacks<ROOKM>::get_attacking_ray(i,j,friends|foes);
-    if(mp==QUEENM) return Attacks<QUEENM>::get_attacking_ray(i,j,friends|foes);
+    if(mp==BISHOPM)return Attacks<BISHOPM>::get_attacking_ray(i,j,occupied);
+    if(mp==ROOKM)  return Attacks<ROOKM>::get_attacking_ray(i,j,occupied);
+    if(mp==QUEENM) return Attacks<QUEENM>::get_attacking_ray(i,j,occupied);
     return 0x00ULL;
   }
 
