@@ -293,13 +293,13 @@ struct Interface {
           if(cursor_y==-1)cursor_y=0;
         } else cursor_x=-1,cursor_y=-1,sel_x=-1;
       break;
-      case KEY_DOWN: case 'k':
+      case KEY_DOWN: case 'j':
         if(0 < cursor_y) {
           --cursor_y;
           if(cursor_x==-1)cursor_x=0;
         } else cursor_x=-1,cursor_y=-1,sel_y=-1;
       break;
-      case KEY_UP: case 'j':
+      case KEY_UP: case 'k':
         if(board::LEN - 1 > cursor_y) {
           ++cursor_y;
           if(cursor_x==-1)cursor_x=0;
