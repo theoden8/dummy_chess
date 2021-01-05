@@ -119,17 +119,17 @@ public:
     return target;
   }
 
-  bool is_castling_move(pos_t i, pos_t j) const {
+  inline bool is_castling_move(pos_t i, pos_t j) const {
     if(self[i].value != KING)return false;
-    if(self[i].color == WHITE)return Moves<KING, WHITE>::is_castling_move(i, j);
-    if(self[i].color == BLACK)return Moves<KING, BLACK>::is_castling_move(i, j);
+    if(self[i].color == WHITE)return Moves<KINGM>::is_castling_move<WHITE>(i, j);
+    if(self[i].color == BLACK)return Moves<KINGM>::is_castling_move<BLACK>(i, j);
     return false;
   }
 
-  bool is_enpassant_move(pos_t i, pos_t j) const {
+  inline bool is_enpassant_move(pos_t i, pos_t j) const {
     if(self[i].value != PAWN)return false;
-    if(self[i].color == WHITE)return Moves<PAWN, WHITE>::is_enpassant_move(i, j);
-    if(self[i].color == BLACK)return Moves<PAWN, BLACK>::is_enpassant_move(i, j);
+    if(self[i].color == WHITE)return Moves<WPAWNM>::is_enpassant_move(i, j);
+    if(self[i].color == BLACK)return Moves<BPAWNM>::is_enpassant_move(i, j);
     return false;
   }
 
@@ -146,16 +146,16 @@ public:
       killwhat = self[j].piece_index;
     }
     if(is_enpassant_move(i, j)) {
-      if(self[i].color==WHITE)enpassant_trace=Moves<PAWN,WHITE>::get_enpassant_trace(i,j);
-      if(self[i].color==BLACK)enpassant_trace=Moves<PAWN,BLACK>::get_enpassant_trace(i,j);
+      if(self[i].color==WHITE)enpassant_trace=Moves<WPAWNM>::get_enpassant_trace(i,j);
+      if(self[i].color==BLACK)enpassant_trace=Moves<BPAWNM>::get_enpassant_trace(i,j);
     }
     return event::basic(i, j, killwhat, castlings_, enpassant_, enpassant_trace);
   }
 
   event_t ev_castle(pos_t i, pos_t j) const {
     pos_pair_t rookmove = 0x00;
-    if(self[i].color == WHITE)rookmove = Moves<KING,WHITE>::castle_rook_move(i,j);
-    if(self[i].color == BLACK)rookmove = Moves<KING,BLACK>::castle_rook_move(i,j);
+    if(self[i].color == WHITE)rookmove = Moves<KINGM>::castle_rook_move<WHITE>(i,j);
+    if(self[i].color == BLACK)rookmove = Moves<KINGM>::castle_rook_move<BLACK>(i,j);
     pos_t r_i = bitmask::first(rookmove),
           r_j = bitmask::second(rookmove);
     return event::castling(i, j, r_i, r_j, castlings_, enpassant_);
@@ -393,20 +393,25 @@ public:
     if(c==NEUTRAL)return;
     const piece_bitboard_t friends = get_piece_positions(enemy_of(c)),
                            foes = get_piece_positions(c);
-    // apply func only to non-zero rays
-    #define APPLY_TO_XRAY(PIECE, COLOR) \
-        piece_bitboard_t r = xRayAttacks<PIECE,COLOR>::get_attacking_xray(i, j, friends | (1ULL << j), foes); \
-        if(r != 0x00ULL)func(i, r | (1ULL << j));
-    if(c!=WHITE) {
-      get_piece(BISHOP,WHITE).foreach([&](pos_t i)mutable->void{APPLY_TO_XRAY(BISHOP,WHITE);}),
-      get_piece(ROOK,WHITE).foreach([&](pos_t i)mutable->void{APPLY_TO_XRAY(ROOK,WHITE);}),
-      get_piece(QUEEN,WHITE).foreach([&](pos_t i)mutable->void{APPLY_TO_XRAY(QUEEN,WHITE);});
-    } else {
-      get_piece(BISHOP,BLACK).foreach([&](pos_t i)mutable->void{APPLY_TO_XRAY(BISHOP,BLACK);}),
-      get_piece(ROOK,BLACK).foreach([&](pos_t i)mutable->void{APPLY_TO_XRAY(ROOK,BLACK);}),
-      get_piece(QUEEN,BLACK).foreach([&](pos_t i)mutable->void{APPLY_TO_XRAY(QUEEN,BLACK);});
-    }
-    #undef APPLY_TO_XRAY
+    // apply func to non-zero attacking xrays
+    get_piece(BISHOP,enemy_of(c)).foreach([&](pos_t i) mutable -> void {
+      piece_bitboard_t r = xRayAttacks<BISHOPM>::get_attacking_xray(i, j, friends | (1ULL << j), foes); \
+      if(r != 0x00ULL) {
+        func(i, r | (1ULL << j));
+      }
+    }),
+    get_piece(ROOK,  enemy_of(c)).foreach([&](pos_t i) mutable -> void {
+      piece_bitboard_t r = xRayAttacks<ROOKM>::get_attacking_xray(i, j, friends | (1ULL << j), foes); \
+      if(r != 0x00ULL) {
+        func(i, r | (1ULL << j));
+      }
+    }),
+    get_piece(QUEEN, enemy_of(c)).foreach([&](pos_t i) mutable -> void {
+      piece_bitboard_t r = xRayAttacks<QUEENM>::get_attacking_xray(i, j, friends | (1ULL << j), foes); \
+      if(r != 0x00ULL) {
+        func(i, r | (1ULL << j));
+      }
+    });
   }
 
   inline piece_bitboard_t get_attacking_xrays(pos_t j, COLOR c=NEUTRAL) const {
@@ -491,12 +496,9 @@ public:
     const PIECE p = self[attacker].value;
     const piece_bitboard_t occupied = get_piece_positions(c) | get_piece_positions(enemy_of(c), true);
     piece_bitboard_t res = 0x00;
-    if(p == BISHOP && enemy_of(c) == WHITE)res=Attacks<BISHOP,WHITE>::get_attacking_ray(kingpos,attacker,occupied);
-    if(p == ROOK   && enemy_of(c) == WHITE)res=Attacks<ROOK  ,WHITE>::get_attacking_ray(kingpos,attacker,occupied);
-    if(p == QUEEN  && enemy_of(c) == WHITE)res=Attacks<QUEEN ,WHITE>::get_attacking_ray(kingpos,attacker,occupied);
-    if(p == BISHOP && enemy_of(c) == BLACK)res=Attacks<BISHOP,BLACK>::get_attacking_ray(kingpos,attacker,occupied);
-    if(p == ROOK   && enemy_of(c) == BLACK)res=Attacks<ROOK  ,BLACK>::get_attacking_ray(kingpos,attacker,occupied);
-    if(p == QUEEN  && enemy_of(c) == BLACK)res=Attacks<QUEEN ,BLACK>::get_attacking_ray(kingpos,attacker,occupied);
+    if(p == BISHOP)res=Attacks<BISHOPM>::get_attacking_ray(kingpos,attacker,occupied);
+    if(p == ROOK  )res=Attacks<ROOKM  >::get_attacking_ray(kingpos,attacker,occupied);
+    if(p == QUEEN )res=Attacks<QUEENM >::get_attacking_ray(kingpos,attacker,occupied);
     state_checkline = res | (1ULL << attacker);
   }
 

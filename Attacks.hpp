@@ -2,80 +2,115 @@
 
 
 #include <array>
+#include <utility>
+#include <type_traits>
 
 #include <Bitboard.hpp>
 #include <Constants.hpp>
 #include <Event.hpp>
 
 
-template <PIECE P, COLOR CC> struct Attacks;
+typedef enum { WPAWNM, BPAWNM, KNIGHTM, BISHOPM, ROOKM, QUEENM, KINGM, NO_MPIECES } MPIECE;
+namespace {
 
-template <PIECE P, COLOR CC> struct xRayAttacks {
+template <PIECE P, COLOR CC> struct piece_to_mpiece   {static constexpr MPIECE mp = NO_MPIECES;};
+template <> struct piece_to_mpiece<PAWN,WHITE>        {static constexpr MPIECE mp = WPAWNM;};
+template <> struct piece_to_mpiece<PAWN,BLACK>        {static constexpr MPIECE mp = BPAWNM;};
+template <COLOR CC> struct piece_to_mpiece<KNIGHT,CC> {static constexpr MPIECE mp = KNIGHTM;};
+template <COLOR CC> struct piece_to_mpiece<BISHOP,CC> {static constexpr MPIECE mp = BISHOPM;};
+template <COLOR CC> struct piece_to_mpiece<ROOK,CC>   {static constexpr MPIECE mp = ROOKM;};
+template <COLOR CC> struct piece_to_mpiece<QUEEN,CC>  {static constexpr MPIECE mp = QUEENM;};
+template <COLOR CC> struct piece_to_mpiece<KING,CC>   {static constexpr MPIECE mp = KINGM;};
+
+} // namespace
+template <PIECE p, COLOR c>
+constexpr MPIECE get_mpiece = ::piece_to_mpiece<p,c>::mp;
+inline constexpr MPIECE get_mpiece_value(PIECE p, COLOR c) {
+  if(p==PAWN && c==WHITE)return WPAWNM;
+  if(p==PAWN && c==BLACK)return BPAWNM;
+  if(p==KNIGHT)return KNIGHTM;
+  if(p==BISHOP)return BISHOPM;
+  if(p==ROOK)return ROOKM;
+  if(p==QUEEN)return QUEENM;
+  if(p==KING)return KINGM;
+  return NO_MPIECES;
+}
+
+
+template <MPIECE MP> struct Attacks;
+
+template <MPIECE MP> struct xRayAttacks {
   static constexpr piece_bitboard_t get_xray_attacks(pos_t pos, piece_bitboard_t friends, piece_bitboard_t foes) {
-    const piece_bitboard_t blockers = Attacks<P, CC>::get_attacks(pos, friends, foes) & foes;
-    return Attacks<P, CC>::get_attacks(pos, friends, foes ^ blockers);
+    const piece_bitboard_t blockers = Attacks<MP>::get_attacks(pos, friends, foes) & foes;
+    return Attacks<MP>::get_attacks(pos, friends, foes ^ blockers);
   }
 
   static inline piece_bitboard_t get_attacking_xray(pos_t i, pos_t j, piece_bitboard_t friends, piece_bitboard_t foes) {
-    const piece_bitboard_t blockers = Attacks<P, CC>::get_attacks(i, friends, foes) & foes;
+    const piece_bitboard_t blockers = Attacks<MP>::get_attacks(i, friends, foes) & foes;
     const piece_bitboard_t occupied = friends | (foes ^ blockers);
-    return Attacks<P, CC>::get_attacking_ray(i, j, occupied);
+    return Attacks<MP>::get_attacking_ray(i, j, occupied);
   }
 };
 
 // attack mask from multiple pieces of the kind at once
-template <PIECE P, COLOR CC> struct MultiAttacks {
+template <MPIECE MP> struct MultiAttacks {
   static constexpr piece_bitboard_t get_attacks(piece_bitboard_t mask, piece_bitboard_t friends, piece_bitboard_t foes) {
     piece_bitboard_t res = 0x00;
     bitmask::foreach(mask, [&](pos_t pos) mutable noexcept -> void {
-      res |= Attacks<P, CC>::get_attacks(pos, friends, foes);
+      res |= Attacks<MP>::get_attacks(pos, friends, foes);
     });
     return res;
   }
 };
 
 // attack mask from multiple pieces of the kind at once
-template <PIECE P, COLOR CC> struct MultixRayAttacks {
+template <MPIECE MP> struct MultixRayAttacks {
   static constexpr piece_bitboard_t get_xray_attacks(piece_bitboard_t mask, piece_bitboard_t friends, piece_bitboard_t foes) {
     piece_bitboard_t res = 0x00;
     bitmask::foreach(mask, [&](pos_t pos) mutable noexcept -> void {
-      res |= xRayAttacks<P, CC>::get_xray_attacks(pos, friends, foes);
+      res |= xRayAttacks<MP>::get_xray_attacks(pos, friends, foes);
     });
     return res;
   }
 };
 
-template <PIECE P, COLOR CC> struct Moves {
-  // TODO never the case when piece is pinned
+template <MPIECE MP> struct Moves {
   static constexpr piece_bitboard_t get_moves(piece_bitboard_t mask, piece_bitboard_t friends, piece_bitboard_t foes) {
-    // knights, rooks, bishops and queens which are not pinned:
-    return Attacks<P,CC>::get_attacks(mask, friends, foes) & ~friends;
+    // knights, rooks, bishops and queens, no pins/checks considerations
+    return Attacks<MP>::get_attacks(mask, friends, foes) & ~friends;
   }
 };
 
 // pawn attacks
-template <COLOR CC> struct Attacks<PAWN, CC> {
+template <> struct Attacks<WPAWNM> {
   static constexpr piece_bitboard_t get_attacks(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes) {
-    return Attacks<PAWN,CC>::get_basic_attack(i);
+    return Attacks<WPAWNM>::get_basic_attack(i);
   }
 
   static constexpr piece_bitboard_t get_basic_attack(pos_t i) {
-    pos_t offset = 0;
-    piece_bitboard_t smask = 0x00 | (0x05ULL<<8);
-    piece_bitboard_t lmask = 0x00;
-    piece_bitboard_t mask = 0x00;
-    piece_bitboard_t forwmask = 0x00;
-    if constexpr(CC == WHITE) {
-      offset = 2-1;
-      lmask = smask | (0x20ULL<<16);
-      forwmask = UINT64_C(0xFF) << (board::LEN * (board::_y(i) + 1));
-      mask = (board::_y(i) == board::LEN-2) ? lmask : smask;
-    } else if constexpr(CC == BLACK) {
-      offset = board::LEN*2+2-1;
-      lmask = smask | (0x20ULL);
-      forwmask = UINT64_C(0xFF) << (board::LEN * (board::_y(i) - 1));
-      mask = (board::_y(i) == 1) ? lmask : smask;
-    }
+    constexpr pos_t offset = 2 - 1;
+    constexpr piece_bitboard_t smask = 0x00 | (0x05ULL<<8);
+    constexpr piece_bitboard_t lmask = smask | (0x20ULL<<16);
+    const piece_bitboard_t mask = (board::_y(i) == board::LEN-2) ? lmask : smask;
+    const piece_bitboard_t forwmask = bitmask::hline << (board::LEN * (board::_y(i) + 1));
+    if(i <= offset)return mask >> (offset - i);
+    return (mask << (i - offset)) & forwmask;
+  }
+
+  static inline piece_bitboard_t get_attacking_ray(pos_t i, pos_t j, piece_bitboard_t occupied){return 0x00;}
+};
+
+template <> struct Attacks<BPAWNM> {
+  static constexpr piece_bitboard_t get_attacks(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes) {
+    return Attacks<BPAWNM>::get_basic_attack(i);
+  }
+
+  static constexpr piece_bitboard_t get_basic_attack(pos_t i) {
+    constexpr pos_t offset = board::LEN*2+2-1;
+    constexpr piece_bitboard_t smask = 0x00 | (0x05ULL<<8);
+    constexpr piece_bitboard_t lmask = smask | (0x20ULL);
+    const piece_bitboard_t mask = (board::_y(i) == 1) ? lmask : smask;
+    const piece_bitboard_t forwmask = bitmask::hline << (board::LEN * (board::_y(i) - 1));
     if(i <= offset)return mask >> (offset - i);
     return (mask << (i - offset)) & forwmask;
   }
@@ -84,7 +119,7 @@ template <COLOR CC> struct Attacks<PAWN, CC> {
 };
 
 // attack mask from multiple pieces of the kind at once
-template <> struct MultiAttacks<PAWN, WHITE> {
+template <> struct MultiAttacks<WPAWNM> {
   static constexpr piece_bitboard_t get_attacks(piece_bitboard_t mask, piece_bitboard_t friends, piece_bitboard_t foes) {
     constexpr piece_bitboard_t left = bitmask::vline;
     constexpr piece_bitboard_t right = bitmask::vline << 7;
@@ -98,54 +133,82 @@ template <> struct MultiAttacks<PAWN, WHITE> {
   }
 };
 // attack mask from multiple pieces of the kind at once
-template <> struct MultiAttacks<PAWN, BLACK> {
+template <> struct MultiAttacks<BPAWNM> {
   static constexpr piece_bitboard_t get_attacks(piece_bitboard_t mask, piece_bitboard_t friends, piece_bitboard_t foes) {
     constexpr piece_bitboard_t left = bitmask::vline;
     constexpr piece_bitboard_t right = bitmask::vline << 7;
     constexpr piece_bitboard_t mid = ~UINT64_C(0) ^ left ^ right;
-    piece_bitboard_t res = 0x00;
-    res |= (mask & left ) >> (board::LEN - 1);
-    res |= (mask & mid  ) >> (board::LEN - 1);
-    res |= (mask & mid  ) >> (board::LEN + 1);
-    res |= (mask & right) >> (board::LEN + 1);
-    return res;
+    return ((mask & left) >> (board::LEN - 1))
+           | ((mask & mid) >> (board::LEN - 1))
+           | ((mask & mid) >> (board::LEN + 1))
+           | ((mask & right) >> (board::LEN + 1));
   }
 };
 
-template <COLOR CC> struct Moves<PAWN, CC> {
+
+template <MPIECE MP>
+static constexpr std::enable_if_t<MP == WPAWNM || MP == BPAWNM, piece_bitboard_t>
+get_pawn_moves(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes, pos_t enpassant) {
+  const piece_bitboard_t enpassant_mask = (enpassant == event::enpassantnotrace) ? 0x00 : 1ULL << enpassant;
+  const piece_bitboard_t attacks = Attacks<MP>::get_attacks(i, friends, foes) & (foes|enpassant_mask);
+  const piece_bitboard_t moves = Moves<MP>::get_basic_move(i) & ~(friends | foes);
+  if(bitmask::count_bits(moves) != 1) {
+    return attacks|moves;
+  }
+  const int pos_to = bitmask::log2_of_exp2(moves),
+            pos_from = i;
+  if(std::abs(pos_from - pos_to) == board::LEN) {
+    return attacks|moves;
+  }
+  return attacks;
+}
+
+template <>
+struct Moves<WPAWNM> {
   static constexpr piece_bitboard_t get_moves(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes, pos_t enpassant) {
-    const piece_bitboard_t enpassant_mask = (enpassant == event::enpassantnotrace) ? 0x00 : 1ULL << enpassant;
-    const piece_bitboard_t attacks = Attacks<PAWN, CC>::get_attacks(i, friends, foes) & (foes|enpassant_mask);
-    piece_bitboard_t moves = Moves<PAWN, CC>::get_basic_move(i) & ~(friends | foes);
-    if(bitmask::count_bits(moves) != 1)return attacks|moves;
-    int pos_to=bitmask::log2_of_exp2(moves), pos_from=i;
-    if(std::abs(pos_from - pos_to) == board::LEN)return attacks|moves;
-    return attacks;
+    return get_pawn_moves<WPAWNM>(i, friends, foes, enpassant);
   }
 
   static constexpr bool is_enpassant_move(pos_t i, pos_t j) {
-    return std::abs(i - j) == 2*board::LEN;
+    return (j - i) == 2*board::LEN;
   }
 
   static constexpr pos_t get_enpassant_trace(pos_t i, pos_t j) {
     assert(is_enpassant_move(i, j));
-    if constexpr(CC == WHITE)return j-board::LEN;
-    else if constexpr(CC == BLACK)return j+board::LEN;
-    assert(false);
-    return 0x00ULL;
+    return j-board::LEN;
   }
 
   static constexpr piece_bitboard_t get_basic_move(pos_t i) {
+    const piece_bitboard_t maskpos = 1ULL << i;
+    constexpr pos_t step = board::LEN;
     piece_bitboard_t mask = 0x00;
-    piece_bitboard_t maskpos = UINT64_C(1) << i;
-    pos_t step = board::LEN;
-    if constexpr(CC == WHITE) {
-      mask |= maskpos<<step;
-      if(1+board::_y(i) == 2)mask|=maskpos<<(2*step);
-    } else if constexpr(CC == BLACK) {
-      mask |= maskpos>>step;
-      if(1+board::_y(i) == 7)mask|=maskpos>>(2*step);
-    }
+    mask |= maskpos<<step;
+    if(1+board::_y(i) == 2)mask|=maskpos<<(2*step);
+    return mask;
+  }
+};
+
+template <>
+struct Moves<BPAWNM> {
+  static constexpr piece_bitboard_t get_moves(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes, pos_t enpassant) {
+    return get_pawn_moves<BPAWNM>(i, friends, foes, enpassant);
+  }
+
+  static constexpr bool is_enpassant_move(pos_t i, pos_t j) {
+    return (i - j) == 2*board::LEN;
+  }
+
+  static constexpr pos_t get_enpassant_trace(pos_t i, pos_t j) {
+    assert(is_enpassant_move(i, j));
+    return j+board::LEN;
+  }
+
+  static constexpr piece_bitboard_t get_basic_move(pos_t i) {
+    constexpr pos_t step = board::LEN;
+    const piece_bitboard_t maskpos = 1ULL << i;
+    piece_bitboard_t mask = 0x00;
+    mask |= maskpos>>step;
+    if(1+board::_y(i) == 7)mask|=maskpos>>(2*step);
     return mask;
   }
 };
@@ -154,12 +217,12 @@ template <COLOR CC> struct Moves<PAWN, CC> {
 // knight attacks
 // https://www.chessprogramming.org/Knight_Pattern
 std::array<piece_bitboard_t, board::SIZE> knightattacks = {0x0ULL};
-template <COLOR CC> struct Attacks <KNIGHT, CC> {
-  static inline constexpr piece_bitboard_t get_attacks(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes) {
-    return Attacks<KNIGHT,CC>::get_basic(i);
+template <> struct Attacks <KNIGHTM> {
+  static inline piece_bitboard_t get_attacks(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes) {
+    return Attacks<KNIGHTM>::get_basic(i);
   }
 
-  static inline constexpr piece_bitboard_t get_basic(pos_t i) {
+  static inline piece_bitboard_t get_basic(pos_t i) {
     // memoized attacks
     if(knightattacks[i] != 0x00)return knightattacks[i];
     piece_bitboard_t I = 1ULL << i;
@@ -183,7 +246,7 @@ template <COLOR CC> struct Attacks <KNIGHT, CC> {
   static inline piece_bitboard_t get_attacking_ray(pos_t i, pos_t j, piece_bitboard_t occupied){return 0x00;}
 };
 
-template <COLOR CC> struct MultiAttacks<KNIGHT, CC> {
+template <> struct MultiAttacks<KNIGHTM> {
   static inline constexpr piece_bitboard_t get_attacks(piece_bitboard_t knights, piece_bitboard_t friends, piece_bitboard_t foes) {
     using U64 = piece_bitboard_t;
     U64 l1 = (knights >> 1) & UINT64_C(0x7f7f7f7f7f7f7f7f);
@@ -200,8 +263,8 @@ template <COLOR CC> struct MultiAttacks<KNIGHT, CC> {
 std::array<piece_bitboard_t, board::SIZE> bishopattacks = {0x0ULL};
 std::array<piece_bitboard_t, board::LEN - 1> leftquadrants = {0x0ULL};
 std::array<piece_bitboard_t, board::LEN - 1> bottomquadrants = {0x0ULL};
-template <COLOR CC> struct Attacks<BISHOP, CC> {
-  static inline constexpr piece_bitboard_t get_attacks(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes) {
+template <> struct Attacks<BISHOPM> {
+  static inline piece_bitboard_t get_attacks(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes) {
     // enemy king's line of attack is currently handled on the board level
     const piece_bitboard_t occupied = friends | foes;
     return get_topleft_ray(i, occupied) | get_topright_ray(i, occupied)
@@ -210,7 +273,7 @@ template <COLOR CC> struct Attacks<BISHOP, CC> {
 
   static inline piece_bitboard_t get_topleft_ray(int i, piece_bitboard_t occupied) {
     const pos_t x = board::_x(i), y = board::_y(i);
-    const piece_bitboard_t diags = Attacks<BISHOP, CC>::get_basic(i);
+    const piece_bitboard_t diags = Attacks<BISHOPM>::get_basic(i);
     piece_bitboard_t top_left = diags & get_top_quadrant(y) & get_left_quadrant(x);
     top_left &= bitmask::ones_before_eq_bit(bitmask::lowest_bit(top_left & occupied));
     return top_left;
@@ -218,7 +281,7 @@ template <COLOR CC> struct Attacks<BISHOP, CC> {
 
   static inline piece_bitboard_t get_topright_ray(int i, piece_bitboard_t occupied) {
     const pos_t x = board::_x(i), y = board::_y(i);
-    const piece_bitboard_t diags = Attacks<BISHOP, CC>::get_basic(i);
+    const piece_bitboard_t diags = Attacks<BISHOPM>::get_basic(i);
     piece_bitboard_t top_right = diags & get_top_quadrant(y) & get_right_quadrant(x);
     top_right &= bitmask::ones_before_eq_bit(bitmask::lowest_bit(top_right & occupied));
     return top_right;
@@ -226,7 +289,7 @@ template <COLOR CC> struct Attacks<BISHOP, CC> {
 
   static inline piece_bitboard_t get_bottomleft_ray(int i, piece_bitboard_t occupied) {
     const pos_t x = board::_x(i), y = board::_y(i);
-    const piece_bitboard_t diags = Attacks<BISHOP, CC>::get_basic(i);
+    const piece_bitboard_t diags = Attacks<BISHOPM>::get_basic(i);
     piece_bitboard_t bottom_left = diags & get_bottom_quadrant(y) & get_left_quadrant(x);
     bottom_left &= bitmask::ones_after_eq_bit(bitmask::highest_bit(bottom_left & occupied));
     return bottom_left;
@@ -234,7 +297,7 @@ template <COLOR CC> struct Attacks<BISHOP, CC> {
 
   static inline piece_bitboard_t get_bottomright_ray(int i, piece_bitboard_t occupied) {
     const pos_t x = board::_x(i), y = board::_y(i);
-    const piece_bitboard_t diags = Attacks<BISHOP, CC>::get_basic(i);
+    const piece_bitboard_t diags = Attacks<BISHOPM>::get_basic(i);
     piece_bitboard_t bottom_right = diags & get_bottom_quadrant(y) & get_right_quadrant(x);
     bottom_right &= bitmask::ones_after_eq_bit(bitmask::highest_bit(bottom_right & occupied));
     return bottom_right;
@@ -285,7 +348,7 @@ template <COLOR CC> struct Attacks<BISHOP, CC> {
   }
 
 
-  static inline constexpr piece_bitboard_t get_basic(pos_t i) {
+  static inline piece_bitboard_t get_basic(pos_t i) {
     if(bishopattacks[i])return bishopattacks[i];
     piece_bitboard_t mask = 0x00;
     pos_t step1 = board::LEN + 1;
@@ -302,8 +365,8 @@ template <COLOR CC> struct Attacks<BISHOP, CC> {
 };
 
 // rook attacks
-template <COLOR CC> struct Attacks<ROOK, CC> {
-  static inline constexpr piece_bitboard_t get_attacks(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes) {
+template <> struct Attacks<ROOKM> {
+  static inline piece_bitboard_t get_attacks(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes) {
     // enemy king's line of attack is currently handled on the board level
     piece_bitboard_t occupied = friends | foes;
     return get_left_ray(i,occupied)|get_right_ray(i,occupied)|get_top_ray(i,occupied)|get_bottom_ray(i,occupied);
@@ -378,38 +441,38 @@ template <COLOR CC> struct Attacks<ROOK, CC> {
 };
 
 // queen attacks
-template <COLOR CC> struct Attacks<QUEEN, CC> {
-  static inline constexpr piece_bitboard_t get_attacks(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes) {
-    return Attacks<BISHOP, CC>::get_attacks(i, friends, foes)
-         | Attacks<ROOK, CC>::get_attacks(i, friends, foes);
+template <> struct Attacks<QUEENM> {
+  static inline piece_bitboard_t get_attacks(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes) {
+    return Attacks<BISHOPM>::get_attacks(i, friends, foes)
+         | Attacks<ROOKM>::get_attacks(i, friends, foes);
   }
 
   static inline piece_bitboard_t get_attacking_ray(pos_t i, pos_t j, piece_bitboard_t occupied) {
-    piece_bitboard_t diag = Attacks<BISHOP, CC>::get_attacking_ray(i, j, occupied);
+    piece_bitboard_t diag = Attacks<BISHOPM>::get_attacking_ray(i, j, occupied);
     if(diag)return diag;
-    piece_bitboard_t axes = Attacks<ROOK, CC>::get_attacking_ray(i, j, occupied);
+    piece_bitboard_t axes = Attacks<ROOKM>::get_attacking_ray(i, j, occupied);
     if(axes)return axes;
     return 0x00ULL;
   }
 
-  static inline constexpr piece_bitboard_t get_basic(pos_t i) {
-    return Attacks<BISHOP, CC>::get_basic(i)
-         | Attacks<ROOK, CC>::get_basic(i);
+  static inline piece_bitboard_t get_basic(pos_t i) {
+    return Attacks<BISHOPM>::get_basic(i)
+         | Attacks<ROOKM>::get_basic(i);
   }
 };
 
-template <COLOR CC> struct MultiAttacks<QUEEN, CC> {
+template <> struct MultiAttacks<QUEENM> {
   // make use of bishops'/rooks' optimizations
   static constexpr piece_bitboard_t get_attacks(piece_bitboard_t mask, piece_bitboard_t friends, piece_bitboard_t foes) {
-    return MultiAttacks<BISHOP,CC>::get_attacks(mask, friends, foes)
-         | MultiAttacks<ROOK,CC>::get_attacks(mask, friends, foes);
+    return MultiAttacks<BISHOPM>::get_attacks(mask, friends, foes)
+         | MultiAttacks<ROOKM>::get_attacks(mask, friends, foes);
   }
 };
 
 // king attacks
-template <COLOR CC> struct Attacks<KING, CC> {
+template <> struct Attacks<KINGM> {
   static inline constexpr piece_bitboard_t get_attacks(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes) {
-    return Attacks<KING, CC>::get_basic(i);
+    return Attacks<KINGM>::get_basic(i);
   }
 
   static inline constexpr piece_bitboard_t get_basic(pos_t i) {
@@ -428,7 +491,8 @@ template <COLOR CC> struct Attacks<KING, CC> {
 };
 
 // king moves
-template <COLOR CC> struct Moves<KING, CC> {
+template <> struct Moves<KINGM> {
+  template <COLOR CC>
   static inline constexpr piece_bitboard_t get_moves(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes,
                                                      piece_bitboard_t attack_mask, piece_bitboard_t castlings)
   {
@@ -454,9 +518,10 @@ template <COLOR CC> struct Moves<KING, CC> {
           && !(occupied & castlerightcheckocc))
         castlemoves|=castleright;
     }
-    return (Attacks<KING, CC>::get_basic(i) & ~friends & ~attack_mask) | castlemoves;
+    return (Attacks<KINGM>::get_basic(i) & ~friends & ~attack_mask) | castlemoves;
   }
 
+  template <COLOR CC>
   static inline constexpr bool is_castling_move(pos_t i, pos_t j) {
     constexpr pos_t shift = (CC == WHITE) ? 0 : (board::SIZE-board::LEN);
     constexpr piece_bitboard_t castlings = 0x44ULL << shift;
@@ -464,6 +529,7 @@ template <COLOR CC> struct Moves<KING, CC> {
     return (i == kingpos) && ((1ULL << j) & castlings);
   }
 
+  template <COLOR CC>
   static inline constexpr pos_pair_t castle_rook_move(pos_t i, pos_t j) {
     constexpr pos_t shift = (CC == WHITE) ? 0 : board::SIZE - board::LEN;
     constexpr piece_bitboard_t castleleft = board::_pos(C, 1) + shift;
