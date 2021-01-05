@@ -96,8 +96,8 @@ struct Interface {
         return;
       }
     }
-    //if(pins & (1ULL << board::_pos(A+x,1+y))) {
-    if(board.state_checkline & (1ULL << board::_pos(A+x,1+y))) {
+    if(pins & (1ULL << board::_pos(A+x,1+y))) {
+    //if(board.state_checkline & (1ULL << board::_pos(A+x,1+y))) {
       attron(COLOR_PAIR(NC_COLOR_PINS));
       return;
     }

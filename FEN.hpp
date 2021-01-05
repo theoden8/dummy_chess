@@ -53,13 +53,14 @@ namespace fen {
     // castlings
     piece_bitboard_t castlings = 0x00;
     while(!isspace(s[i])) {
-      assert(index("KkQq", s[i]) != nullptr);
+      assert(index("KkQq-", s[i]) != nullptr);
       pos_t blackline = board::SIZE-board::LEN;
       switch(s[i]) {
         case 'K': castlings|=0x40ULL; break;
         case 'Q': castlings|=0x04ULL; break;
         case 'k': castlings|=0x40ULL<<blackline; break;
         case 'q': castlings|=0x04ULL<<blackline; break;
+        case '-':break;
       }
       ++i;
     }
