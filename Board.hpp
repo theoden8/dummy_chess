@@ -19,21 +19,15 @@ public:
   piece_bitboard_t castlings_ = 0x44ULL | 0x44ULL << (board::SIZE - board::LEN);
   pos_t enpassant_ = event::enpassantnotrace;
   std::array<Piece, 2*6+1>  pieces = {
-    Piece(PAWN, WHITE),
-    Piece(PAWN, BLACK),
-    Piece(KNIGHT, WHITE),
-    Piece(KNIGHT, BLACK),
-    Piece(BISHOP, WHITE),
-    Piece(BISHOP, BLACK),
-    Piece(ROOK, WHITE),
-    Piece(ROOK, BLACK),
-    Piece(QUEEN, WHITE),
-    Piece(QUEEN, BLACK),
-    Piece(KING, WHITE),
-    Piece(KING, BLACK),
+    Piece(PAWN, WHITE), Piece(PAWN, BLACK),
+    Piece(KNIGHT, WHITE), Piece(KNIGHT, BLACK),
+    Piece(BISHOP, WHITE), Piece(BISHOP, BLACK),
+    Piece(ROOK, WHITE), Piece(ROOK, BLACK),
+    Piece(QUEEN, WHITE), Piece(QUEEN, BLACK),
+    Piece(KING, WHITE), Piece(KING, BLACK),
     Piece(EMPTY, NEUTRAL)
   };
-  Board(const fen::FEN f=fen::doublecheck_test_pos):
+  Board(const fen::FEN f=fen::promotion_test_pos):
     activePlayer_(f.active_player),
     castlings_(event::decompress_castlings(f.castling_compressed)),
     enpassant_(f.enpassant)
@@ -43,7 +37,7 @@ public:
     }
     for(pos_t i = 0; i < f.board.length(); ++i) {
       if(f.board[i]==' ')continue;
-      COLOR c = islower(f.board[i]) ? BLACK : WHITE;
+      const COLOR c = islower(f.board[i]) ? BLACK : WHITE;
       PIECE p = EMPTY;
       switch(tolower(f.board[i])) {
         case 'p':p=PAWN;break;
@@ -112,14 +106,13 @@ public:
     self.board_[i] = p.piece_index;
   }
 
-  Piece &put_pos(pos_t i, Piece &p) {
-    Piece &target = self[i];
+  void put_pos(pos_t i, Piece &p) {
     self[i].unset_pos(i);
     set_pos(i, p);
-    return target;
   }
 
   inline bool is_castling_move(pos_t i, pos_t j) const {
+    j&=63;
     if(self[i].value != KING)return false;
     if(self[i].color == WHITE)return Moves<KINGM>::is_castling_move<WHITE>(i, j);
     if(self[i].color == BLACK)return Moves<KINGM>::is_castling_move<BLACK>(i, j);
@@ -127,9 +120,18 @@ public:
   }
 
   inline bool is_enpassant_move(pos_t i, pos_t j) const {
+    j&=63;
     if(self[i].value != PAWN)return false;
     if(self[i].color == WHITE)return Moves<WPAWNM>::is_enpassant_move(i, j);
     if(self[i].color == BLACK)return Moves<BPAWNM>::is_enpassant_move(i, j);
+    return false;
+  }
+
+  inline bool is_promotion_move(pos_t i, pos_t j) const {
+    j&=63;
+    if(self[i].value != PAWN)return false;
+    if(self[i].color == WHITE)return Moves<WPAWNM>::is_promotion_move(i, j);
+    if(self[i].color == BLACK)return Moves<BPAWNM>::is_promotion_move(i, j);
     return false;
   }
 
@@ -139,6 +141,7 @@ public:
   }
 
   event_t ev_basic(pos_t i, pos_t j) const {
+    j &= 63;
     assert(!self[i].is_empty());
     pos_t killwhat = event::killnothing;
     pos_t enpassant_trace = event::enpassantnotrace;
@@ -153,6 +156,7 @@ public:
   }
 
   event_t ev_castle(pos_t i, pos_t j) const {
+    j&=63;
     pos_pair_t rookmove = 0x00;
     if(self[i].color == WHITE)rookmove = Moves<KINGM>::castle_rook_move<WHITE>(i,j);
     if(self[i].color == BLACK)rookmove = Moves<KINGM>::castle_rook_move<BLACK>(i,j);
@@ -162,6 +166,7 @@ public:
   }
 
   event_t ev_take_enpassant(pos_t i, pos_t j) const {
+    j&=63;
     return event::enpassant(i, j, enpassant_pawn(), castlings_, enpassant_);
   }
 
@@ -169,6 +174,21 @@ public:
     if(enpassant_ == event::enpassantnotrace)return 0xFF;
     const pos_t x = board::_x(enpassant_);
     return board::_y(enpassant_) == 3-1 ? board::_pos(A+x, 4) : board::_pos(A+x, 5);
+  }
+
+  PIECE get_promotion_as(pos_t j) const {
+    switch(j >> 6) {
+      case 0:return KNIGHT;
+      case 1:return BISHOP;
+      case 2:return ROOK;
+      case 3:return QUEEN;
+    }
+    return PAWN;
+  }
+
+  event_t ev_promotion(pos_t i, pos_t j) const {
+    const PIECE p = get_promotion_as(j);
+    return event::promotion_from_basic(ev_basic(i, j), int(p) * int(NO_COLORS) + int(activePlayer()));
   }
 
   void reset_enpassants() {
@@ -196,8 +216,8 @@ public:
     switch(marker) {
       case event::BASIC_MARKER:
         {
-          pos_t i = event::extract_byte(ev);
-          pos_t j = event::extract_byte(ev);
+          const pos_t i = event::extract_byte(ev);
+          const pos_t j = event::extract_byte(ev);
           auto killwhat = event::extract_byte(ev);
           auto castlings_ = event::extract_castlings(ev);
           auto enpassant_old = event::extract_byte(ev);
@@ -209,10 +229,10 @@ public:
       break;
       case event::CASTLING_MARKER:
         {
-          pos_t i = event::extract_byte(ev);
-          pos_t j = event::extract_byte(ev);
-          pos_t r_i = event::extract_byte(ev);
-          pos_t r_j = event::extract_byte(ev);
+          const pos_t i = event::extract_byte(ev);
+          const pos_t j = event::extract_byte(ev);
+          const pos_t r_i = event::extract_byte(ev);
+          const pos_t r_j = event::extract_byte(ev);
           auto castlings_ = event::extract_castlings(ev);
           auto enpassant_ = event::extract_byte(ev);
           update_castlings(i);
@@ -223,9 +243,9 @@ public:
       break;
       case event::ENPASSANT_MARKER:
         {
-          pos_t i = event::extract_byte(ev);
-          pos_t j = event::extract_byte(ev);
-          pos_t killwhere = event::extract_byte(ev);
+          const pos_t i = event::extract_byte(ev);
+          const pos_t j = event::extract_byte(ev);
+          const pos_t killwhere = event::extract_byte(ev);
           auto castlings_ = event::decompress_castlings(event::extract_byte(ev));
           auto enpassant_ = event::extract_byte(ev);
           put_pos(killwhere, self.get_piece(EMPTY));
@@ -235,13 +255,13 @@ public:
       break;
       case event::PROMOTION_MARKER:
         {
-          pos_t i = event::extract_byte(ev);
-          pos_t j = event::extract_byte(ev);
-          pos_t killwhat = event::extract_byte(ev);
+          const pos_t i = event::extract_byte(ev);
+          const pos_t j = event::extract_byte(ev);
+          const pos_t killwhat = event::extract_byte(ev);
           auto castlings_ = event::extract_castlings(ev);
           auto enpassant_ = event::extract_byte(ev);
           auto enpassant_trace = event::extract_byte(ev);
-          pos_t becomewhat = event::extract_byte(ev);
+          const pos_t becomewhat = event::extract_byte(ev);
           put_pos(i, self.get_piece(EMPTY));
           put_pos(j, self.pieces[becomewhat]);
           reset_enpassants();
@@ -264,9 +284,9 @@ public:
     switch(marker) {
       case event::BASIC_MARKER:
         {
-          pos_t i = event::extract_byte(ev);
-          pos_t j = event::extract_byte(ev);
-          pos_t killwhat = event::extract_byte(ev);
+          const pos_t i = event::extract_byte(ev);
+          const pos_t j = event::extract_byte(ev);
+          const pos_t killwhat = event::extract_byte(ev);
           castlings_ = event::extract_castlings(ev);
           move_pos(j, i);
           if(killwhat != event::killnothing) {
@@ -278,10 +298,10 @@ public:
       break;
       case event::CASTLING_MARKER:
         {
-          pos_t i = event::extract_byte(ev);
-          pos_t j = event::extract_byte(ev);
-          pos_t r_i = event::extract_byte(ev);
-          pos_t r_j = event::extract_byte(ev);
+          const pos_t i = event::extract_byte(ev);
+          const pos_t j = event::extract_byte(ev);
+          const pos_t r_i = event::extract_byte(ev);
+          const pos_t r_j = event::extract_byte(ev);
           castlings_ = event::extract_castlings(ev);
           enpassant_ = event::extract_byte(ev);
           move_pos(j, i);
@@ -290,9 +310,9 @@ public:
       break;
       case event::ENPASSANT_MARKER:
         {
-          pos_t i = event::extract_byte(ev);
-          pos_t j = event::extract_byte(ev);
-          pos_t killwhere = event::extract_byte(ev);
+          const pos_t i = event::extract_byte(ev);
+          const pos_t j = event::extract_byte(ev);
+          const pos_t killwhere = event::extract_byte(ev);
           castlings_ = event::decompress_castlings(event::extract_byte(ev));
           enpassant_ = event::extract_byte(ev);
           put_pos(killwhere, self.get_piece(PAWN, enemy_of(self[j].color)));
@@ -302,15 +322,15 @@ public:
       break;
       case event::PROMOTION_MARKER:
         {
-          pos_t i = event::extract_byte(ev);
-          pos_t j = event::extract_byte(ev);
-          pos_t killwhat = event::extract_byte(ev);
+          const pos_t i = event::extract_byte(ev);
+          const pos_t j = event::extract_byte(ev);
+          const pos_t killwhat = event::extract_byte(ev);
           castlings_ = event::extract_castlings(ev);
           enpassant_ = event::extract_byte(ev);
           auto enpassant_trace = event::extract_byte(ev);
           auto becomewhat = event::extract_byte(ev);
 
-          COLOR c = self[j].color;
+          const COLOR c = self[j].color;
           if(killwhat != event::killnothing) {
             put_pos(j, self.pieces[killwhat]);
           } else {
@@ -325,20 +345,22 @@ public:
     history.pop_back();
   }
 
-  event_t get_move_event(pos_t i, pos_t j, PIECE as=EMPTY) const {
+  event_t get_move_event(pos_t i, pos_t j) const {
     event_t ev = 0x00;
     if(is_castling_move(i, j)) {
-      ev = ev_castle(i, j);
-    } else if(self[i].value == PAWN && j == enpassant_) {
-      ev = ev_take_enpassant(i, j);
+      ev = ev_castle(i, j&63);
+    } else if(self[i].value == PAWN && (j&63) == enpassant_) {
+      ev = ev_take_enpassant(i, j&63);
+    } else if(is_promotion_move(i, j)) {
+      ev = ev_promotion(i, j);
     } else {
       ev = ev_basic(i, j);
     }
     return ev;
   }
 
-  void make_move(pos_t i, pos_t j, PIECE as=EMPTY) {
-    act_event(get_move_event(i, j, as));
+  void make_move(pos_t i, pos_t j) {
+    act_event(get_move_event(i, j));
   }
 
   void retract_move() {

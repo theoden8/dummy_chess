@@ -153,11 +153,15 @@ struct Moves<WPAWNM> {
     return get_pawn_moves<WPAWNM>(i, friends, foes, enpassant);
   }
 
-  static constexpr bool is_enpassant_move(pos_t i, pos_t j) {
+  static constexpr inline bool is_enpassant_move(pos_t i, pos_t j) {
     return (j - i) == 2*board::LEN;
   }
 
-  static constexpr pos_t get_enpassant_trace(pos_t i, pos_t j) {
+  static constexpr inline bool is_promotion_move(pos_t i, pos_t j) {
+    return board::_y(j) == 8-1;
+  }
+
+  static constexpr inline pos_t get_enpassant_trace(pos_t i, pos_t j) {
     assert(is_enpassant_move(i, j));
     return j-board::LEN;
   }
@@ -178,13 +182,17 @@ struct Moves<BPAWNM> {
     return get_pawn_moves<BPAWNM>(i, friends, foes, enpassant);
   }
 
-  static constexpr bool is_enpassant_move(pos_t i, pos_t j) {
+  static constexpr inline bool is_enpassant_move(pos_t i, pos_t j) {
     return (i - j) == 2*board::LEN;
   }
 
-  static constexpr pos_t get_enpassant_trace(pos_t i, pos_t j) {
+  static constexpr inline pos_t get_enpassant_trace(pos_t i, pos_t j) {
     assert(is_enpassant_move(i, j));
     return j+board::LEN;
+  }
+
+  static constexpr inline bool is_promotion_move(pos_t i, pos_t j) {
+    return board::_y(j) == 1-1;
   }
 
   static constexpr piece_bitboard_t get_basic_move(pos_t i) {

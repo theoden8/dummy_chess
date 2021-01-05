@@ -343,7 +343,7 @@ struct Interface {
           pos_t pos_to = board::_pos(A+cursor_x, 1+cursor_y);
           auto moves = board.get_moves_from(pos_from);
           if((1ULL << pos_to) & moves && board[pos_from].color == board.activePlayer()) {
-            event_t ev = board.get_move_event(pos_from, pos_to);
+            event_t ev = board.get_move_event(pos_from, pos_to | (3 << 6));
             pgn.handle_event(ev);
             sel_x=-1,sel_y=-1;
           } else {
