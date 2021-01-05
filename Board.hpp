@@ -395,8 +395,8 @@ public:
                            foes = get_piece_positions(c);
     // apply func only to non-zero rays
     #define APPLY_TO_XRAY(PIECE, COLOR) \
-        piece_bitboard_t r = xRayAttacks<PIECE,COLOR>::get_attacking_xray(i, j, friends, foes); \
-        if(r != 0x00ULL)func(i, r);
+        piece_bitboard_t r = xRayAttacks<PIECE,COLOR>::get_attacking_xray(i, j, friends | (1ULL << j), foes); \
+        if(r != 0x00ULL)func(i, r | (1ULL << j));
     if(c!=WHITE) {
       get_piece(BISHOP,WHITE).foreach([&](pos_t i)mutable->void{APPLY_TO_XRAY(BISHOP,WHITE);}),
       get_piece(ROOK,WHITE).foreach([&](pos_t i)mutable->void{APPLY_TO_XRAY(ROOK,WHITE);}),

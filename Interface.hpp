@@ -27,6 +27,10 @@ struct Interface {
     NC_COLOR_SELECTION, NC_COLOR_SELECTED,
     NC_COLOR_ENPASSANT, NC_COLOR_PINS,
     NC_COLOR_CAN_ATTACK,
+
+    NC_COLOR_PGN_CURPLY,
+
+    NC_NO_COLORS
   } ncurses_color_palette;
 
   void run() {
@@ -42,6 +46,8 @@ struct Interface {
     init_pair(NC_COLOR_ENPASSANT,   COLOR_WHITE, COLOR_GREEN);
     init_pair(NC_COLOR_PINS,        COLOR_WHITE, COLOR_RED);
     init_pair(NC_COLOR_CAN_ATTACK,  COLOR_WHITE, COLOR_YELLOW);
+
+    init_pair(NC_COLOR_PGN_CURPLY,  COLOR_WHITE, COLOR_MAGENTA);
 
     cbreak();
     noecho(); // do not show typed characters
@@ -237,20 +243,35 @@ struct Interface {
   void draw_pgn(const int LEFT, const int TOP, int &top) {
     move(top, LEFT);
     int turn = 1;
+    constexpr size_t initial_margin = 5,
+                     ply_length = 9, // ' dxe8=Q++ '
+                     space_between = 3;
+    constexpr size_t turn_length = initial_margin + ply_length + space_between + ply_length;
+    constexpr size_t start_white = initial_margin,
+                     start_black = initial_margin + ply_length + space_between;
     for(size_t i = 0; i < pgn.size(); ++i) {
       if(!(i & 1)) {
         move(top, LEFT);
         printw("%d.", turn);
       }
-      move(top, (i & 1) ? LEFT + 15 : LEFT + 5);
-      nc_set_cell_color((i & 1) ? BLACK : WHITE);
+      move(top, !(i & 1) ? LEFT + start_white : LEFT + start_black);
+      if(i + 1 == pgn.cur_ply) {
+        attron(COLOR_PAIR(NC_COLOR_PGN_CURPLY));
+      } else {
+        nc_set_cell_color(!(i & 1) ? WHITE : BLACK);
+      }
       std::string s = " "s + pgn.ply[i] + " "s;
-      while(s.length()<9)s+=' ';
+      while(s.length()<ply_length)s+=' ';
       addstr(s.c_str());
       nc_reset_color();
+      for(size_t c=0;c<ply_length+space_between;++c)addch(' ');
       if(i & 1) {
         ++top, ++turn;
       }
+    }
+    if(!(pgn.size() & 1)) {
+      move(top,LEFT);
+      for(size_t c=0;c<turn_length;++c)addch(' ');
     }
   }
 
