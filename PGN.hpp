@@ -37,9 +37,9 @@ struct PGN {
     switch(marker) {
       case event::BASIC_MARKER:
         {
-          pos_t i = event::extract_byte(ev);
-          pos_t j = event::extract_byte(ev);
-          pos_t killwhat = event::extract_byte(ev);
+          const pos_t i = event::extract_byte(ev);
+          const pos_t j = event::extract_byte(ev);
+          const pos_t killwhat = event::extract_byte(ev);
           p = "";
           if(board[i].value==PAWN && board[j].value==PAWN && killwhat!=event::killnothing) {
             p += 'a' + board::_x(i);
@@ -53,8 +53,8 @@ struct PGN {
       break;
       case event::CASTLING_MARKER:
         {
-          pos_t i = event::extract_byte(ev);
-          pos_t j = event::extract_byte(ev);
+          const pos_t i = event::extract_byte(ev);
+          const pos_t j = event::extract_byte(ev);
           if(board::_x(j) == C) {
             p = "O-O-O";
           } else {
@@ -64,8 +64,8 @@ struct PGN {
       break;
       case event::ENPASSANT_MARKER:
         {
-          pos_t i = event::extract_byte(ev);
-          pos_t j = event::extract_byte(ev);
+          const pos_t i = event::extract_byte(ev);
+          const pos_t j = event::extract_byte(ev);
           p += 'a' + board::_x(i);
           p += 'x';
           p += write_pos(j);
@@ -73,20 +73,18 @@ struct PGN {
       break;
       case event::PROMOTION_MARKER:
         {
-          pos_t i = event::extract_byte(ev);
-          pos_t j = event::extract_byte(ev);
-          pos_t killwhat = event::extract_byte(ev);
-          auto special_flags = event::extract_byte(ev);
-          auto enpassant_ = event::extract_byte(ev);
-          auto enpassant_trace = event::extract_byte(ev);
-          pos_t becomewhat = event::extract_byte(ev);
+          const pos_t i = event::extract_byte(ev);
+          const pos_t to_byte = event::extract_byte(ev);
+            const pos_t j = to_byte & board::MOVEMASK;
+            const PIECE becomewhat = board.get_promotion_as(to_byte);
+          const pos_t killwhat = event::extract_byte(ev);
           if(killwhat != event::killnothing) {
             p += 'a' + board::_x(i);
             p += 'x';
           }
           p += write_pos(j);
           p += '=';
-          p += toupper(board.pieces[becomewhat].str());
+          p += toupper(board.pieces[Piece::get_piece_index(becomewhat, board.activePlayer())].str());
         }
       break;
     }

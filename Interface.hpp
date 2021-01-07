@@ -4,11 +4,12 @@
 #include <ncurses.h>
 
 #include <Board.hpp>
+#include <Engine.hpp>
 #include <PGN.hpp>
 
 
 struct Interface {
-  Board &board;
+  Engine &board;
   pgn::PGN pgn;
   bool shouldClose = false;
   int CELL_MW = 2,
@@ -16,7 +17,7 @@ struct Interface {
       CELL_PMW = 1,
       CELL_PMH = 0;
 
-  Interface(Board &board):
+  Interface(Engine &board):
     board(board), pgn(board)
   {}
 
@@ -352,6 +353,17 @@ struct Interface {
             sel_x=-1,sel_y=-1;
           } else {
             sel_x=cursor_x,sel_y=cursor_y;
+          }
+        }
+      break;
+      case 'r':
+        {
+          move_t m = board::nomove;
+          if(sel_x==-1||sel_y==-1)m=board.get_random_move();
+          else m=board.get_random_move_from(board::_pos(A+sel_x, 1+sel_y));
+          if(m != board::nomove) {
+            event_t ev = board.get_move_event(bitmask::first(m), bitmask::second(m));
+            pgn.handle_event(ev);
           }
         }
       break;

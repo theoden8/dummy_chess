@@ -77,18 +77,9 @@ namespace event {
   }
 
   constexpr pos_t PROMOTION_MARKER = 0xFC;
-  constexpr inline event_t promotion_from_basic(event_t basicevent, pos_t becomewhat) {
-    event_t e = 0x00;
-    e = (e << 8) | becomewhat;
-    e = (e << (8*7)) | (basicevent >> 8);
-    e = (e << 8) | PROMOTION_MARKER;
-    return e;
-  }
-
-  constexpr inline event_t promotion(pos_t from, pos_t to, pos_t killwhat, pos_t becomewhat, piece_bitboard_t castlings,
-                                     pos_t halfmoves, pos_t enpassant)
-  {
-    return promotion_from_basic(event::basic(from, to, killwhat, castlings, halfmoves, enpassant), becomewhat);
+  // set j in the basic event to have the promotion flag
+  constexpr inline event_t promotion_from_basic(event_t basicevent) {
+    return ((basicevent >> 8) << 8) | PROMOTION_MARKER;
   }
 
   pos_t extract_byte(event_t &ev) {

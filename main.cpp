@@ -1,7 +1,8 @@
 #include <Board.hpp>
+#include <Engine.hpp>
 
 int main() {
-  Board b;
+  Engine b;
   // example, print piece position
   std::cout << "positions of black rook" << std::endl;
   b.get_piece(ROOK, BLACK).print();

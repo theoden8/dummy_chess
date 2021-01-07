@@ -30,8 +30,11 @@ namespace board {
   constexpr pos_t LEN = 8;
   constexpr pos_t SIZE = LEN*LEN;
   constexpr pos_t MOVEMASK = 0x3f;
-  constexpr pos_t PROMOTE_KNIGHT = 0<<6, PROMOTE_BISHOP = 1<<6,
-                  PROMOTE_ROOK = 2<<6, PROMOTE_QUEEN = 3<<6;
+  constexpr pos_t PROMOTE_KNIGHT = 0<<6,
+                  PROMOTE_BISHOP = 1<<6,
+                  PROMOTE_ROOK = 2<<6,
+                  PROMOTE_QUEEN = 3<<6;
+  constexpr move_t nomove = bitmask::_pos_pair(0xff, 0xff);
 
   inline constexpr pos_t _x(pos_t i) {
     return i % LEN;

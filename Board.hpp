@@ -28,7 +28,7 @@ public:
     Piece(KING, WHITE), Piece(KING, BLACK),
     Piece(EMPTY, NEUTRAL)
   };
-  Board(const fen::FEN f=fen::promotion_test_pos):
+  Board(const fen::FEN f):
     activePlayer_(f.active_player),
     castlings_(event::decompress_castlings(f.castling_compressed)),
     enpassant_(f.enpassant),
@@ -144,7 +144,8 @@ public:
   }
 
   event_t ev_basic(pos_t i, pos_t j) const {
-    assert(j <= board::MOVEMASK);
+    const pos_t promote_flag = j & ~board::MOVEMASK;
+    j &= board::MOVEMASK;
     assert(!self[i].is_empty());
     pos_t killwhat = event::killnothing;
     pos_t enpassant_trace = event::enpassantnotrace;
@@ -155,7 +156,7 @@ public:
       if(self[i].color==WHITE)enpassant_trace=Moves<WPAWNM>::get_enpassant_trace(i,j);
       if(self[i].color==BLACK)enpassant_trace=Moves<BPAWNM>::get_enpassant_trace(i,j);
     }
-    return event::basic(i, j, killwhat, castlings_, halfmoves_, enpassant_, enpassant_trace);
+    return event::basic(i, j | promote_flag, killwhat, castlings_, halfmoves_, enpassant_, enpassant_trace);
   }
 
   event_t ev_castle(pos_t i, pos_t j) const {
@@ -190,9 +191,7 @@ public:
   }
 
   event_t ev_promotion(pos_t i, pos_t j) const {
-    const PIECE p = get_promotion_as(j & ~board::MOVEMASK);
-    j &= board::MOVEMASK;
-    return event::promotion_from_basic(ev_basic(i, j), int(p) * int(NO_COLORS) + int(activePlayer()));
+    return event::promotion_from_basic(ev_basic(i, j));
   }
 
   void reset_enpassants() {
@@ -267,15 +266,16 @@ public:
       case event::PROMOTION_MARKER:
         {
           const pos_t i = event::extract_byte(ev);
-          const pos_t j = event::extract_byte(ev);
+          const pos_t to_byte = event::extract_byte(ev);
+            const pos_t j = to_byte & board::MOVEMASK;
+            const PIECE becomewhat = get_promotion_as(to_byte);
           const pos_t killwhat = event::extract_byte(ev);
           auto castlings_ = event::extract_castlings(ev);
           auto halfmoves = event::extract_byte(ev);
           auto enpassant_ = event::extract_byte(ev);
           auto enpassant_trace = event::extract_byte(ev);
-          const pos_t becomewhat = event::extract_byte(ev);
           put_pos(i, self.get_piece(EMPTY));
-          put_pos(j, self.pieces[becomewhat]);
+          put_pos(j, self.pieces[Piece::get_piece_index(becomewhat, activePlayer())]);
           reset_enpassants();
           halfmoves_ = 0;
         }
@@ -339,13 +339,12 @@ public:
       case event::PROMOTION_MARKER:
         {
           const pos_t i = event::extract_byte(ev);
-          const pos_t j = event::extract_byte(ev);
+          const pos_t j = event::extract_byte(ev) & board::MOVEMASK;
           const pos_t killwhat = event::extract_byte(ev);
           castlings_ = event::extract_castlings(ev);
           halfmoves_ = event::extract_byte(ev);
           enpassant_ = event::extract_byte(ev);
           auto enpassant_trace = event::extract_byte(ev);
-          auto becomewhat = event::extract_byte(ev);
 
           const COLOR c = self[j].color;
           if(killwhat != event::killnothing) {
@@ -536,12 +535,17 @@ public:
     state_checkline |= (1ULL << attacker);
   }
 
+  inline bool is_draw() const {
+    return (halfmoves_ == 50);
+  }
+
   std::array <piece_bitboard_t, board::SIZE> state_moves = {UINT64_C(0x00)};
   void update_state_moves() {
     for(auto&m:state_moves)m=UINT64_C(0x00);
+    if(is_draw())return;
     const COLOR c = activePlayer();
     const piece_bitboard_t friends = get_piece_positions(c),
-          foes  = get_piece_positions(enemy_of(c), true),
+          foes  = get_piece_positions(enemy_of(c)),
           attack_mask = get_attack_mask(c),
           pins = get_pins(c);
     const bool doublecheck = state_attacks_count[enemy_of(c)][get_king_pos(c)] > 1;

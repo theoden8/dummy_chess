@@ -2,8 +2,8 @@
 
 
 int main(int argc, char *argv[]) {
-  Board b;
-  Interface iface(b);
+  Engine engine;
+  Interface iface(engine);
   iface.run();
   return 0;
 }

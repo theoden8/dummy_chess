@@ -15,9 +15,13 @@ struct Piece {
   const pos_t piece_index;
   piece_bitboard_t mask;
 
+  static inline constexpr pos_t get_piece_index(PIECE p, COLOR c) {
+    return (p==EMPTY) ? int(NO_PIECES)*int(NO_COLORS) : int(p)*(int)NO_COLORS+c;
+  }
+
   constexpr Piece(PIECE p, COLOR c, piece_bitboard_t loc=0x00):
     value(p), color(c),
-    piece_index((p==EMPTY) ? int(NO_PIECES)*int(NO_COLORS) : int(p)*(int)NO_COLORS+c),
+    piece_index(get_piece_index(p, c)),
     mask(loc)
   {}
 
