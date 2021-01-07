@@ -15,11 +15,11 @@ using namespace std::string_literals;
 namespace fen {
   typedef struct _FEN {
     std::string board;
-    COLOR active_player;
-    pos_t castling_compressed;
+    COLOR active_player : 2;
+    pos_t castling_compressed : 4;
     pos_t enpassant;
     pos_t halfmove_clock;
-    pos_t fullmove;
+    uint16_t fullmove;
   } FEN;
 
   FEN load_from_string(std::string s) {
@@ -64,7 +64,7 @@ namespace fen {
       }
       ++i;
     }
-    f.castling_compressed = event::compress_special_flags(castlings, 0);
+    f.castling_compressed = event::compress_castlings(castlings);
     // skip space
     while(isspace(s[i]))++i;
     // enpassant

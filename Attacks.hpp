@@ -23,6 +23,7 @@ template <COLOR CC> struct piece_to_mpiece<QUEEN,CC>  {static constexpr MPIECE m
 template <COLOR CC> struct piece_to_mpiece<KING,CC>   {static constexpr MPIECE mp = KINGM;};
 
 } // namespace
+
 template <PIECE p, COLOR c>
 constexpr MPIECE get_mpiece = ::piece_to_mpiece<p,c>::mp;
 inline constexpr MPIECE get_mpiece_value(PIECE p, COLOR c) {
@@ -472,9 +473,9 @@ template <> struct Attacks<KINGM> {
     constexpr piece_bitboard_t left = (0x1ULL<<0) | (0x1ULL<<8) | (0x1ULL<<16);
     constexpr piece_bitboard_t right =  (0x4ULL<<0) | (0x4ULL<<8) | (0x4ULL<<16);
     constexpr piece_bitboard_t mid = (0x2ULL<<0) | (0x2ULL<<16);
-    piece_bitboard_t mask = left|mid|right;
-    if(board::_x(i)==A)mask|=left;
-    if(board::_x(i)==H)mask|=right;
+    piece_bitboard_t mask = mid;
+    if(board::_x(i)!=A)mask|=left;
+    if(board::_x(i)!=H)mask|=right;
     constexpr pos_t offset = 8+2-1;
     if(i <= offset)return mask >> (offset - i);
     return mask << (i - offset);
@@ -529,7 +530,7 @@ template <> struct Moves<KINGM> {
     constexpr piece_bitboard_t castleright = board::_pos(G, 1) + shift;
     if(j == castleleft) return bitmask::_pos_pair(board::_pos(A, 1) + shift, board::_pos(D, 1) + shift);
     if(j == castleright)return bitmask::_pos_pair(board::_pos(H, 1) + shift, board::_pos(F, 1) + shift);
-    assert(false);
+    abort();
     return 0x00;
   }
 };

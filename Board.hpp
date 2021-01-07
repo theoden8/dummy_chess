@@ -216,15 +216,15 @@ public:
   void act_event(event_t ev) {
     history.push_back(ev);
     pos_t marker = event::extract_byte(ev);
-    assert(event::decompress_castlings(event::compress_special_flags(castlings_, halfmoves_)) == castlings_);
-    assert(event::decompress_halfmoves(event::compress_special_flags(castlings_, halfmoves_)) == halfmoves_);
+    assert(event::decompress_castlings(event::compress_castlings(castlings_)) == castlings_);
     switch(marker) {
       case event::BASIC_MARKER:
         {
           const pos_t i = event::extract_byte(ev);
           const pos_t j = event::extract_byte(ev);
           const pos_t killwhat = event::extract_byte(ev);
-          auto special_flags = event::extract_byte(ev);
+          auto castlings_ = event::extract_castlings(ev);
+          auto halfmoves = event::extract_byte(ev);
           auto enpassant_old = event::extract_byte(ev);
           auto enpassant_trace = event::extract_byte(ev);
           enpassant_ = enpassant_trace;
@@ -240,7 +240,8 @@ public:
           const pos_t j = event::extract_byte(ev);
           const pos_t r_i = event::extract_byte(ev);
           const pos_t r_j = event::extract_byte(ev);
-          auto special_flags = event::extract_byte(ev);
+          auto castlings_ = event::extract_castlings(ev);
+          auto halfmoves = event::extract_byte(ev);
           auto enpassant_ = event::extract_byte(ev);
           ++halfmoves_;
           update_castlings(i);
@@ -254,7 +255,8 @@ public:
           const pos_t i = event::extract_byte(ev);
           const pos_t j = event::extract_byte(ev);
           const pos_t killwhere = event::extract_byte(ev);
-          auto special_flags = event::extract_byte(ev);
+          auto castlings_ = event::extract_castlings(ev);
+          auto halfmoves = event::extract_byte(ev);
           auto enpassant_ = event::extract_byte(ev);
           put_pos(killwhere, self.get_piece(EMPTY));
           move_pos(i, j);
@@ -267,7 +269,8 @@ public:
           const pos_t i = event::extract_byte(ev);
           const pos_t j = event::extract_byte(ev);
           const pos_t killwhat = event::extract_byte(ev);
-          auto special_flags = event::extract_byte(ev);
+          auto castlings_ = event::extract_castlings(ev);
+          auto halfmoves = event::extract_byte(ev);
           auto enpassant_ = event::extract_byte(ev);
           auto enpassant_trace = event::extract_byte(ev);
           const pos_t becomewhat = event::extract_byte(ev);
@@ -297,9 +300,8 @@ public:
           const pos_t i = event::extract_byte(ev);
           const pos_t j = event::extract_byte(ev);
           const pos_t killwhat = event::extract_byte(ev);
-          auto special_flags = event::extract_byte(ev);
-          castlings_ = event::decompress_castlings(special_flags);
-          halfmoves_ = event::decompress_halfmoves(special_flags);
+          castlings_ = event::extract_castlings(ev);
+          halfmoves_ = event::extract_byte(ev);
           move_pos(j, i);
           if(killwhat != event::killnothing) {
             put_pos(j, self.pieces[killwhat]);
@@ -314,9 +316,8 @@ public:
           const pos_t j = event::extract_byte(ev);
           const pos_t r_i = event::extract_byte(ev);
           const pos_t r_j = event::extract_byte(ev);
-          auto special_flags = event::extract_byte(ev);
-          castlings_ = event::decompress_castlings(special_flags);
-          halfmoves_ = event::decompress_halfmoves(special_flags);
+          castlings_ = event::extract_castlings(ev);
+          halfmoves_ = event::extract_byte(ev);
           enpassant_ = event::extract_byte(ev);
           move_pos(j, i);
           move_pos(r_j, r_i);
@@ -327,9 +328,8 @@ public:
           const pos_t i = event::extract_byte(ev);
           const pos_t j = event::extract_byte(ev);
           const pos_t killwhere = event::extract_byte(ev);
-          auto special_flags = event::extract_byte(ev);
-          castlings_ = event::decompress_castlings(special_flags);
-          halfmoves_ = event::decompress_halfmoves(special_flags);
+          castlings_ = event::extract_castlings(ev);
+          halfmoves_ = event::extract_byte(ev);
           enpassant_ = event::extract_byte(ev);
           put_pos(killwhere, self.get_piece(PAWN, enemy_of(self[j].color)));
           move_pos(j, i);
@@ -341,9 +341,8 @@ public:
           const pos_t i = event::extract_byte(ev);
           const pos_t j = event::extract_byte(ev);
           const pos_t killwhat = event::extract_byte(ev);
-          auto special_flags = event::extract_byte(ev);
-          castlings_ = event::decompress_castlings(special_flags);
-          halfmoves_ = event::decompress_halfmoves(special_flags);
+          castlings_ = event::extract_castlings(ev);
+          halfmoves_ = event::extract_byte(ev);
           enpassant_ = event::extract_byte(ev);
           auto enpassant_trace = event::extract_byte(ev);
           auto becomewhat = event::extract_byte(ev);
