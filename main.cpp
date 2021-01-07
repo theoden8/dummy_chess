@@ -2,7 +2,7 @@
 #include <Engine.hpp>
 
 int main() {
-  Engine b;
+  Engine b(fen::starting_pos);
   // example, print piece position
   std::cout << "positions of black rook" << std::endl;
   b.get_piece(ROOK, BLACK).print();
@@ -14,5 +14,13 @@ int main() {
     piece_bitboard_t attacks = Attacks<get_mpiece<pieceT, colorT>>::get_basic(pos);
     bitmask::print_mask(attacks, pos);
   });
+  {
+    Engine b(fen::promotion_test_pos);
+    pos_t i = board::_pos(E, 7);
+    b.iter_moves_from(i, [&](pos_t i, pos_t j) mutable -> void {
+      printf("(%s, %s)\n", board::_pos_str(i).c_str(), board::_pos_str(j).c_str());
+    });
+  }
   b.print();
+  printf("best move: %s\n", board::_pos_str(b.get_fixed_depth_move(5)).c_str());
 }

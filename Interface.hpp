@@ -367,6 +367,15 @@ struct Interface {
           }
         }
       break;
+      case 'f':
+        {
+          move_t m = board.get_fixed_depth_move(4);
+          if(m != board::nomove) {
+            event_t ev = board.get_move_event(bitmask::first(m), bitmask::second(m));
+            pgn.handle_event(ev);
+          }
+        }
+      break;
       case KEY_BACKSPACE:
         board.retract_move();
         pgn.retract_event();

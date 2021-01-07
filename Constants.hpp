@@ -1,6 +1,8 @@
 #pragma once
 
 
+#include <string>
+
 #include <Bitboard.hpp>
 
 
@@ -46,5 +48,13 @@ namespace board {
 
   inline constexpr pos_t _pos(pos_t i, pos_t j) {
     return i + (j - 1) * LEN;
+  }
+
+  std::string _pos_str(pos_t i) {
+    std::string p;
+    i &= board::MOVEMASK;
+    p += 'a' + board::_x(i);
+    p += '1' + board::_y(i);
+    return p;
   }
 } // namespace board

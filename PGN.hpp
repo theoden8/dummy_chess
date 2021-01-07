@@ -20,13 +20,6 @@ struct PGN {
     board(board)
   {}
 
-  static std::string write_pos(int i) {
-    std::string p;
-    p += 'a' + board::_x(i);
-    p += '1' + board::_y(i);
-    return p;
-  }
-
   size_t size() const {
     return cur_ply;
   }
@@ -47,7 +40,7 @@ struct PGN {
           } else {
             if(board[i].value!=PAWN)p+=toupper(board[i].str());
             if(killwhat!=event::killnothing)p+='x';
-            p += write_pos(j);
+            p += board::_pos_str(j);
           }
         }
       break;
@@ -68,7 +61,7 @@ struct PGN {
           const pos_t j = event::extract_byte(ev);
           p += 'a' + board::_x(i);
           p += 'x';
-          p += write_pos(j);
+          p += board::_pos_str(j);
         }
       break;
       case event::PROMOTION_MARKER:
@@ -82,7 +75,7 @@ struct PGN {
             p += 'a' + board::_x(i);
             p += 'x';
           }
-          p += write_pos(j);
+          p += board::_pos_str(j);
           p += '=';
           p += toupper(board.pieces[Piece::get_piece_index(becomewhat, board.activePlayer())].str());
         }
