@@ -214,67 +214,27 @@ template <> struct Attacks<BISHOPM> {
     return M42::bishop_attacks(i, occupied);
   }
 
-  static inline piece_bitboard_t get_topleft_ray(int i, piece_bitboard_t diags) {
-    const pos_t x = board::_x(i), y = board::_y(i);
-    return diags & get_top_quadrant(y) & get_left_quadrant(x);
-  }
-
-  static inline piece_bitboard_t get_topright_ray(int i, piece_bitboard_t diags) {
-    const pos_t x = board::_x(i), y = board::_y(i);
-    return diags & get_top_quadrant(y) & get_right_quadrant(x);
-  }
-
-  static inline piece_bitboard_t get_bottomleft_ray(int i, piece_bitboard_t diags) {
-    const pos_t x = board::_x(i), y = board::_y(i);
-    return diags & get_bottom_quadrant(y) & get_left_quadrant(x);
-  }
-
-  static inline piece_bitboard_t get_bottomright_ray(int i, piece_bitboard_t diags) {
-    const pos_t x = board::_x(i), y = board::_y(i);
-    return diags & get_bottom_quadrant(y) & get_right_quadrant(x);
-  }
-
-  static inline piece_bitboard_t get_left_quadrant(int x) {
-    if(x == 0)return 0x00;
-    if(leftquadrants[x-1])return leftquadrants[x-1];
-    piece_bitboard_t left_quadrant = 0x00;
-    for(int i=0;i<x;++i)left_quadrant|=bitmask::vline<<i;
-    leftquadrants[x-1] = left_quadrant;
-    return left_quadrant;
-  }
-
-  static inline piece_bitboard_t get_right_quadrant(int x) {
-    return ~0ULL & ~get_left_quadrant(x) & ~(bitmask::vline << x);
-  }
-
-  static inline piece_bitboard_t get_bottom_quadrant(int y) {
-    if(y == 0)return 0x00;
-    if(bottomquadrants[y-1])return bottomquadrants[y-1];
-    piece_bitboard_t bottom_quadrant = 0x00;
-    for(int i=0;i<y;++i)bottom_quadrant|=bitmask::hline<<i*board::LEN;
-    bottomquadrants[y-1] = bottom_quadrant;
-    return bottom_quadrant;
-  }
-
-  static inline piece_bitboard_t get_top_quadrant(int y) {
-    return ~0ULL & ~get_bottom_quadrant(y) & ~(bitmask::hline << y*board::LEN);
-  }
-
-
   static inline piece_bitboard_t get_attacking_ray(pos_t i, pos_t j, piece_bitboard_t occupied) {
     const piece_bitboard_t attacked_bit = 1ULL << j;
     const pos_t x_i=board::_x(i), y_i=board::_y(i),
                 x_j=board::_x(j), y_j=board::_y(j);
-    const piece_bitboard_t diags = M42::bishop_attacks(i, occupied);
+    const piece_bitboard_t diags = M42::diag_attacks(i, occupied),
+                           adiags = M42::adiag_attacks(i, occupied);
+    const piece_bitboard_t bottomhalf = ~0ULL >> board::LEN * (board::LEN - y_i);
+    const piece_bitboard_t tophalf = ~0ULL << board::LEN * (y_i + 1);
     piece_bitboard_t r = 0x00;
     if(x_j < x_i && y_i < y_j) {
-      r = get_topleft_ray(i, diags);
+      // top-left
+      r = adiags & tophalf;
     } else if(x_i < x_j && y_i < y_j) {
-      r = get_topright_ray(i, diags);
+      // top-right
+      r = diags & tophalf;
     } else if(x_j < x_i && y_j < y_i) {
-      r = get_bottomleft_ray(i, diags);
+      // bottom-left
+      r = diags & bottomhalf;
     } else if(x_i < x_j && y_j < y_i) {
-      r = get_bottomright_ray(i, diags);
+      // bottom-right
+      r = adiags & bottomhalf;
     }
     return (r & attacked_bit) ? r : 0x00;
   }
