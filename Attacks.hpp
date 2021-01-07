@@ -205,8 +205,6 @@ template <> struct Moves<KNIGHTM> {
 };
 
 // bishop attacks
-std::array<piece_bitboard_t, board::LEN - 1> leftquadrants = {0x0ULL};
-std::array<piece_bitboard_t, board::LEN - 1> bottomquadrants = {0x0ULL};
 template <> struct Attacks<BISHOPM> {
   static inline piece_bitboard_t get_attacks(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes) {
     // enemy king's line of attack is currently handled on the board level
@@ -255,63 +253,31 @@ template <> struct Attacks<ROOKM> {
     return M42::rook_attacks(i, occupied);
   }
 
-  // -> -> -> -> -> -> -> ->
-  // a1 b1 c1 d1 e1 f1 g1 h1
-  // ..
-  // a8 b8 c8 d8 e8 f8 g8 h8
-  // bits shifted the "other way"
-  static inline piece_bitboard_t get_left_ray(pos_t i, piece_bitboard_t occupied) {
-    const pos_t y = board::_y(i), x = board::_x(i);
-    constexpr pos_t axlen = board::LEN;
-    piece_bitboard_t left = (bitmask::hline >> (8 - x));
-    left <<= axlen*y;
-    left &= bitmask::ones_after_eq_bit(bitmask::highest_bit(left & occupied));
-    return left;
-  }
-
-  static inline piece_bitboard_t get_right_ray(pos_t i, piece_bitboard_t occupied) {
-    const pos_t y = board::_y(i), x = board::_x(i);
-    constexpr pos_t axlen = board::LEN;
-    const piece_bitboard_t left = (bitmask::hline >> (8 - x));
-    piece_bitboard_t right = ~(1ULL << x) & (~left & bitmask::hline);
-    right <<= axlen*y;
-    right &= bitmask::ones_before_eq_bit(bitmask::lowest_bit(right & occupied));
-    return right;
-  }
-
-  static inline piece_bitboard_t get_top_ray(pos_t i, piece_bitboard_t occupied) {
-    const pos_t y = board::_y(i), x = board::_x(i);
-    constexpr pos_t axlen = board::LEN;
-    const piece_bitboard_t vertical = bitmask::vline << x;
-    piece_bitboard_t up = ~(1ULL << i) & (vertical << y*axlen);
-    up &= bitmask::ones_before_eq_bit(bitmask::lowest_bit(up & occupied));
-    return up;
-  }
-
-  static inline piece_bitboard_t get_bottom_ray(pos_t i, piece_bitboard_t occupied) {
-    const pos_t y = board::_y(i), x = board::_x(i);
-    constexpr pos_t axlen = board::LEN;
-    const piece_bitboard_t vertical = bitmask::vline << x;
-    const piece_bitboard_t up = ~(1ULL << i) & (vertical << y*axlen);
-    piece_bitboard_t down = ~(1ULL << i) & (~up & vertical);
-    down &= bitmask::ones_after_eq_bit(bitmask::highest_bit(down & occupied));
-    return down;
-  }
-
   static inline piece_bitboard_t get_attacking_ray(pos_t i, pos_t j, piece_bitboard_t occupied) {
     const piece_bitboard_t attacked_bit = 1ULL << j;
     const pos_t x_i=board::_x(i), y_i=board::_y(i),
                 x_j=board::_x(j), y_j=board::_y(j);
     if(x_i != x_j && y_i != y_j)return 0x00;
     piece_bitboard_t r = 0x00;;
-    if(x_j < x_i) {
-      r = get_left_ray(i, occupied);
-    } else if(x_i < x_j) {
-      r = get_right_ray(i, occupied);
-    } else if(y_i < y_j) {
-      r = get_top_ray(i, occupied);
-    } else if(y_j < y_i) {
-      r = get_bottom_ray(i, occupied);
+    if(y_i == y_j) {
+      const piece_bitboard_t rankattacks = M42::rank_attacks(i, occupied);
+      const piece_bitboard_t shift = board::LEN * y_i;
+      if(x_j < x_i) {
+        const piece_bitboard_t left = (bitmask::hline >> board::LEN - x_i) << shift;
+        r = rankattacks & left;
+      } else if(x_i < x_j) {
+        const piece_bitboard_t right = ((bitmask::hline << (x_i + 1)) & bitmask::hline) << shift;
+        r = rankattacks & right;
+      }
+    } else if(x_i == x_j) {
+      const piece_bitboard_t fileattacks = M42::file_attacks(i, occupied);
+      if(y_i < y_j) {
+        const piece_bitboard_t tophalf = ~0ULL << board::LEN * (y_i + 1);
+        r = fileattacks & tophalf;
+      } else if(y_j < y_i) {
+        const piece_bitboard_t bottomhalf = ~0ULL >> board::LEN * (board::LEN - y_i);
+        r = fileattacks & bottomhalf;
+      }
     }
     return (r & attacked_bit) ? r : 0x00;
   }
