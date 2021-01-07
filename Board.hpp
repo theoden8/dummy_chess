@@ -11,6 +11,7 @@
 // board view of the game
 class Board {
 private:
+  static bool m42_initialized;
   Board &self = *this;
   std::array <pos_t, board::SIZE> board_;
   COLOR activePlayer_;
@@ -34,6 +35,11 @@ public:
     enpassant_(f.enpassant),
     halfmoves_(f.halfmove_clock)
   {
+    if(!m42_initialized) {
+      std::cout << "init" << std::endl;
+      M42::init();
+      m42_initialized = true;
+    }
     for(pos_t i = 0; i < board::SIZE; ++i) {
       set_pos(i, get_piece(EMPTY, NEUTRAL));
     }
@@ -581,3 +587,4 @@ public:
     }
   }
 };
+bool Board::m42_initialized = false;

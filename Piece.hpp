@@ -55,9 +55,9 @@ struct Piece {
   // attack from specific position by this type of piece
   inline constexpr piece_bitboard_t get_attack(pos_t pos, piece_bitboard_t friends, piece_bitboard_t foes) const {
     const MPIECE mp = get_mpiece_value(value, color);
-    if(mp==WPAWNM) return Attacks<WPAWNM>::get_attacks(pos,friends,foes);
-    if(mp==BPAWNM) return Attacks<BPAWNM>::get_attacks(pos,friends,foes);
-    if(mp==KNIGHTM)return Attacks<KNIGHTM>::get_attacks(pos,friends,foes);
+    if(mp==WPAWNM) return Attacks<WPAWNM>::get_attacks(pos);
+    if(mp==BPAWNM) return Attacks<BPAWNM>::get_attacks(pos);
+    if(mp==KNIGHTM)return Attacks<KNIGHTM>::get_attacks(pos);
     if(mp==BISHOPM)return Attacks<BISHOPM>::get_attacks(pos,friends,foes);
     if(mp==ROOKM)  return Attacks<ROOKM>::get_attacks(pos,friends,foes);
     if(mp==QUEENM) return Attacks<QUEENM>::get_attacks(pos,friends,foes);
@@ -101,8 +101,8 @@ struct Piece {
   // multi-attacks
   inline constexpr piece_bitboard_t get_attacks(piece_bitboard_t friends, piece_bitboard_t foes) const {
     const MPIECE mp = get_mpiece_value(value, color);
-    if(mp==WPAWNM) return MultiAttacks<WPAWNM>::get_attacks(mask,friends,foes);
-    if(mp==BPAWNM) return MultiAttacks<BPAWNM>::get_attacks(mask,friends,foes);
+    if(mp==WPAWNM) return MultiAttacks<WPAWNM>::get_attacks(mask);
+    if(mp==BPAWNM) return MultiAttacks<BPAWNM>::get_attacks(mask);
     if(mp==KNIGHTM)return MultiAttacks<KNIGHTM>::get_attacks(mask,friends,foes);
     if(mp==BISHOPM)return MultiAttacks<BISHOPM>::get_attacks(mask,friends,foes);
     if(mp==ROOKM)  return MultiAttacks<ROOKM>::get_attacks(mask,friends,foes);

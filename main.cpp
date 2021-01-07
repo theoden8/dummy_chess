@@ -11,7 +11,7 @@ int main() {
   constexpr auto colorT = BLACK;
   b.get_piece(pieceT, colorT).foreach([&](pos_t pos) mutable -> void {
     printf("black knight pos: %hhu\n", pos);
-    piece_bitboard_t attacks = Attacks<get_mpiece<pieceT, colorT>>::get_basic(pos);
+    piece_bitboard_t attacks = Attacks<get_mpiece<pieceT, colorT>>::get_attacks(pos);
     bitmask::print_mask(attacks, pos);
   });
   {
