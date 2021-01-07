@@ -283,6 +283,10 @@ struct Interface {
       move(top,LEFT);
       for(size_t c=0;c<turn_length;++c)addch(' ');
     }
+    if(pgn.ending.length() > 0) {
+      move(top, LEFT + turn_length / 2 - pgn.ending.length() / 2);
+      addstr(pgn.ending.c_str());
+    }
   }
 
   void display() {

@@ -469,12 +469,12 @@ template <> struct Attacks<KINGM> {
   }
 
   static inline constexpr piece_bitboard_t get_basic(pos_t i) {
-    piece_bitboard_t left =  (0x4ULL<<0) | (0x4ULL<<8) | (0x4ULL<<16);
-    piece_bitboard_t right = (0x1ULL<<0) | (0x1ULL<<8) | (0x1ULL<<16);
+    constexpr piece_bitboard_t left = (0x1ULL<<0) | (0x1ULL<<8) | (0x1ULL<<16);
+    constexpr piece_bitboard_t right =  (0x4ULL<<0) | (0x4ULL<<8) | (0x4ULL<<16);
     constexpr piece_bitboard_t mid = (0x2ULL<<0) | (0x2ULL<<16);
-    if(board::_x(i)==A)left = 0x00;
-    else if(board::_x(i)==H)right=0x00;
-    const piece_bitboard_t mask = left|mid|right;
+    piece_bitboard_t mask = left|mid|right;
+    if(board::_x(i)==A)mask|=left;
+    if(board::_x(i)==H)mask|=right;
     constexpr pos_t offset = 8+2-1;
     if(i <= offset)return mask >> (offset - i);
     return mask << (i - offset);

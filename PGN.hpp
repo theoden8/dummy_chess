@@ -14,6 +14,7 @@ struct PGN {
   Board &board;
   size_t cur_ply = 0;
   std::vector<std::string> ply;
+  std::string ending = "";
 
   PGN(Board &board):
     board(board)
@@ -97,11 +98,17 @@ struct PGN {
     write_event(ev);
     board.act_event(ev);
     const COLOR c = board.activePlayer();
-    bool checkmate = true;
-    for(const auto &m : board.state_moves)if(m){checkmate=false;break;}
+    bool canmove = false;
+    for(const auto &m : board.state_moves)if(m){canmove=true;break;}
     const pos_t no_checks = board.state_attacks_count[enemy_of(c)][board.get_king_pos(c)];
-    if(checkmate) {
+    ending = "";
+    if(!canmove && no_checks == 0) {
+      ending = "1/2 - 1/2 (stalemate)";
+    } else if(board.halfmoves_ == 50) {
+      ending = "1/2 - 1/2 (50 moves)";
+    } else if(!canmove && no_checks > 0) {
       ply.back() += '#';
+      ending = (c == WHITE) ? "1-0"s : "0-1"s;
     } else if(no_checks > 0) {
       ply.back()+='+';
       if(no_checks>1)ply.back()+='+';
@@ -112,6 +119,7 @@ struct PGN {
     if(cur_ply != 0) {
       --cur_ply;
       ply.pop_back();
+      ending = ""s;
     }
   }
 };
