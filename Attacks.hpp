@@ -205,7 +205,6 @@ template <> struct Moves<KNIGHTM> {
 };
 
 // bishop attacks
-std::array<piece_bitboard_t, board::SIZE> bishopattacks = {0x0ULL};
 std::array<piece_bitboard_t, board::LEN - 1> leftquadrants = {0x0ULL};
 std::array<piece_bitboard_t, board::LEN - 1> bottomquadrants = {0x0ULL};
 template <> struct Attacks<BISHOPM> {
@@ -215,36 +214,24 @@ template <> struct Attacks<BISHOPM> {
     return M42::bishop_attacks(i, occupied);
   }
 
-  static inline piece_bitboard_t get_topleft_ray(int i, piece_bitboard_t occupied) {
+  static inline piece_bitboard_t get_topleft_ray(int i, piece_bitboard_t diags) {
     const pos_t x = board::_x(i), y = board::_y(i);
-    const piece_bitboard_t diags = Attacks<BISHOPM>::get_basic(i);
-    piece_bitboard_t top_left = diags & get_top_quadrant(y) & get_left_quadrant(x);
-    top_left &= bitmask::ones_before_eq_bit(bitmask::lowest_bit(top_left & occupied));
-    return top_left;
+    return diags & get_top_quadrant(y) & get_left_quadrant(x);
   }
 
-  static inline piece_bitboard_t get_topright_ray(int i, piece_bitboard_t occupied) {
+  static inline piece_bitboard_t get_topright_ray(int i, piece_bitboard_t diags) {
     const pos_t x = board::_x(i), y = board::_y(i);
-    const piece_bitboard_t diags = Attacks<BISHOPM>::get_basic(i);
-    piece_bitboard_t top_right = diags & get_top_quadrant(y) & get_right_quadrant(x);
-    top_right &= bitmask::ones_before_eq_bit(bitmask::lowest_bit(top_right & occupied));
-    return top_right;
+    return diags & get_top_quadrant(y) & get_right_quadrant(x);
   }
 
-  static inline piece_bitboard_t get_bottomleft_ray(int i, piece_bitboard_t occupied) {
+  static inline piece_bitboard_t get_bottomleft_ray(int i, piece_bitboard_t diags) {
     const pos_t x = board::_x(i), y = board::_y(i);
-    const piece_bitboard_t diags = Attacks<BISHOPM>::get_basic(i);
-    piece_bitboard_t bottom_left = diags & get_bottom_quadrant(y) & get_left_quadrant(x);
-    bottom_left &= bitmask::ones_after_eq_bit(bitmask::highest_bit(bottom_left & occupied));
-    return bottom_left;
+    return diags & get_bottom_quadrant(y) & get_left_quadrant(x);
   }
 
-  static inline piece_bitboard_t get_bottomright_ray(int i, piece_bitboard_t occupied) {
+  static inline piece_bitboard_t get_bottomright_ray(int i, piece_bitboard_t diags) {
     const pos_t x = board::_x(i), y = board::_y(i);
-    const piece_bitboard_t diags = Attacks<BISHOPM>::get_basic(i);
-    piece_bitboard_t bottom_right = diags & get_bottom_quadrant(y) & get_right_quadrant(x);
-    bottom_right &= bitmask::ones_after_eq_bit(bitmask::highest_bit(bottom_right & occupied));
-    return bottom_right;
+    return diags & get_bottom_quadrant(y) & get_right_quadrant(x);
   }
 
   static inline piece_bitboard_t get_left_quadrant(int x) {
@@ -278,34 +265,18 @@ template <> struct Attacks<BISHOPM> {
     const piece_bitboard_t attacked_bit = 1ULL << j;
     const pos_t x_i=board::_x(i), y_i=board::_y(i),
                 x_j=board::_x(j), y_j=board::_y(j);
+    const piece_bitboard_t diags = M42::bishop_attacks(i, occupied);
     piece_bitboard_t r = 0x00;
     if(x_j < x_i && y_i < y_j) {
-      r = get_topleft_ray(i, occupied);
+      r = get_topleft_ray(i, diags);
     } else if(x_i < x_j && y_i < y_j) {
-      r = get_topright_ray(i, occupied);
+      r = get_topright_ray(i, diags);
     } else if(x_j < x_i && y_j < y_i) {
-      r = get_bottomleft_ray(i, occupied);
+      r = get_bottomleft_ray(i, diags);
     } else if(x_i < x_j && y_j < y_i) {
-      r = get_bottomright_ray(i, occupied);
+      r = get_bottomright_ray(i, diags);
     }
     return (r & attacked_bit) ? r : 0x00;
-  }
-
-
-  static inline piece_bitboard_t get_basic(pos_t i) {
-    if(bishopattacks[i])return bishopattacks[i];
-    piece_bitboard_t mask = 0x00;
-    const pos_t step1 = board::LEN + 1;
-    const pos_t step2 = board::LEN - 1;
-    int d = i;
-    const pos_t x=board::_x(i), y=board::_y(i);
-    while(d-step1>0){d-=step1;if(board::_x(d)>x)break;mask|=1ULL<<d;} d=i;
-    while(d-step2>0){d-=step2;if(board::_x(d)<x)break;mask|=1ULL<<d;} d=i;
-    while(d+step1<board::SIZE){d+=step1;if(board::_x(d)<x)break;mask|=1ULL<<d;} d=i;
-    while(d+step2<board::SIZE){d+=step2;if(board::_x(d)>x)break;mask|=1ULL<<d;} d=i;
-    mask &= ~(1ULL << i);
-    bishopattacks[i] = mask;
-    return mask;
   }
 };
 
