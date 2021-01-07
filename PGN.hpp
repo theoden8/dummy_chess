@@ -75,7 +75,7 @@ struct PGN {
           pos_t i = event::extract_byte(ev);
           pos_t j = event::extract_byte(ev);
           pos_t killwhat = event::extract_byte(ev);
-          auto castlings_ = event::extract_castlings(ev);
+          auto special_flags = event::extract_byte(ev);
           auto enpassant_ = event::extract_byte(ev);
           auto enpassant_trace = event::extract_byte(ev);
           pos_t becomewhat = event::extract_byte(ev);

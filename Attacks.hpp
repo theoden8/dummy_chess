@@ -217,7 +217,7 @@ template <> struct Attacks <KNIGHTM> {
   static inline piece_bitboard_t get_basic(pos_t i) {
     // memoized attacks
     if(knightattacks[i] != 0x00)return knightattacks[i];
-    piece_bitboard_t I = 1ULL << i;
+    const piece_bitboard_t I = 1ULL << i;
     bool not_a = board::_x(i) != A;
     bool not_ab = not_a && board::_x(i) != B;
     bool not_h = board::_x(i) != H;
@@ -241,12 +241,12 @@ template <> struct Attacks <KNIGHTM> {
 template <> struct MultiAttacks<KNIGHTM> {
   static inline constexpr piece_bitboard_t get_attacks(piece_bitboard_t knights, piece_bitboard_t friends, piece_bitboard_t foes) {
     using U64 = piece_bitboard_t;
-    U64 l1 = (knights >> 1) & UINT64_C(0x7f7f7f7f7f7f7f7f);
-    U64 l2 = (knights >> 2) & UINT64_C(0x3f3f3f3f3f3f3f3f);
-    U64 r1 = (knights << 1) & UINT64_C(0xfefefefefefefefe);
-    U64 r2 = (knights << 2) & UINT64_C(0xfcfcfcfcfcfcfcfc);
-    U64 h1 = l1 | r1;
-    U64 h2 = l2 | r2;
+    const U64 l1 = (knights >> 1) & UINT64_C(0x7f7f7f7f7f7f7f7f);
+    const U64 l2 = (knights >> 2) & UINT64_C(0x3f3f3f3f3f3f3f3f);
+    const U64 r1 = (knights << 1) & UINT64_C(0xfefefefefefefefe);
+    const U64 r2 = (knights << 2) & UINT64_C(0xfcfcfcfcfcfcfcfc);
+    const U64 h1 = l1 | r1;
+    const U64 h2 = l2 | r2;
     return (h1<<16) | (h1>>16) | (h2<<8) | (h2>>8);
   }
 };
@@ -323,9 +323,9 @@ template <> struct Attacks<BISHOPM> {
 
 
   static inline piece_bitboard_t get_attacking_ray(pos_t i, pos_t j, piece_bitboard_t occupied) {
-    piece_bitboard_t attacked_bit = 1ULL << j;
-    pos_t x_i=board::_x(i), y_i=board::_y(i),
-          x_j=board::_x(j), y_j=board::_y(j);
+    const piece_bitboard_t attacked_bit = 1ULL << j;
+    const pos_t x_i=board::_x(i), y_i=board::_y(i),
+                x_j=board::_x(j), y_j=board::_y(j);
     piece_bitboard_t r = 0x00;
     if(x_j < x_i && y_i < y_j) {
       r = get_topleft_ray(i, occupied);
@@ -343,9 +343,10 @@ template <> struct Attacks<BISHOPM> {
   static inline piece_bitboard_t get_basic(pos_t i) {
     if(bishopattacks[i])return bishopattacks[i];
     piece_bitboard_t mask = 0x00;
-    pos_t step1 = board::LEN + 1;
-    pos_t step2 = board::LEN - 1;
-    int d = i; pos_t x=board::_x(i), y=board::_y(i);
+    const pos_t step1 = board::LEN + 1;
+    const pos_t step2 = board::LEN - 1;
+    int d = i;
+    const pos_t x=board::_x(i), y=board::_y(i);
     while(d-step1>0){d-=step1;if(board::_x(d)>x)break;mask|=1ULL<<d;} d=i;
     while(d-step2>0){d-=step2;if(board::_x(d)<x)break;mask|=1ULL<<d;} d=i;
     while(d+step1<board::SIZE){d+=step1;if(board::_x(d)<x)break;mask|=1ULL<<d;} d=i;
@@ -360,7 +361,7 @@ template <> struct Attacks<BISHOPM> {
 template <> struct Attacks<ROOKM> {
   static inline piece_bitboard_t get_attacks(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes) {
     // enemy king's line of attack is currently handled on the board level
-    piece_bitboard_t occupied = friends | foes;
+    const piece_bitboard_t occupied = friends | foes;
     return get_left_ray(i,occupied)|get_right_ray(i,occupied)|get_top_ray(i,occupied)|get_bottom_ray(i,occupied);
   }
 
@@ -408,9 +409,9 @@ template <> struct Attacks<ROOKM> {
   }
 
   static inline piece_bitboard_t get_attacking_ray(pos_t i, pos_t j, piece_bitboard_t occupied) {
-    piece_bitboard_t attacked_bit = 1ULL << j;
-    pos_t x_i=board::_x(i), y_i=board::_y(i),
-          x_j=board::_x(j), y_j=board::_y(j);
+    const piece_bitboard_t attacked_bit = 1ULL << j;
+    const pos_t x_i=board::_x(i), y_i=board::_y(i),
+                x_j=board::_x(j), y_j=board::_y(j);
     if(x_i != x_j && y_i != y_j)return 0x00;
     piece_bitboard_t r = 0x00;;
     if(x_j < x_i) {

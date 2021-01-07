@@ -18,6 +18,7 @@ private:
 public:
   piece_bitboard_t castlings_ = 0x44ULL | 0x44ULL << (board::SIZE - board::LEN);
   pos_t enpassant_ = event::enpassantnotrace;
+  pos_t halfmoves_ = 0;
   std::array<Piece, 2*6+1>  pieces = {
     Piece(PAWN, WHITE), Piece(PAWN, BLACK),
     Piece(KNIGHT, WHITE), Piece(KNIGHT, BLACK),
@@ -30,7 +31,8 @@ public:
   Board(const fen::FEN f=fen::promotion_test_pos):
     activePlayer_(f.active_player),
     castlings_(event::decompress_castlings(f.castling_compressed)),
-    enpassant_(f.enpassant)
+    enpassant_(f.enpassant),
+    halfmoves_(f.halfmove_clock)
   {
     for(pos_t i = 0; i < board::SIZE; ++i) {
       set_pos(i, get_piece(EMPTY, NEUTRAL));
@@ -112,7 +114,7 @@ public:
   }
 
   inline bool is_castling_move(pos_t i, pos_t j) const {
-    j&=63;
+    assert(j <= board::MOVEMASK);
     if(self[i].value != KING)return false;
     if(self[i].color == WHITE)return Moves<KINGM>::is_castling_move<WHITE>(i, j);
     if(self[i].color == BLACK)return Moves<KINGM>::is_castling_move<BLACK>(i, j);
@@ -120,7 +122,7 @@ public:
   }
 
   inline bool is_enpassant_move(pos_t i, pos_t j) const {
-    j&=63;
+    assert(j <= board::MOVEMASK);
     if(self[i].value != PAWN)return false;
     if(self[i].color == WHITE)return Moves<WPAWNM>::is_enpassant_move(i, j);
     if(self[i].color == BLACK)return Moves<BPAWNM>::is_enpassant_move(i, j);
@@ -128,7 +130,7 @@ public:
   }
 
   inline bool is_promotion_move(pos_t i, pos_t j) const {
-    j&=63;
+    assert(j <= board::MOVEMASK);
     if(self[i].value != PAWN)return false;
     if(self[i].color == WHITE)return Moves<WPAWNM>::is_promotion_move(i, j);
     if(self[i].color == BLACK)return Moves<BPAWNM>::is_promotion_move(i, j);
@@ -136,12 +138,13 @@ public:
   }
 
   void move_pos(pos_t i, pos_t j) {
+    assert(j <= board::MOVEMASK);
     put_pos(j, self[i]);
     unset_pos(i);
   }
 
   event_t ev_basic(pos_t i, pos_t j) const {
-    j &= 63;
+    assert(j <= board::MOVEMASK);
     assert(!self[i].is_empty());
     pos_t killwhat = event::killnothing;
     pos_t enpassant_trace = event::enpassantnotrace;
@@ -152,22 +155,22 @@ public:
       if(self[i].color==WHITE)enpassant_trace=Moves<WPAWNM>::get_enpassant_trace(i,j);
       if(self[i].color==BLACK)enpassant_trace=Moves<BPAWNM>::get_enpassant_trace(i,j);
     }
-    return event::basic(i, j, killwhat, castlings_, enpassant_, enpassant_trace);
+    return event::basic(i, j, killwhat, castlings_, halfmoves_, enpassant_, enpassant_trace);
   }
 
   event_t ev_castle(pos_t i, pos_t j) const {
-    j&=63;
+    assert(j <= board::MOVEMASK);
     pos_pair_t rookmove = 0x00;
     if(self[i].color == WHITE)rookmove = Moves<KINGM>::castle_rook_move<WHITE>(i,j);
     if(self[i].color == BLACK)rookmove = Moves<KINGM>::castle_rook_move<BLACK>(i,j);
     pos_t r_i = bitmask::first(rookmove),
           r_j = bitmask::second(rookmove);
-    return event::castling(i, j, r_i, r_j, castlings_, enpassant_);
+    return event::castling(i, j, r_i, r_j, castlings_, halfmoves_, enpassant_);
   }
 
   event_t ev_take_enpassant(pos_t i, pos_t j) const {
-    j&=63;
-    return event::enpassant(i, j, enpassant_pawn(), castlings_, enpassant_);
+    assert(j <= board::MOVEMASK);
+    return event::enpassant(i, j, enpassant_pawn(), castlings_, halfmoves_, enpassant_);
   }
 
   pos_t enpassant_pawn() const {
@@ -177,17 +180,18 @@ public:
   }
 
   PIECE get_promotion_as(pos_t j) const {
-    switch(j >> 6) {
-      case 0:return KNIGHT;
-      case 1:return BISHOP;
-      case 2:return ROOK;
-      case 3:return QUEEN;
+    switch(j & ~board::MOVEMASK) {
+      case board::PROMOTE_KNIGHT:return KNIGHT;
+      case board::PROMOTE_BISHOP:return BISHOP;
+      case board::PROMOTE_ROOK:return ROOK;
+      case board::PROMOTE_QUEEN:return QUEEN;
     }
     return PAWN;
   }
 
   event_t ev_promotion(pos_t i, pos_t j) const {
-    const PIECE p = get_promotion_as(j);
+    const PIECE p = get_promotion_as(j & ~board::MOVEMASK);
+    j &= board::MOVEMASK;
     return event::promotion_from_basic(ev_basic(i, j), int(p) * int(NO_COLORS) + int(activePlayer()));
   }
 
@@ -212,17 +216,20 @@ public:
   void act_event(event_t ev) {
     history.push_back(ev);
     pos_t marker = event::extract_byte(ev);
-    assert(event::decompress_castlings(event::compress_castlings(castlings_)) == castlings_);
+    assert(event::decompress_castlings(event::compress_special_flags(castlings_, halfmoves_)) == castlings_);
+    assert(event::decompress_halfmoves(event::compress_special_flags(castlings_, halfmoves_)) == halfmoves_);
     switch(marker) {
       case event::BASIC_MARKER:
         {
           const pos_t i = event::extract_byte(ev);
           const pos_t j = event::extract_byte(ev);
-          auto killwhat = event::extract_byte(ev);
-          auto castlings_ = event::extract_castlings(ev);
+          const pos_t killwhat = event::extract_byte(ev);
+          auto special_flags = event::extract_byte(ev);
           auto enpassant_old = event::extract_byte(ev);
           auto enpassant_trace = event::extract_byte(ev);
           enpassant_ = enpassant_trace;
+          if(killwhat == event::killnothing)++halfmoves_;
+          else halfmoves_ = 0;
           update_castlings(i);
           move_pos(i, j);
         }
@@ -233,8 +240,9 @@ public:
           const pos_t j = event::extract_byte(ev);
           const pos_t r_i = event::extract_byte(ev);
           const pos_t r_j = event::extract_byte(ev);
-          auto castlings_ = event::extract_castlings(ev);
+          auto special_flags = event::extract_byte(ev);
           auto enpassant_ = event::extract_byte(ev);
+          ++halfmoves_;
           update_castlings(i);
           move_pos(i, j);
           move_pos(r_i, r_j);
@@ -246,11 +254,12 @@ public:
           const pos_t i = event::extract_byte(ev);
           const pos_t j = event::extract_byte(ev);
           const pos_t killwhere = event::extract_byte(ev);
-          auto castlings_ = event::decompress_castlings(event::extract_byte(ev));
+          auto special_flags = event::extract_byte(ev);
           auto enpassant_ = event::extract_byte(ev);
           put_pos(killwhere, self.get_piece(EMPTY));
           move_pos(i, j);
           reset_enpassants();
+          halfmoves_ = 0;
         }
       break;
       case event::PROMOTION_MARKER:
@@ -258,13 +267,14 @@ public:
           const pos_t i = event::extract_byte(ev);
           const pos_t j = event::extract_byte(ev);
           const pos_t killwhat = event::extract_byte(ev);
-          auto castlings_ = event::extract_castlings(ev);
+          auto special_flags = event::extract_byte(ev);
           auto enpassant_ = event::extract_byte(ev);
           auto enpassant_trace = event::extract_byte(ev);
           const pos_t becomewhat = event::extract_byte(ev);
           put_pos(i, self.get_piece(EMPTY));
           put_pos(j, self.pieces[becomewhat]);
           reset_enpassants();
+          halfmoves_ = 0;
         }
       break;
     }
@@ -287,7 +297,9 @@ public:
           const pos_t i = event::extract_byte(ev);
           const pos_t j = event::extract_byte(ev);
           const pos_t killwhat = event::extract_byte(ev);
-          castlings_ = event::extract_castlings(ev);
+          auto special_flags = event::extract_byte(ev);
+          castlings_ = event::decompress_castlings(special_flags);
+          halfmoves_ = event::decompress_halfmoves(special_flags);
           move_pos(j, i);
           if(killwhat != event::killnothing) {
             put_pos(j, self.pieces[killwhat]);
@@ -302,7 +314,9 @@ public:
           const pos_t j = event::extract_byte(ev);
           const pos_t r_i = event::extract_byte(ev);
           const pos_t r_j = event::extract_byte(ev);
-          castlings_ = event::extract_castlings(ev);
+          auto special_flags = event::extract_byte(ev);
+          castlings_ = event::decompress_castlings(special_flags);
+          halfmoves_ = event::decompress_halfmoves(special_flags);
           enpassant_ = event::extract_byte(ev);
           move_pos(j, i);
           move_pos(r_j, r_i);
@@ -313,7 +327,9 @@ public:
           const pos_t i = event::extract_byte(ev);
           const pos_t j = event::extract_byte(ev);
           const pos_t killwhere = event::extract_byte(ev);
-          castlings_ = event::decompress_castlings(event::extract_byte(ev));
+          auto special_flags = event::extract_byte(ev);
+          castlings_ = event::decompress_castlings(special_flags);
+          halfmoves_ = event::decompress_halfmoves(special_flags);
           enpassant_ = event::extract_byte(ev);
           put_pos(killwhere, self.get_piece(PAWN, enemy_of(self[j].color)));
           move_pos(j, i);
@@ -325,7 +341,9 @@ public:
           const pos_t i = event::extract_byte(ev);
           const pos_t j = event::extract_byte(ev);
           const pos_t killwhat = event::extract_byte(ev);
-          castlings_ = event::extract_castlings(ev);
+          auto special_flags = event::extract_byte(ev);
+          castlings_ = event::decompress_castlings(special_flags);
+          halfmoves_ = event::decompress_halfmoves(special_flags);
           enpassant_ = event::extract_byte(ev);
           auto enpassant_trace = event::extract_byte(ev);
           auto becomewhat = event::extract_byte(ev);
@@ -346,15 +364,17 @@ public:
   }
 
   event_t get_move_event(pos_t i, pos_t j) const {
-    event_t ev = 0x00;
+    event_t ev;
+    const pos_t promote_as = j & ~board::MOVEMASK;
+    j &= board::MOVEMASK;
     if(is_castling_move(i, j)) {
-      ev = ev_castle(i, j&63);
-    } else if(self[i].value == PAWN && (j&63) == enpassant_) {
-      ev = ev_take_enpassant(i, j&63);
+      ev = ev_castle(i, j);
+    } else if(self[i].value == PAWN && j == enpassant_) {
+      ev = ev_take_enpassant(i, j);
     } else if(is_promotion_move(i, j)) {
-      ev = ev_promotion(i, j);
+      ev = ev_promotion(i, j | promote_as);
     } else {
-      ev = ev_basic(i, j);
+      ev = ev_basic(i, j & board::MOVEMASK);
     }
     return ev;
   }
@@ -452,31 +472,30 @@ public:
   std::vector<piece_bitboard_t> state_pins_rays[NO_COLORS];
   std::vector<pos_t> state_pins_attackers[NO_COLORS];
   void update_state_pins() {
-    for(COLOR c : {WHITE, BLACK}) {
-      const pos_t kingpos = get_king_pos(c);
-      const piece_bitboard_t friends = get_piece_positions(c);
+    const COLOR c = activePlayer();
+    const pos_t kingpos = get_king_pos(c);
+    const piece_bitboard_t friends = get_piece_positions(c);
 
-      state_pins[c] = friends & get_attacking_xrays(kingpos, c);
-      state_pins_rays[c].clear();
-      state_pins_attackers[c].clear();
+    state_pins[c] = friends & get_attacking_xrays(kingpos, c);
+    state_pins_rays[c].clear();
+    state_pins_attackers[c].clear();
 
-      pos_t i = 0;
-      bitmask::foreach(state_pins[c], [&](pos_t pin) mutable -> void {
-        piece_bitboard_t res = 0x00;
-        pos_t attacker = 0xFF;
-        iter_attacking_xrays(kingpos, [&](pos_t i, piece_bitboard_t r) mutable -> void {
-          if(r & (1ULL << pin)) {
-            assert(!res);
-            attacker = i;
-            res |= r;
-            res |= 1ULL << attacker;
-          }
-        }, c);
-        state_pins_rays[c].push_back(res);
-        state_pins_attackers[c].push_back(attacker);
-        ++i;
-      });
-    }
+    pos_t i = 0;
+    bitmask::foreach(state_pins[c], [&](pos_t pin) mutable -> void {
+      piece_bitboard_t res = 0x00;
+      pos_t attacker = 0xFF;
+      iter_attacking_xrays(kingpos, [&](pos_t i, piece_bitboard_t r) mutable -> void {
+        if(r & (1ULL << pin)) {
+          assert(!res);
+          attacker = i;
+          res |= r;
+          res |= 1ULL << attacker;
+        }
+      }, c);
+      state_pins_rays[c].push_back(res);
+      state_pins_attackers[c].push_back(attacker);
+      ++i;
+    });
   }
 
   inline piece_bitboard_t get_pins(COLOR c=NEUTRAL) const {

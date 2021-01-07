@@ -64,7 +64,7 @@ namespace fen {
       }
       ++i;
     }
-    f.castling_compressed = event::compress_castlings(castlings);
+    f.castling_compressed = event::compress_special_flags(castlings, 0);
     // skip space
     while(isspace(s[i]))++i;
     // enpassant

@@ -245,7 +245,7 @@ struct Interface {
     //int len = printw("[ %s ]", activePlayer().c_str());
     //int len = printw("[ %s %hhu, (%hhu) %hhu->%hhu ]", activePlayer().c_str(), event::compress_castlings(board.castlings_), marker, from, to);
     //int len = printw("[ %s %llx ]", activePlayer().c_str(), board.state_checkline);
-    int len = printw("[ %s %llx ]", activePlayer().c_str(), board.state_checkline);
+    int len = printw("[ %s %llx %hhu ]", activePlayer().c_str(), board.state_checkline, board.halfmoves_);
     nc_reset_color();
     for(int i = 0; i < 20 - len; ++i)addch(' ');
   }
@@ -343,7 +343,7 @@ struct Interface {
           pos_t pos_to = board::_pos(A+cursor_x, 1+cursor_y);
           auto moves = board.get_moves_from(pos_from);
           if((1ULL << pos_to) & moves && board[pos_from].color == board.activePlayer()) {
-            event_t ev = board.get_move_event(pos_from, pos_to | (3 << 6));
+            event_t ev = board.get_move_event(pos_from, pos_to | board::PROMOTE_QUEEN);
             pgn.handle_event(ev);
             sel_x=-1,sel_y=-1;
           } else {
