@@ -12,11 +12,11 @@
 class Board {
 private:
   static bool m42_initialized;
-  Board &self = *this;
   std::array <pos_t, board::SIZE> board_;
   COLOR activePlayer_;
   std::vector<event_t> history;
 public:
+  Board &self = *this;
   piece_bitboard_t castlings_ = 0x44ULL | 0x44ULL << (board::SIZE - board::LEN);
   pos_t enpassant_ = event::enpassantnotrace;
   pos_t halfmoves_ = 0;
@@ -62,7 +62,7 @@ public:
     update_state_on_event();
   }
 
-  constexpr COLOR activePlayer() const {
+  inline constexpr COLOR activePlayer() const {
     return activePlayer_;
   }
 
@@ -82,25 +82,19 @@ public:
     return pieces[board_[board::_pos(i,j)]];
   }
 
-  const Piece &get_piece(PIECE P = EMPTY, COLOR C = NEUTRAL) const {
-    if(P == EMPTY) {
-      return pieces[13-1];
-    }
-    return pieces[(P - PAWN) * 2 + C - WHITE];
+  inline const Piece &get_piece(PIECE p=EMPTY, COLOR c=NEUTRAL) const {
+    return pieces[Piece::get_piece_index(p, c)];
   }
 
-  constexpr Piece &get_piece(PIECE P = EMPTY, COLOR C = NEUTRAL) {
-    if(P == EMPTY) {
-      return pieces[13-1];
-    }
-    return pieces[(P - PAWN) * 2 + C - WHITE];
+  inline constexpr Piece &get_piece(PIECE p=EMPTY, COLOR c=NEUTRAL) {
+    return pieces[Piece::get_piece_index(p, c)];
   }
 
-  const Piece get_piece(const Piece &p) const {
+  inline const Piece get_piece(const Piece &p) const {
     return get_piece(p.value, p.color);
   }
 
-  constexpr Piece get_piece(Piece &p) {
+  inline constexpr Piece get_piece(Piece &p) {
     return get_piece(p.value, p.color);
   }
 
@@ -186,7 +180,7 @@ public:
     return board::_y(enpassant_) == 3-1 ? board::_pos(A+x, 4) : board::_pos(A+x, 5);
   }
 
-  PIECE get_promotion_as(pos_t j) const {
+  inline PIECE get_promotion_as(pos_t j) const {
     switch(j & ~board::MOVEMASK) {
       case board::PROMOTE_KNIGHT:return KNIGHT;
       case board::PROMOTE_BISHOP:return BISHOP;
@@ -394,13 +388,11 @@ public:
   void update_state_on_event(event_t ev=0x00, bool forward=true) {
     if(forward) {
       update_state_attacks();
-      //update_state_square_attacked_by();
       update_state_pins();
       update_state_checkline();
       update_state_moves();
     } else {
       update_state_attacks();
-      //update_state_square_attacked_by();
       update_state_pins();
       update_state_checkline();
       update_state_moves();
@@ -471,7 +463,7 @@ public:
   }
 
   template <typename F>
-  inline void iter_attacking_xrays(pos_t j, F &&func, COLOR c=NEUTRAL) {
+  inline void iter_attacking_xrays(pos_t j, F &&func, COLOR c=NEUTRAL) const {
     if(c==NEUTRAL)return;
     const piece_bitboard_t dstbit = 1ULL << j;
     const COLOR ec = enemy_of(c);

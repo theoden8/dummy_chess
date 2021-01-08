@@ -53,22 +53,40 @@ public:
     return moves[rand() % moves.size()];
   }
 
+  const double material_pawn = 1,
+               material_knight = 3,
+               material_bishop = 3,
+               material_rook = 5,
+               material_queen = 10,
+               material_king = 1e9;
+
+  double material_of(PIECE p) const {
+    switch(p) {
+      case EMPTY:return 0;
+      case PAWN:return material_pawn;
+      case KNIGHT:return material_knight;
+      case BISHOP:return material_bishop;
+      case ROOK:return material_rook;
+      case QUEEN:return material_queen;
+      case KING:return material_king;
+    }
+    return 0;
+  }
+
   double h_material(COLOR c) const {
-    const double material_pawn = 1,
-                 material_knight = 3,
-                 material_bishop = 3,
-                 material_rook = 5,
-                 material_queen = 10,
-                 material_king = 1e9;
-    return get_piece(PAWN,c).size() * material_pawn
-         + get_piece(KNIGHT,c).size() * material_knight
-         + get_piece(BISHOP,c).size() * material_bishop
-         + get_piece(ROOK,c).size() * material_rook
-         + get_piece(QUEEN,c).size() * material_queen;
+    double m = 0;
+    for(PIECE p : {PAWN,KNIGHT,BISHOP,ROOK,QUEEN}) {
+      m += get_piece(p,c).size() * material_of(p);
+    }
+    return m;
   }
 
   double h_pins(COLOR c) const {
-    return bitmask::count_bits(state_pins[c]);
+    double h = 0;
+    bitmask::foreach(state_pins[enemy_of(c)], [&](pos_t i) mutable -> void {
+      h += material_of(self[i].value);
+    });
+    return h;
   }
 
   double h_attack_cells(COLOR c) const {
@@ -81,7 +99,7 @@ public:
 
   double heuristic_of(COLOR c) const {
     double h = 0;
-    if(is_draw())return 0;
+    if(self.is_draw())return 0;
     bool canmove = false;
     const pos_t no_checks = state_attacks_count[enemy_of(c)][get_king_pos(c)];
     for(const auto &m : state_moves)if(m){canmove=true;break;}
