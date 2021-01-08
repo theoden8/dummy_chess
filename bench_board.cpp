@@ -15,7 +15,9 @@ int main() {
     move_t m = e.get_fixed_depth_move(depth);
     auto stop = system_clock::now();
     long dur = duration_cast<nanoseconds>(stop-start).count();
-    printf("depth=%d, move=%s, time=%.3f\n", depth, board::_pos_str(m).c_str(), 1e-9*dur);
+    double sec = 1e-9*dur;
+    double ndssec = double(e.nodes_searched)/sec;
+    printf("depth=%d, move=%s, time=%.3f\t%.3f kN/sec\n", depth, board::_pos_str(m).c_str(), sec, ndssec/1e3);
   }
   return 0;
 }

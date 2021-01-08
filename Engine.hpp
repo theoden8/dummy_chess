@@ -116,7 +116,7 @@ public:
     return heuristic_of(c) - heuristic_of(enemy_of(c));
   }
 
-  void _get_fixed_depth_move(COLOR c, pos_t depth, double &alpha, move_t &m) {
+  void _get_fixed_depth_move(COLOR c, pos_t depth, double &alpha, move_t &m, size_t &nodes) {
     iter_moves([&](pos_t i, pos_t j) mutable -> void {
       event_t ev = get_move_event(i, j);
       act_event(ev);
@@ -126,9 +126,10 @@ public:
           alpha = h;
           m = bitmask::_pos_pair(i, j);
         }
+        ++nodes;
       } else {
         double cur_alpha = alpha;
-        _get_fixed_depth_move(c, depth - 1, alpha, m);
+        _get_fixed_depth_move(c, depth - 1, alpha, m, nodes);
         if(cur_alpha < alpha) {
           m = bitmask::_pos_pair(i, j);
           cur_alpha = alpha;
@@ -138,10 +139,12 @@ public:
     });
   }
 
+  size_t nodes_searched = 0;
   move_t get_fixed_depth_move(pos_t depth=1) {
     move_t m = board::nomove;
     double alpha = -1e9;
-    _get_fixed_depth_move(activePlayer(), depth, alpha, m);
+    nodes_searched = 0;
+    _get_fixed_depth_move(activePlayer(), depth, alpha, m, nodes_searched);
     return m;
   }
 };

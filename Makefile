@@ -1,5 +1,5 @@
 DBGFLAGS = -g3
-OPTFLAGS = -Ofast -DNDEBUG -flto -fwhole-program
+OPTFLAGS = -Ofast -DNDEBUG -flto -fwhole-program -march=native
 CXXFLAGS = -std=c++17 -I. -Wall -Wextra -Wno-unused -Wno-parentheses -m64
 # CXXFLAGS += -fopt-info
 LDFLAGS =
