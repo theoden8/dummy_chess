@@ -42,29 +42,20 @@ inline constexpr MPIECE get_mpiece_value(PIECE p, COLOR c) {
 
 template <MPIECE MP> struct Attacks;
 
-template <MPIECE MP> struct xRayAttacks {
-  static inline piece_bitboard_t get_attacking_xray(pos_t i, pos_t j, piece_bitboard_t friends, piece_bitboard_t foes) {
-    const piece_bitboard_t blockers = Attacks<MP>::get_attacks(i, friends, foes) & foes;
-    const piece_bitboard_t occupied = friends | (foes ^ blockers);
-    return Attacks<MP>::get_attacking_ray(i, j, occupied);
-  }
-};
-
 // attack mask from multiple pieces of the kind at once
 template <MPIECE MP> struct MultiAttacks {
-  static constexpr piece_bitboard_t get_attacks(piece_bitboard_t mask, piece_bitboard_t friends, piece_bitboard_t foes) {
-    piece_bitboard_t res = 0x00;
+  static constexpr piece_bitboard_t get_attacks(piece_bitboard_t mask, piece_bitboard_t occupied) {
+    piece_bitboard_t ret = 0x00;
     bitmask::foreach(mask, [&](pos_t pos) mutable noexcept -> void {
-      res |= Attacks<MP>::get_attacks(pos, friends, foes);
+      ret |= Attacks<MP>::get_attacks(pos, occupied);
     });
-    return res;
+    return ret;
   }
 };
 
 template <MPIECE MP> struct Moves {
   static constexpr piece_bitboard_t get_moves(piece_bitboard_t mask, piece_bitboard_t friends, piece_bitboard_t foes) {
-    // knights, rooks, bishops and queens, no pins/checks considerations
-    return Attacks<MP>::get_attacks(mask, friends, foes) & ~friends;
+    return Attacks<MP>::get_attacks(mask, friends|foes) & ~friends;
   }
 };
 
@@ -145,10 +136,10 @@ struct Moves<WPAWNM> {
 
   static constexpr piece_bitboard_t get_basic_move(pos_t i) {
     const piece_bitboard_t maskpos = 1ULL << i;
-    constexpr pos_t step = board::LEN;
-    piece_bitboard_t mask = 0x00;
-    mask |= maskpos<<step;
-    if(1+board::_y(i) == 2)mask|=maskpos<<(2*step);
+    piece_bitboard_t mask = maskpos<<board::LEN;
+    if(1+board::_y(i) == 2) {
+      mask|=maskpos<<(2*board::LEN);
+    }
     return mask;
   }
 };
@@ -173,11 +164,11 @@ struct Moves<BPAWNM> {
   }
 
   static constexpr piece_bitboard_t get_basic_move(pos_t i) {
-    constexpr pos_t step = board::LEN;
     const piece_bitboard_t maskpos = 1ULL << i;
-    piece_bitboard_t mask = 0x00;
-    mask |= maskpos>>step;
-    if(1+board::_y(i) == 7)mask|=maskpos>>(2*step);
+    piece_bitboard_t mask = maskpos>>board::LEN;
+    if(1+board::_y(i) == 7) {
+      mask|=maskpos>>(2*board::LEN);
+    }
     return mask;
   }
 };
@@ -192,7 +183,7 @@ template <> struct Attacks <KNIGHTM> {
 };
 
 template <> struct MultiAttacks<KNIGHTM> {
-  static inline piece_bitboard_t get_attacks(piece_bitboard_t knights, piece_bitboard_t friends, piece_bitboard_t foes) {
+  static inline piece_bitboard_t get_attacks(piece_bitboard_t knights) {
     return M42::calc_knight_attacks(knights);
   }
 };
@@ -206,9 +197,7 @@ template <> struct Moves<KNIGHTM> {
 
 // bishop attacks
 template <> struct Attacks<BISHOPM> {
-  static inline piece_bitboard_t get_attacks(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes) {
-    // enemy king's line of attack is currently handled on the board level
-    const piece_bitboard_t occupied = friends | foes;
+  static inline piece_bitboard_t get_attacks(pos_t i, piece_bitboard_t occupied) {
     return M42::bishop_attacks(i, occupied);
   }
 
@@ -238,7 +227,7 @@ template <> struct Attacks<BISHOPM> {
   }
 };
 
-// seg-fault
+// seg-fault: takes one bishop coordinate
 //template <> struct MultiAttacks<BISHOPM> {
 //  static piece_bitboard_t get_attacks(piece_bitboard_t mask, piece_bitboard_t friends, piece_bitboard_t foes) {
 //    return M42::calc_bishop_attacks(mask, friends | foes);
@@ -247,9 +236,7 @@ template <> struct Attacks<BISHOPM> {
 
 // rook attacks
 template <> struct Attacks<ROOKM> {
-  static inline piece_bitboard_t get_attacks(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes) {
-    // enemy king's line of attack is currently handled on the board level
-    const piece_bitboard_t occupied = friends | foes;
+  static inline piece_bitboard_t get_attacks(pos_t i, piece_bitboard_t occupied) {
     return M42::rook_attacks(i, occupied);
   }
 
@@ -289,7 +276,7 @@ template <> struct Attacks<ROOKM> {
   }
 };
 
-// seg-fault
+// seg-fault: takes one rook coordinate
 //template <> struct MultiAttacks<ROOKM> {
 //  static piece_bitboard_t get_attacks(piece_bitboard_t mask, piece_bitboard_t friends, piece_bitboard_t foes) {
 //    return M42::calc_rook_attacks(mask, friends | foes);
@@ -298,9 +285,9 @@ template <> struct Attacks<ROOKM> {
 
 // queen attacks
 template <> struct Attacks<QUEENM> {
-  static inline piece_bitboard_t get_attacks(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes) {
-    return Attacks<BISHOPM>::get_attacks(i, friends, foes)
-         | Attacks<ROOKM>::get_attacks(i, friends, foes);
+  static inline piece_bitboard_t get_attacks(pos_t i, piece_bitboard_t occupied) {
+    return Attacks<BISHOPM>::get_attacks(i, occupied)
+         | Attacks<ROOKM>::get_attacks(i, occupied);
   }
 
   static inline piece_bitboard_t get_attacking_ray(pos_t i, pos_t j, piece_bitboard_t occupied) {
@@ -314,31 +301,17 @@ template <> struct Attacks<QUEENM> {
 
 template <> struct MultiAttacks<QUEENM> {
   // make use of bishops'/rooks' optimizations
-  static piece_bitboard_t get_attacks(piece_bitboard_t mask, piece_bitboard_t friends, piece_bitboard_t foes) {
-    return MultiAttacks<BISHOPM>::get_attacks(mask, friends, foes)
-         | MultiAttacks<ROOKM>::get_attacks(mask, friends, foes);
+  static piece_bitboard_t get_attacks(piece_bitboard_t mask, piece_bitboard_t occupied) {
+    return MultiAttacks<BISHOPM>::get_attacks(mask, occupied)
+         | MultiAttacks<ROOKM>::get_attacks(mask, occupied);
   }
 };
 
 // king attacks
 template <> struct Attacks<KINGM> {
-  static inline piece_bitboard_t get_attacks(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes) {
+  static inline piece_bitboard_t get_attacks(pos_t i, piece_bitboard_t occupied) {
     return M42::king_attacks(i);
   }
-
-  static inline constexpr piece_bitboard_t get_basic(pos_t i) {
-    constexpr piece_bitboard_t left = (0x1ULL<<0) | (0x1ULL<<8) | (0x1ULL<<16);
-    constexpr piece_bitboard_t right =  (0x4ULL<<0) | (0x4ULL<<8) | (0x4ULL<<16);
-    constexpr piece_bitboard_t mid = (0x2ULL<<0) | (0x2ULL<<16);
-    piece_bitboard_t mask = mid;
-    if(board::_x(i)!=A)mask|=left;
-    if(board::_x(i)!=H)mask|=right;
-    constexpr pos_t offset = 8+2-1;
-    if(i <= offset)return mask >> (offset - i);
-    return mask << (i - offset);
-  }
-
-  static inline piece_bitboard_t get_attacking_ray(pos_t i, pos_t j, piece_bitboard_t occupied){return 0x00;}
 };
 
 // king moves
@@ -369,7 +342,7 @@ template <> struct Moves<KINGM> {
           && !(occupied & castlerightcheckocc))
         castlemoves|=castleright;
     }
-    return (Attacks<KINGM>::get_basic(i) & ~friends & ~attack_mask) | castlemoves;
+    return (Attacks<KINGM>::get_attacks(i, friends|foes) & ~friends & ~attack_mask) | castlemoves;
   }
 
   template <COLOR CC>

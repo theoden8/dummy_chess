@@ -150,21 +150,21 @@ namespace bitmask {
 
   // print locations of each set bit
   void print(uint64_t mask) {
-    /* static auto pr = [](pos_t p) { std::cout << p << std::endl; }; */
-    foreach(mask, [](pos_t p) mutable { printf("(%c, %d)\n", 'A' + p / 8, p % 8 + 1); });
+    foreach(mask, [](pos_t p) mutable { printf("(%c, %c)\n", 'A' + (p%8), '1' + (p/8)); });
   }
 
-  void print_mask(uint64_t mask, int markspot=-1) {
+  void print_mask(uint64_t mask, pos_t markspot=0xff) {
+    printf("mask: %lx\n", mask);
     char s[256];
-    int j = 0;
-    for(int i = 0; i < 64; ++i) {
+    pos_t j = 0;
+    for(pos_t i = 0; i < CHAR_BIT*sizeof(mask); ++i) {
       if(i == markspot) {
         s[j++] = 'x';
       } else {
         s[j++] = (mask & (1LLU << i)) ? '*' : '.';
       }
       s[j++] = ' ';
-      if(i % 8 == 7) {
+      if(i % CHAR_BIT == 7) {
         s[j++] = '\n';
       }
     }

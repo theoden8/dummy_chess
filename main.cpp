@@ -22,5 +22,5 @@ int main() {
     });
   }
   b.print();
-  printf("best move: %s\n", board::_pos_str(b.get_fixed_depth_move(5)).c_str());
+  printf("best move: %s\n", board::_pos_str(b.get_fixed_depth_move(4)).c_str());
 }

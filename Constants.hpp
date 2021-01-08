@@ -16,7 +16,7 @@ typedef pos_pair_t move_t;
 typedef uint64_t piece_bitboard_t;
 
 // player color, neutral when neither/both
-typedef enum { WHITE, BLACK, NEUTRAL, NO_COLORS=NEUTRAL } COLOR;
+typedef enum { WHITE, BLACK, NEUTRAL, NO_COLORS=NEUTRAL, BOTH } COLOR;
 
 inline constexpr COLOR enemy_of(COLOR c) {
   if(c == NEUTRAL)return NEUTRAL;

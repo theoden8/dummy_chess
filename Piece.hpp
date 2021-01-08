@@ -53,16 +53,21 @@ struct Piece {
   }
 
   // attack from specific position by this type of piece
-  inline constexpr piece_bitboard_t get_attack(pos_t pos, piece_bitboard_t friends, piece_bitboard_t foes) const {
+  inline constexpr piece_bitboard_t get_attack(pos_t pos, piece_bitboard_t occupied) const {
     const MPIECE mp = get_mpiece_value(value, color);
     if(mp==WPAWNM) return Attacks<WPAWNM>::get_attacks(pos);
     if(mp==BPAWNM) return Attacks<BPAWNM>::get_attacks(pos);
     if(mp==KNIGHTM)return Attacks<KNIGHTM>::get_attacks(pos);
-    if(mp==BISHOPM)return Attacks<BISHOPM>::get_attacks(pos,friends,foes);
-    if(mp==ROOKM)  return Attacks<ROOKM>::get_attacks(pos,friends,foes);
-    if(mp==QUEENM) return Attacks<QUEENM>::get_attacks(pos,friends,foes);
-    if(mp==KINGM)  return Attacks<KINGM>::get_attacks(pos,friends,foes);
+    if(mp==BISHOPM)return Attacks<BISHOPM>::get_attacks(pos,occupied);
+    if(mp==ROOKM)  return Attacks<ROOKM>::get_attacks(pos,occupied);
+    if(mp==QUEENM) return Attacks<QUEENM>::get_attacks(pos,occupied);
+    if(mp==KINGM)  return Attacks<KINGM>::get_attacks(pos,occupied);
     return 0x00ULL;
+  }
+
+  inline constexpr piece_bitboard_t get_xray_attack(pos_t pos, piece_bitboard_t friends, piece_bitboard_t foes) const {
+    const piece_bitboard_t blockers = get_attack(pos, friends|foes) & foes;
+    return get_attack(pos, friends | (foes ^ blockers));
   }
 
   inline constexpr piece_bitboard_t get_attacking_ray(pos_t i, pos_t j, piece_bitboard_t occupied) const {
@@ -74,11 +79,8 @@ struct Piece {
   }
 
   inline constexpr piece_bitboard_t get_attacking_xray(pos_t i, pos_t j, piece_bitboard_t friends, piece_bitboard_t foes) const {
-    const MPIECE mp = get_mpiece_value(value, color);
-    if(mp==BISHOPM)return xRayAttacks<BISHOPM>::get_attacking_xray(i,j,friends,foes);
-    if(mp==ROOKM)  return xRayAttacks<ROOKM>::get_attacking_xray(i,j,friends,foes);
-    if(mp==QUEENM) return xRayAttacks<QUEENM>::get_attacking_xray(i,j,friends,foes);
-    return 0x00ULL;
+    const piece_bitboard_t blockers = get_attack(i, friends|foes) & foes;
+    return get_attacking_ray(i, j, friends | (foes ^ blockers));
   }
 
   // attack from specific position by this type of piece
@@ -99,15 +101,15 @@ struct Piece {
   }
 
   // multi-attacks
-  inline constexpr piece_bitboard_t get_attacks(piece_bitboard_t friends, piece_bitboard_t foes) const {
+  inline constexpr piece_bitboard_t get_attacks(piece_bitboard_t occupied) const {
     const MPIECE mp = get_mpiece_value(value, color);
     if(mp==WPAWNM) return MultiAttacks<WPAWNM>::get_attacks(mask);
     if(mp==BPAWNM) return MultiAttacks<BPAWNM>::get_attacks(mask);
-    if(mp==KNIGHTM)return MultiAttacks<KNIGHTM>::get_attacks(mask,friends,foes);
-    if(mp==BISHOPM)return MultiAttacks<BISHOPM>::get_attacks(mask,friends,foes);
-    if(mp==ROOKM)  return MultiAttacks<ROOKM>::get_attacks(mask,friends,foes);
-    if(mp==QUEENM) return MultiAttacks<QUEENM>::get_attacks(mask,friends,foes);
-    if(mp==KINGM)  return MultiAttacks<KINGM>::get_attacks(mask,friends,foes);
+    if(mp==KNIGHTM)return MultiAttacks<KNIGHTM>::get_attacks(mask);
+    if(mp==BISHOPM)return MultiAttacks<BISHOPM>::get_attacks(mask,occupied);
+    if(mp==ROOKM)  return MultiAttacks<ROOKM>::get_attacks(mask,occupied);
+    if(mp==QUEENM) return MultiAttacks<QUEENM>::get_attacks(mask,occupied);
+    if(mp==KINGM)  return MultiAttacks<KINGM>::get_attacks(mask,occupied);
     return 0x00ULL;
   }
 

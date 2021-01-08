@@ -81,31 +81,36 @@ public:
 
   double heuristic_of(COLOR c) const {
     double h = 0;
+    if(is_draw())return 0;
+    bool canmove = false;
+    const pos_t no_checks = state_attacks_count[enemy_of(c)][get_king_pos(c)];
+    for(const auto &m : state_moves)if(m){canmove=true;break;}
+    if(!canmove && no_checks > 0) {
+      return -1e9;
+    }
     h += h_material(c);
     h += h_pins(c) / 10;
     h += h_attack_cells(c) / 1000;
     return h;
   }
 
-  double heuristic() const {
-    const COLOR c = activePlayer();
-    double material = heuristic_of(c) - heuristic_of(enemy_of(c));
-    return material;
+  double heuristic(COLOR c) const {
+    return heuristic_of(c) - heuristic_of(enemy_of(c));
   }
 
-  void _get_fixed_depth_move(pos_t depth, double &alpha, move_t &m) {
+  void _get_fixed_depth_move(COLOR c, pos_t depth, double &alpha, move_t &m) {
     iter_moves([&](pos_t i, pos_t j) mutable -> void {
       event_t ev = get_move_event(i, j);
       act_event(ev);
       if(depth == 1) {
-        auto h = heuristic();
+        auto h = heuristic(c);
         if(h > alpha) {
           alpha = h;
           m = bitmask::_pos_pair(i, j);
         }
       } else {
         double cur_alpha = alpha;
-        _get_fixed_depth_move(depth - 1, alpha, m);
+        _get_fixed_depth_move(c, depth - 1, alpha, m);
         if(cur_alpha < alpha) {
           m = bitmask::_pos_pair(i, j);
           cur_alpha = alpha;
@@ -118,7 +123,7 @@ public:
   move_t get_fixed_depth_move(pos_t depth=1) {
     move_t m = board::nomove;
     double alpha = -1e9;
-    _get_fixed_depth_move(depth, alpha, m);
+    _get_fixed_depth_move(activePlayer(), depth, alpha, m);
     return m;
   }
 };
