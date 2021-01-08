@@ -518,7 +518,7 @@ public:
         const piece_bitboard_t pin = friends & r;
         if(pin) {
           state_pins[c] |= pin;
-          state_pins_rays[bitmask::log2(pin)] = r;
+          state_pins_rays[bitmask::log2_of_exp2(pin)] = r;
         }
       }, c);
     }
@@ -537,6 +537,7 @@ public:
   piece_bitboard_t state_checkline = 0x00;
   void update_state_checkline() {
     const COLOR c = activePlayer();
+    const COLOR ec = enemy_of(c);
     if(state_attacks_count[enemy_of(c)][get_king_pos(c)] == 0) {
       state_checkline = ~0x00ULL;
       return;
@@ -545,14 +546,13 @@ public:
       return;
     }
     const pos_t kingpos = get_king_pos(c);
-    const piece_bitboard_t friends = get_piece_positions(c),
-                           foes = get_piece_positions(enemy_of(c));
-    const pos_t attacker = bitmask::log2(
-        (Attacks<QUEENM>::get_attacks(kingpos, friends|foes)
-        | Attacks<KNIGHTM>::get_attacks(kingpos))
-        & foes);
-    const piece_bitboard_t occupied = (friends | foes) & ~get_piece(KING,c).mask;
-    state_checkline = self[attacker].get_attacking_ray(kingpos,attacker,occupied);
+    const piece_bitboard_t occupied = get_piece_positions(BOTH);
+    const pos_t attacker = bitmask::log2_of_exp2(
+        (Attacks<BISHOPM>::get_attacks(kingpos, occupied) & (get_piece(BISHOP,ec).mask|get_piece(QUEEN,ec).mask))
+        | (Attacks<ROOKM>::get_attacks(kingpos, occupied) & (get_piece(ROOK,ec).mask|get_piece(QUEEN,ec).mask))
+        | (Attacks<KNIGHTM>::get_attacks(kingpos) & get_piece(KNIGHT,ec).mask)
+        | (get_piece(PAWN,c).get_attack(kingpos,occupied) & get_piece(PAWN,ec).mask));
+    state_checkline = self[attacker].get_attacking_ray(kingpos,attacker,occupied&~get_piece(KING,c).mask);
     state_checkline |= (1ULL << attacker);
   }
 
