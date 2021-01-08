@@ -440,26 +440,14 @@ public:
 
   inline piece_bitboard_t get_attacks_from(pos_t pos) const { return state_attacks[pos]; }
 
-  std::array<std::array<piece_bitboard_t, board::SIZE>, NO_COLORS> state_square_attacked_by;
-  void update_state_square_attacked_by() {
-    const piece_bitboard_t whites = get_piece_positions(WHITE),
-                           blacks = get_piece_positions(BLACK);
-    for(COLOR c : {WHITE,BLACK})for(auto&sa:state_square_attacked_by[c])sa=0x00;
-    for(pos_t i = 0; i < board::SIZE; ++i) {
-      for(pos_t j = 0; j < board::SIZE; ++j) {
-        piece_bitboard_t mask = 0x00;
-        if(get_attacks_from(i) & (1ULL << j)) {
-          mask |= 1ULL << i;
-        }
-        state_square_attacked_by[WHITE][j] = mask & whites;
-        state_square_attacked_by[BLACK][j] = mask & blacks;
-      }
-    }
-  }
-
   inline piece_bitboard_t square_attacked_by(pos_t i, COLOR c=NEUTRAL) {
-    if(c==NEUTRAL)return square_attacked_by(i,WHITE)|square_attacked_by(i,BLACK);
-    return state_square_attacked_by[c][i];
+    if(c==NEUTRAL)c=activePlayer();
+    const piece_bitboard_t occupied = get_piece_positions(BOTH);
+    return (Attacks<BISHOPM>::get_attacks(i,occupied) & (get_piece(BISHOP,c).mask|get_piece(QUEEN,c).mask))
+        | (Attacks<ROOKM>::get_attacks(i,occupied) & (get_piece(ROOK,c).mask|get_piece(QUEEN,c).mask))
+        | (Attacks<KNIGHTM>::get_attacks(i) & get_piece(KNIGHT,c).mask)
+        | (Attacks<KINGM>::get_attacks(i,occupied) & get_piece(KING,c).mask)
+        | (get_piece(PAWN,c).get_attack(i,occupied) & get_piece(PAWN,c).mask);
   }
 
   template <typename F>
@@ -539,11 +527,7 @@ public:
     }
     const pos_t kingpos = get_king_pos(c);
     const piece_bitboard_t occupied = get_piece_positions(BOTH);
-    const pos_t attacker = bitmask::log2_of_exp2(
-        (Attacks<BISHOPM>::get_attacks(kingpos, occupied) & (get_piece(BISHOP,ec).mask|get_piece(QUEEN,ec).mask))
-        | (Attacks<ROOKM>::get_attacks(kingpos, occupied) & (get_piece(ROOK,ec).mask|get_piece(QUEEN,ec).mask))
-        | (Attacks<KNIGHTM>::get_attacks(kingpos) & get_piece(KNIGHT,ec).mask)
-        | (get_piece(PAWN,c).get_attack(kingpos,occupied) & get_piece(PAWN,ec).mask));
+    const pos_t attacker = bitmask::log2_of_exp2(square_attacked_by(kingpos, enemy_of(c)));
     state_checkline = self[attacker].get_attacking_ray(kingpos,attacker,occupied&~get_piece(KING,c).mask);
     state_checkline |= (1ULL << attacker);
   }
