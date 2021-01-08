@@ -486,6 +486,23 @@ public:
     bitmask::foreach(affected, [&](pos_t i) mutable -> void {
       state_attacks[i] = self[i].get_attack(i, occupied & ~get_piece(KING,enemy_of(self[i].color)).mask);
     });
+    update_state_attack_mask();
+  }
+
+  piece_bitboard_t state_attack_masks[2] = {0ULL,0ULL};
+  inline void update_state_attack_mask() {
+    const piece_bitboard_t occupied = get_piece_positions(BOTH);
+    for(COLOR c : {WHITE,BLACK}) {
+      piece_bitboard_t mask = 0x00;
+      for(int p = 0; p < NO_PIECES; ++p) {
+        mask |= get_piece((PIECE)p, enemy_of(c)).get_attacks(occupied&~get_piece(KING,c).mask);
+      }
+      state_attack_masks[c] = mask;
+    }
+  }
+
+  inline piece_bitboard_t get_attack_mask(COLOR c) const {
+    return state_attack_masks[c];
   }
 
   template <typename F>
@@ -667,15 +684,6 @@ public:
     if(p!=KING)pmoves&=state_checkline;
     if(get_pins(c)&(1ULL<<pos))pmoves&=get_pin_line_of(pos);
     return pmoves;
-  }
-
-  inline piece_bitboard_t get_attack_mask(COLOR c) const {
-    const piece_bitboard_t occupied = get_piece_positions(BOTH) & ~get_piece(KING,c).mask;
-    piece_bitboard_t mask = 0x00;
-    for(int p = 0; p < NO_PIECES; ++p) {
-      mask |= get_piece((PIECE)p, enemy_of(c)).get_attacks(occupied);
-    }
-    return mask;
   }
 
   void print() {
