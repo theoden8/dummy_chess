@@ -91,7 +91,7 @@ struct PGN {
     const COLOR c = board.activePlayer();
     bool canmove = false;
     for(const auto &m : board.state_moves)if(m){canmove=true;break;}
-    const pos_t no_checks = board.state_attacks_count[enemy_of(c)][board.get_king_pos(c)];
+    const pos_t no_checks = board.get_attack_counts_to(board.get_king_pos(c), enemy_of(c));
     ending = "";
     if(!canmove && no_checks == 0) {
       ending = "1/2 - 1/2 (stalemate)";

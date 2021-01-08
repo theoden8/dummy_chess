@@ -423,31 +423,23 @@ public:
         });
       }
     }
-    update_state_attack_counts();
-  }
-
-  std::array <pos_t, board::SIZE> state_attacks_count[NO_COLORS] = {{0x00}, {0x00}};
-  void update_state_attack_counts() {
-    for(COLOR c : {WHITE, BLACK}) {
-      for(auto&ac:state_attacks_count[c])ac=0;
-      bitmask::foreach(get_piece_positions(c), [&](pos_t i) mutable -> void {
-        bitmask::foreach(state_attacks[i], [&](pos_t j) mutable -> void {
-          ++state_attacks_count[c][j];
-        });
-      });
-    }
   }
 
   inline piece_bitboard_t get_attacks_from(pos_t pos) const { return state_attacks[pos]; }
 
-  inline piece_bitboard_t square_attacked_by(pos_t i, COLOR c=NEUTRAL) {
+  inline piece_bitboard_t get_attacks_to(pos_t i, COLOR c=NEUTRAL) const {
     if(c==NEUTRAL)c=activePlayer();
+    if(c==BOTH)return get_attacks_to(i,WHITE)|get_attacks_to(i,BLACK);
     const piece_bitboard_t occupied = get_piece_positions(BOTH);
     return (Attacks<BISHOPM>::get_attacks(i,occupied) & (get_piece(BISHOP,c).mask|get_piece(QUEEN,c).mask))
         | (Attacks<ROOKM>::get_attacks(i,occupied) & (get_piece(ROOK,c).mask|get_piece(QUEEN,c).mask))
         | (Attacks<KNIGHTM>::get_attacks(i) & get_piece(KNIGHT,c).mask)
         | (Attacks<KINGM>::get_attacks(i,occupied) & get_piece(KING,c).mask)
         | (get_piece(PAWN,c).get_attack(i,occupied) & get_piece(PAWN,c).mask);
+  }
+
+  inline piece_bitboard_t get_attack_counts_to(pos_t i, COLOR c=NEUTRAL) const {
+    return bitmask::count_bits(get_attacks_to(i,c));
   }
 
   template <typename F>
@@ -518,16 +510,17 @@ public:
   void update_state_checkline() {
     const COLOR c = activePlayer();
     const COLOR ec = enemy_of(c);
-    if(state_attacks_count[enemy_of(c)][get_king_pos(c)] == 0) {
+    const pos_t kingpos = get_king_pos(c);
+    const piece_bitboard_t attackers = get_attacks_to(kingpos, ec);
+    if(!attackers) {
       state_checkline = ~0x00ULL;
       return;
-    } else if(state_attacks_count[enemy_of(c)][get_king_pos(c)] >= 2) {
+    } else if(!bitmask::is_exp2(attackers)) {
       state_checkline = 0x00;
       return;
     }
-    const pos_t kingpos = get_king_pos(c);
     const piece_bitboard_t occupied = get_piece_positions(BOTH);
-    const pos_t attacker = bitmask::log2_of_exp2(square_attacked_by(kingpos, enemy_of(c)));
+    const pos_t attacker = bitmask::log2_of_exp2(get_attacks_to(kingpos, enemy_of(c)));
     state_checkline = self[attacker].get_attacking_ray(kingpos,attacker,occupied&~get_piece(KING,c).mask);
     state_checkline |= (1ULL << attacker);
   }
@@ -545,7 +538,7 @@ public:
                            foes  = get_piece_positions(enemy_of(c)),
                            attack_mask = get_attack_mask(c),
                            pins = get_pins(c);
-    const bool doublecheck = state_attacks_count[enemy_of(c)][get_king_pos(c)] > 1;
+    const bool doublecheck = (state_checkline == 0x00);
     for(pos_t p = 0; p < NO_PIECES; ++p) {
       if(doublecheck && p != KING)continue;
       get_piece((PIECE)p,c).foreach([&](pos_t pos) mutable noexcept -> void {

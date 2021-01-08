@@ -90,9 +90,12 @@ public:
   }
 
   double h_attack_cells(COLOR c) const {
+    const piece_bitboard_t occupied = get_piece_positions(BOTH);
     double attacks = 0;
-    for(auto ac:state_attacks_count[c]) {
-      attacks += ac;
+    for(pos_t i = 0; i < board::SIZE; ++i) {
+      if(self[i].color != c)continue;
+      auto a = self.get_attacks_from(i);
+      attacks += bitmask::count_bits(a & occupied) + bitmask::count_bits(a);
     }
     return attacks;
   }
@@ -101,14 +104,14 @@ public:
     double h = 0;
     if(self.is_draw())return 0;
     bool canmove = false;
-    const pos_t no_checks = state_attacks_count[enemy_of(c)][get_king_pos(c)];
+    const pos_t no_checks = get_attack_counts_to(get_king_pos(c), enemy_of(c));
     for(const auto &m : state_moves)if(m){canmove=true;break;}
     if(!canmove && no_checks > 0) {
       return -1e9;
     }
     h += h_material(c);
-    h += h_pins(c) / 10;
-    h += h_attack_cells(c) / 1000;
+    h += h_pins(c) / 100;
+    h += h_attack_cells(c) / 10000;
     return h;
   }
 
