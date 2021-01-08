@@ -214,7 +214,7 @@ public:
 
   void act_event(event_t ev) {
     history.push_back(ev);
-    pos_t marker = event::extract_byte(ev);
+    const pos_t marker = event::extract_byte(ev);
     assert(event::decompress_castlings(event::compress_castlings(castlings_)) == castlings_);
     switch(marker) {
       case event::BASIC_MARKER:
@@ -231,8 +231,8 @@ public:
           else halfmoves_ = 0;
           update_castlings(i);
           move_pos(i, j);
-          update_state_attacks_pos(i);
-          update_state_attacks_pos(j);
+          update_state_pos(i);
+          update_state_pos(j);
         }
       break;
       case event::CASTLING_MARKER:
@@ -247,11 +247,11 @@ public:
           ++halfmoves_;
           update_castlings(i);
           move_pos(i, j);
-          update_state_attacks_pos(i);
-          update_state_attacks_pos(j);
+          update_state_pos(i);
+          update_state_pos(j);
           move_pos(r_i, r_j);
-          update_state_attacks_pos(r_i);
-          update_state_attacks_pos(r_j);
+          update_state_pos(r_i);
+          update_state_pos(r_j);
           reset_enpassants();
         }
       break;
@@ -265,9 +265,10 @@ public:
           auto enpassant_ = event::extract_byte(ev);
           put_pos(killwhere, self.get_piece(EMPTY));
           update_state_attacks_pos(killwhere);
+          update_state_pos(killwhere);
           move_pos(i, j);
-          update_state_attacks_pos(i);
-          update_state_attacks_pos(j);
+          update_state_pos(i);
+          update_state_pos(j);
           reset_enpassants();
           halfmoves_ = 0;
         }
@@ -285,8 +286,8 @@ public:
           auto enpassant_trace = event::extract_byte(ev);
           put_pos(i, self.get_piece(EMPTY));
           put_pos(j, self.pieces[Piece::get_piece_index(becomewhat, activePlayer())]);
-          update_state_attacks_pos(i);
-          update_state_attacks_pos(j);
+          update_state_pos(i);
+          update_state_pos(j);
           reset_enpassants();
           halfmoves_ = 0;
         }
@@ -304,7 +305,7 @@ public:
   void unact_event() {
     if(history.empty())return;
     event_t ev = history.back();
-    pos_t marker = event::extract_byte(ev);
+    const pos_t marker = event::extract_byte(ev);
     switch(marker) {
       case event::BASIC_MARKER:
         {
@@ -314,11 +315,11 @@ public:
           castlings_ = event::extract_castlings(ev);
           halfmoves_ = event::extract_byte(ev);
           move_pos(j, i);
-          update_state_attacks_pos(i);
+          update_state_pos(i);
           if(killwhat != event::killnothing) {
             put_pos(j, self.pieces[killwhat]);
           }
-          update_state_attacks_pos(j);
+          update_state_pos(j);
           enpassant_ = event::extract_byte(ev);
           auto enpassant_trace = event::extract_byte(ev);
         }
@@ -333,11 +334,11 @@ public:
           halfmoves_ = event::extract_byte(ev);
           enpassant_ = event::extract_byte(ev);
           move_pos(j, i);
-          update_state_attacks_pos(j);
-          update_state_attacks_pos(i);
+          update_state_pos(j);
+          update_state_pos(i);
           move_pos(r_j, r_i);
-          update_state_attacks_pos(r_j);
-          update_state_attacks_pos(r_i);
+          update_state_pos(r_j);
+          update_state_pos(r_i);
         }
       break;
       case event::ENPASSANT_MARKER:
@@ -349,10 +350,10 @@ public:
           halfmoves_ = event::extract_byte(ev);
           enpassant_ = event::extract_byte(ev);
           put_pos(killwhere, self.get_piece(PAWN, enemy_of(self[j].color)));
-          update_state_attacks_pos(killwhere);
+          update_state_pos(killwhere);
           move_pos(j, i);
-          update_state_attacks_pos(j);
-          update_state_attacks_pos(i);
+          update_state_pos(j);
+          update_state_pos(i);
           enpassant_ = j;
         }
       break;
@@ -369,13 +370,12 @@ public:
           const COLOR c = self[j].color;
           if(killwhat != event::killnothing) {
             put_pos(j, self.pieces[killwhat]);
-            update_state_attacks_pos(j);
           } else {
             put_pos(j, self.get_piece(EMPTY));
-            update_state_attacks_pos(j);
           }
+          update_state_pos(j);
           put_pos(i, self.get_piece(PAWN, c));
-          update_state_attacks_pos(i);
+          update_state_pos(i);
         }
       break;
     }
@@ -410,20 +410,23 @@ public:
 
   void init_update_state() {
     init_state_attacks();
+    init_state_pmoves();
     update_state_pins();
     update_state_checkline();
-    init_state_pmoves();
+  }
+
+  void update_state_pos(pos_t pos) {
+    update_state_attacks_pos(pos);
+    update_state_moves_pos(pos);
   }
 
   void update_state_on_event(event_t ev=0x00, bool forward=true) {
     if(forward) {
       update_state_pins();
       update_state_checkline();
-      init_state_pmoves();
     } else {
       update_state_pins();
       update_state_checkline();
-      init_state_pmoves();
     }
   }
 
@@ -455,26 +458,26 @@ public:
 
   inline piece_bitboard_t get_attacks_from(pos_t pos) const { return state_attacks[pos]; }
 
-  inline piece_bitboard_t get_sliding_attacks_to(pos_t i, COLOR c=NEUTRAL) const {
+  inline piece_bitboard_t get_sliding_attacks_to(pos_t j, COLOR c=NEUTRAL) const {
     if(c==NEUTRAL)c=activePlayer();
-    if(c==BOTH)return get_attacks_to(i,WHITE)|get_attacks_to(i,BLACK);
+    if(c==BOTH)return get_attacks_to(j,WHITE)|get_attacks_to(j,BLACK);
     const piece_bitboard_t occupied = get_piece_positions(BOTH);
-    return (Attacks<BISHOPM>::get_attacks(i,occupied) & (get_piece(BISHOP,c).mask|get_piece(QUEEN,c).mask))
-        | (Attacks<ROOKM>::get_attacks(i,occupied) & (get_piece(ROOK,c).mask|get_piece(QUEEN,c).mask));
+    return (Attacks<BISHOPM>::get_attacks(j,occupied) & (get_piece(BISHOP,c).mask|get_piece(QUEEN,c).mask))
+        | (Attacks<ROOKM>::get_attacks(j,occupied) & (get_piece(ROOK,c).mask|get_piece(QUEEN,c).mask));
   }
 
-  inline piece_bitboard_t get_attacks_to(pos_t i, COLOR c=NEUTRAL) const {
+  inline piece_bitboard_t get_attacks_to(pos_t j, COLOR c=NEUTRAL) const {
     if(c==NEUTRAL)c=activePlayer();
-    if(c==BOTH)return get_attacks_to(i,WHITE)|get_attacks_to(i,BLACK);
+    if(c==BOTH)return get_attacks_to(j,WHITE)|get_attacks_to(j,BLACK);
     const piece_bitboard_t occupied = get_piece_positions(BOTH);
-    return get_sliding_attacks_to(i, c)
-        | (Attacks<KNIGHTM>::get_attacks(i) & get_piece(KNIGHT,c).mask)
-        | (Attacks<KINGM>::get_attacks(i,occupied) & get_piece(KING,c).mask)
-        | (get_piece(PAWN,c).get_attack(i,occupied) & get_piece(PAWN,c).mask);
+    return get_sliding_attacks_to(j, c)
+        | (Attacks<KNIGHTM>::get_attacks(j) & get_piece(KNIGHT,c).mask)
+        | (Attacks<KINGM>::get_attacks(j,occupied) & get_piece(KING,c).mask)
+        | (get_piece(PAWN,c).get_attack(j,occupied) & get_piece(PAWN,c).mask);
   }
 
-  inline piece_bitboard_t get_attack_counts_to(pos_t i, COLOR c=NEUTRAL) const {
-    return bitmask::count_bits(get_attacks_to(i,c));
+  inline piece_bitboard_t get_attack_counts_to(pos_t j, COLOR c=NEUTRAL) const {
+    return bitmask::count_bits(get_attacks_to(j,c));
   }
 
   void update_state_attacks_pos(pos_t pos) {
@@ -575,7 +578,14 @@ public:
   inline bool can_move(COLOR c=NEUTRAL) const {
     if(c==NEUTRAL)c=activePlayer();
     bool canmove = false;
-    for(pos_t i=0;i<board::SIZE;++i)if(get_moves_from(i)){canmove=true;break;}
+    for(PIECE p : {PAWN,KNIGHT,BISHOP,ROOK,QUEEN,KING}) {
+      get_piece(p,c).foreach([&](pos_t i) mutable -> void {
+          if(get_moves_from(i,c)) {
+            canmove = true;
+          }
+      });
+      if(canmove)break;
+    }
     return canmove;
   }
 
@@ -598,35 +608,62 @@ public:
     return is_draw_halfmoves() || is_draw_material() || is_draw_stalemate();
   }
 
-  std::array <piece_bitboard_t, board::SIZE> state_pmoves[NO_COLORS] = {UINT64_C(0x00)};
+  std::array <piece_bitboard_t, board::SIZE> state_pmoves = {UINT64_C(0x00)};
   void init_state_pmoves() {
-    const COLOR c = activePlayer();
-    for(auto&m:state_pmoves[c])m=UINT64_C(0x00);
-    if(is_draw_halfmoves() || is_draw_material())return;
-    const piece_bitboard_t friends = get_piece_positions(c),
-                           foes  = get_piece_positions(enemy_of(c)),
-                           attack_mask = get_attack_mask(c);
-    const bool doublecheck = (state_checkline == 0x00);
-    for(pos_t p = 0; p < NO_PIECES; ++p) {
-      if(doublecheck && p != KING)continue;
-      get_piece((PIECE)p,c).foreach([&](pos_t pos) mutable noexcept -> void {
-        state_pmoves[c][pos] = get_piece((PIECE)p,c).get_moves(pos,friends,foes,attack_mask,castlings_,enpassant_);
-      });
+    for(auto&m:state_pmoves)m=UINT64_C(0x00);
+    for(COLOR c : {WHITE,BLACK}) {
+      if(is_draw_halfmoves() || is_draw_material())return;
+      const piece_bitboard_t friends = get_piece_positions(c),
+                             foes  = get_piece_positions(enemy_of(c)),
+                             attack_mask = get_attack_mask(c);
+      for(pos_t p = 0; p < NO_PIECES; ++p) {
+        get_piece((PIECE)p,c).foreach([&](pos_t pos) mutable noexcept -> void {
+          state_pmoves[pos] = get_piece((PIECE)p,c).get_moves(pos,friends,foes,attack_mask,castlings_,enpassant_);
+        });
+      }
     }
   }
 
-// TODO not implemented yet
-//  void update_state_moves_pos(pos_t pos) {
-//    const piece_bitboard_t affected = (1ULL << pos)
-//                                      | get_sliding_attacks_to(pos, BOTH)
-//                                      | get_piece(KING,WHITE).mask | get_piece(KING,BLACK).mask;
-//  }
+  void update_state_moves_pos(pos_t pos) {
+    const pos_t x = board::_x(pos), y = board::_y(pos);
+    const PIECE p = self[pos].value;
+    const piece_bitboard_t pawns_affected = (
+        (get_piece(PAWN,WHITE).mask & (
+          (y > -1+2 ? 1ULL << (pos - board::LEN) : 0)
+          | ((y > -1+2 && x > A) ? 1ULL << (pos - board::LEN - 1) : 0)
+          | ((y > -1+2 && x < H) ? 1ULL << (pos - board::LEN + 1) : 0)
+          | ((y == -1+4) ? 1ULL << (pos - 2*board::LEN) : 0)
+          | ((p==PAWN && x > A) ? 1ULL << (pos - 1) : 0)
+          | ((p==PAWN && x < H) ? 1ULL << (pos + 1) : 0)
+        ))
+      | (get_piece(PAWN,BLACK).mask & (
+          ((y < 7-1) ? 1ULL << (pos + board::LEN) : 0)
+          | ((y < 7-1 && x > A) ? 1ULL << (pos + board::LEN - 1) : 0)
+          | ((y < 7-1 && x < H) ? 1ULL << (pos + board::LEN + 1) : 0)
+          | ((y == -1+5) ? 1ULL << (pos + 2*board::LEN) : 0)
+          | ((p==PAWN && x > A) ? 1ULL << (pos - 1) : 0)
+          | ((p==PAWN && x < H) ? 1ULL << (pos + 1) : 0)
+      ))
+    );
+    const piece_bitboard_t affected = (1ULL << pos)
+                                      | get_sliding_attacks_to(pos, BOTH)
+                                      | get_piece(KING,WHITE).mask | get_piece(KING,BLACK).mask
+                                      | pawns_affected;
+    const piece_bitboard_t piece_masks[NO_COLORS] = {get_piece_positions(WHITE), get_piece_positions(BLACK)};
+    const piece_bitboard_t attack_masks[NO_COLORS] = {get_attack_mask(WHITE), get_attack_mask(BLACK)};
+    bitmask::foreach(affected, [&](pos_t i) mutable -> void {
+      const COLOR c = self[i].color;
+      state_pmoves[i] = self[i].get_moves(i,piece_masks[c],piece_masks[enemy_of(c)],attack_masks[c],castlings_,enpassant_);
+    });
+  }
 
   inline piece_bitboard_t get_moves_from(pos_t pos, COLOR c=NEUTRAL) const {
     if(c==NEUTRAL)c=activePlayer();
     if(c==BOTH)return get_moves_from(pos,WHITE)|get_moves_from(pos,BLACK);
+
     const PIECE p = self[pos].value;
-    piece_bitboard_t pmoves = state_pmoves[c][pos];
+    if(self[pos].color!=c)return 0x00;
+    piece_bitboard_t pmoves = state_pmoves[pos];
     if(p!=KING)pmoves&=state_checkline;
     if(get_pins(c)&(1ULL<<pos))pmoves&=get_pin_line_of(pos);
     return pmoves;

@@ -92,13 +92,13 @@ struct Interface {
       else piece_pos = board::_pos(A+cursor_x, 1+cursor_y);
       pos_t hit_pos = board::_pos(A+x, 1+y);
       // single-attacks
-      //piece_bitboard_t attacks = board.get_attacks_from(piece_pos);
+      //const piece_bitboard_t attacks = board.get_attacks_from(piece_pos);
       // single-moves
-      piece_bitboard_t attacks = board.get_moves_from(piece_pos);
+      const piece_bitboard_t attacks = board.get_moves_from(piece_pos);
       // multi-attacks
       //const auto &piece = board[piece_pos];
       //piece_bitboard_t attacks = piece.get_attacks(board.get_piece_positions(piece.color), board.get_piece_positions(enemy_of(piece.color)));
-      if(attacks & (UINT64_C(1) << (hit_pos))) {
+      if(attacks & (1ULL << hit_pos)) {
         attron(COLOR_PAIR(NC_COLOR_CAN_ATTACK));
         return;
       }
@@ -260,7 +260,7 @@ struct Interface {
     constexpr size_t turn_length = initial_margin + ply_length + space_between + ply_length;
     constexpr size_t start_white = initial_margin,
                      start_black = initial_margin + ply_length + space_between;
-    for(size_t i = 0; i < pgn.size(); ++i) {
+    for(size_t i = (pgn.size() > 20) ? pgn.size() - 20 : 0; i < pgn.size(); ++i) {
       if(!(i & 1)) {
         move(top, LEFT);
         printw("%d.", turn);
