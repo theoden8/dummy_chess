@@ -59,7 +59,7 @@ public:
             y = board::LEN - board::_y(i) - 1;
       put_pos(board::_pos(A+x, 1+y), get_piece(p, c));
     }
-    update_state_on_event();
+    init_update_state();
   }
 
   inline constexpr COLOR activePlayer() const {
@@ -231,6 +231,8 @@ public:
           else halfmoves_ = 0;
           update_castlings(i);
           move_pos(i, j);
+          update_state_attacks_square(i);
+          update_state_attacks_square(j);
         }
       break;
       case event::CASTLING_MARKER:
@@ -245,7 +247,11 @@ public:
           ++halfmoves_;
           update_castlings(i);
           move_pos(i, j);
+          update_state_attacks_square(i);
+          update_state_attacks_square(j);
           move_pos(r_i, r_j);
+          update_state_attacks_square(r_i);
+          update_state_attacks_square(r_j);
           reset_enpassants();
         }
       break;
@@ -258,7 +264,10 @@ public:
           auto halfmoves = event::extract_byte(ev);
           auto enpassant_ = event::extract_byte(ev);
           put_pos(killwhere, self.get_piece(EMPTY));
+          update_state_attacks_square(killwhere);
           move_pos(i, j);
+          update_state_attacks_square(i);
+          update_state_attacks_square(j);
           reset_enpassants();
           halfmoves_ = 0;
         }
@@ -276,13 +285,15 @@ public:
           auto enpassant_trace = event::extract_byte(ev);
           put_pos(i, self.get_piece(EMPTY));
           put_pos(j, self.pieces[Piece::get_piece_index(becomewhat, activePlayer())]);
+          update_state_attacks_square(i);
+          update_state_attacks_square(j);
           reset_enpassants();
           halfmoves_ = 0;
         }
       break;
     }
     activePlayer_ = enemy_of(activePlayer());
-    update_state_on_event(ev);
+    update_state_on_event(ev, true);
   }
 
   event_t last_event() const {
@@ -303,9 +314,11 @@ public:
           castlings_ = event::extract_castlings(ev);
           halfmoves_ = event::extract_byte(ev);
           move_pos(j, i);
+          update_state_attacks_square(i);
           if(killwhat != event::killnothing) {
             put_pos(j, self.pieces[killwhat]);
           }
+          update_state_attacks_square(j);
           enpassant_ = event::extract_byte(ev);
           auto enpassant_trace = event::extract_byte(ev);
         }
@@ -320,7 +333,11 @@ public:
           halfmoves_ = event::extract_byte(ev);
           enpassant_ = event::extract_byte(ev);
           move_pos(j, i);
+          update_state_attacks_square(j);
+          update_state_attacks_square(i);
           move_pos(r_j, r_i);
+          update_state_attacks_square(r_j);
+          update_state_attacks_square(r_i);
         }
       break;
       case event::ENPASSANT_MARKER:
@@ -332,7 +349,10 @@ public:
           halfmoves_ = event::extract_byte(ev);
           enpassant_ = event::extract_byte(ev);
           put_pos(killwhere, self.get_piece(PAWN, enemy_of(self[j].color)));
+          update_state_attacks_square(killwhere);
           move_pos(j, i);
+          update_state_attacks_square(j);
+          update_state_attacks_square(i);
           enpassant_ = j;
         }
       break;
@@ -349,16 +369,19 @@ public:
           const COLOR c = self[j].color;
           if(killwhat != event::killnothing) {
             put_pos(j, self.pieces[killwhat]);
+            update_state_attacks_square(j);
           } else {
             put_pos(j, self.get_piece(EMPTY));
+            update_state_attacks_square(j);
           }
           put_pos(i, self.get_piece(PAWN, c));
+          update_state_attacks_square(i);
         }
       break;
     }
     activePlayer_ = enemy_of(activePlayer());
-    update_state_on_event(ev, false);
     history.pop_back();
+    update_state_on_event(ev, false);
   }
 
   event_t get_move_event(pos_t i, pos_t j) const {
@@ -385,14 +408,19 @@ public:
     unact_event();
   }
 
+  void init_update_state() {
+    update_state_attacks();
+    update_state_pins();
+    update_state_checkline();
+    update_state_moves();
+  }
+
   void update_state_on_event(event_t ev=0x00, bool forward=true) {
     if(forward) {
-      update_state_attacks();
       update_state_pins();
       update_state_checkline();
       update_state_moves();
     } else {
-      update_state_attacks();
       update_state_pins();
       update_state_checkline();
       update_state_moves();
@@ -427,12 +455,19 @@ public:
 
   inline piece_bitboard_t get_attacks_from(pos_t pos) const { return state_attacks[pos]; }
 
-  inline piece_bitboard_t get_attacks_to(pos_t i, COLOR c=NEUTRAL) const {
+  inline piece_bitboard_t get_sliding_attacks_to(pos_t i, COLOR c=NEUTRAL) const {
     if(c==NEUTRAL)c=activePlayer();
     if(c==BOTH)return get_attacks_to(i,WHITE)|get_attacks_to(i,BLACK);
     const piece_bitboard_t occupied = get_piece_positions(BOTH);
     return (Attacks<BISHOPM>::get_attacks(i,occupied) & (get_piece(BISHOP,c).mask|get_piece(QUEEN,c).mask))
-        | (Attacks<ROOKM>::get_attacks(i,occupied) & (get_piece(ROOK,c).mask|get_piece(QUEEN,c).mask))
+        | (Attacks<ROOKM>::get_attacks(i,occupied) & (get_piece(ROOK,c).mask|get_piece(QUEEN,c).mask));
+  }
+
+  inline piece_bitboard_t get_attacks_to(pos_t i, COLOR c=NEUTRAL) const {
+    if(c==NEUTRAL)c=activePlayer();
+    if(c==BOTH)return get_attacks_to(i,WHITE)|get_attacks_to(i,BLACK);
+    const piece_bitboard_t occupied = get_piece_positions(BOTH);
+    return get_sliding_attacks_to(i, c)
         | (Attacks<KNIGHTM>::get_attacks(i) & get_piece(KNIGHT,c).mask)
         | (Attacks<KINGM>::get_attacks(i,occupied) & get_piece(KING,c).mask)
         | (get_piece(PAWN,c).get_attack(i,occupied) & get_piece(PAWN,c).mask);
@@ -440,6 +475,14 @@ public:
 
   inline piece_bitboard_t get_attack_counts_to(pos_t i, COLOR c=NEUTRAL) const {
     return bitmask::count_bits(get_attacks_to(i,c));
+  }
+
+  void update_state_attacks_square(pos_t pos) {
+    const piece_bitboard_t affected = (1ULL << pos) | get_sliding_attacks_to(pos, BOTH);
+    const piece_bitboard_t occupied = get_piece_positions(BOTH);
+    bitmask::foreach(affected, [&](pos_t i) mutable -> void {
+      state_attacks[i] = self[i].get_attack(i, occupied);
+    });
   }
 
   template <typename F>

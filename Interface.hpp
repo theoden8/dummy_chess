@@ -92,9 +92,9 @@ struct Interface {
       else piece_pos = board::_pos(A+cursor_x, 1+cursor_y);
       pos_t hit_pos = board::_pos(A+x, 1+y);
       // single-attacks
-      //piece_bitboard_t attacks = board.get_attacks_from(piece_pos);
+      piece_bitboard_t attacks = board.get_attacks_from(piece_pos);
       // single-moves
-      piece_bitboard_t attacks = board.get_moves_from(piece_pos);
+      //piece_bitboard_t attacks = board.get_moves_from(piece_pos);
       // multi-attacks
       //const auto &piece = board[piece_pos];
       //piece_bitboard_t attacks = piece.get_attacks(board.get_piece_positions(piece.color), board.get_piece_positions(enemy_of(piece.color)));
