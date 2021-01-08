@@ -42,6 +42,7 @@ public:
     return moves[rand() % moves.size()];
   }
 
+  // for testing
   move_t get_random_move_from(pos_t i) const {
     std::vector<move_t> moves;
     iter_moves_from(i, [&](pos_t i, pos_t j) mutable -> void {
@@ -103,12 +104,9 @@ public:
   double heuristic_of(COLOR c) const {
     double h = 0;
     if(self.is_draw())return 0;
-    bool canmove = false;
-    const pos_t no_checks = get_attack_counts_to(get_king_pos(c), enemy_of(c));
-    for(const auto &m : state_moves)if(m){canmove=true;break;}
-    if(!canmove && no_checks > 0) {
-      return -1e9;
-    }
+    // checkmate
+    if(!can_move())return -1e9;
+
     h += h_material(c);
     h += h_pins(c) / 100;
     h += h_attack_cells(c) / 10000;
@@ -143,6 +141,7 @@ public:
   }
 
   size_t nodes_searched = 0;
+  // for optimizing traversal
   move_t get_fixed_depth_move(pos_t depth=1) {
     move_t m = board::nomove;
     double alpha = -1e9;
