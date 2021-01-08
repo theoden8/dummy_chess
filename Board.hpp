@@ -443,8 +443,8 @@ public:
   std::array <piece_bitboard_t, board::SIZE> state_attacks = {UINT64_C(0x00)};
   void update_state_attacks() {
     for(auto&a:state_attacks)a=UINT64_C(0x00);
-    const piece_bitboard_t occupied = get_piece_positions(BOTH);
     for(COLOR c : {WHITE, BLACK}) {
+      const piece_bitboard_t occupied = get_piece_positions(BOTH) & ~get_piece(KING, enemy_of(c)).mask;
       for(PIECE p : {PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING}) {
         get_piece(p,c).foreach([&](pos_t pos) mutable noexcept -> void {
           state_attacks[pos] |= get_piece(p,c).get_attack(pos,occupied);
@@ -481,7 +481,7 @@ public:
     const piece_bitboard_t affected = (1ULL << pos) | get_sliding_attacks_to(pos, BOTH);
     const piece_bitboard_t occupied = get_piece_positions(BOTH);
     bitmask::foreach(affected, [&](pos_t i) mutable -> void {
-      state_attacks[i] = self[i].get_attack(i, occupied);
+      state_attacks[i] = self[i].get_attack(i, occupied & ~get_piece(KING,enemy_of(self[i].color)).mask);
     });
   }
 
