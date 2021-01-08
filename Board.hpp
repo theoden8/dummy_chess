@@ -506,21 +506,21 @@ public:
   }
 
   piece_bitboard_t state_pins[NO_COLORS] = {0x00, 0x00};
-  std::vector<piece_bitboard_t> state_pins_rays[NO_COLORS];
-  std::vector<pos_t> state_pins_attackers[NO_COLORS];
+  std::array<piece_bitboard_t, board::SIZE> state_pins_rays;
   void update_state_pins() {
     for(COLOR c : {WHITE,BLACK}) {
       state_pins[c] = 0x00;
-      state_pins_rays[c].clear();
-      state_pins_attackers[c].clear();
+      for(auto &spr:state_pins_rays)spr=~0x00ULL;
+      const piece_bitboard_t friends = get_piece_positions(c) & ~get_piece(KING,c).mask;
       iter_attacking_xrays(get_king_pos(c), [&](pos_t i, piece_bitboard_t r) mutable -> void {
         const pos_t attacker = i;
         r |= 1ULL << attacker;
-        state_pins[c] |= r;
-        state_pins_rays[c].push_back(r);
-        state_pins_attackers[c].push_back(attacker);
+        const piece_bitboard_t pin = friends & r;
+        if(pin) {
+          state_pins[c] |= pin;
+          state_pins_rays[bitmask::log2(pin)] = r;
+        }
       }, c);
-      state_pins[c] &= get_piece_positions(c) & ~get_piece(KING,c).mask;
     }
   }
 
@@ -530,14 +530,8 @@ public:
     return state_pins[c];
   }
 
-  piece_bitboard_t get_pin_line_of(pos_t i) const {
-    const COLOR c = self[i].color;
-    if(c==NEUTRAL)return ~0ULL;
-    if(!(get_pins(c) & (1ULL << i)))return ~0ULL;
-    for(const auto &r : state_pins_rays[c]) {
-      if(r & (1ULL << i))return r;
-    }
-    return ~0ULL;
+  inline piece_bitboard_t get_pin_line_of(pos_t i) const {
+    return state_pins_rays[i];
   }
 
   piece_bitboard_t state_checkline = 0x00;
