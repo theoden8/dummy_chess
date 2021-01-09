@@ -2,6 +2,7 @@
 
 
 import os
+import sys
 import subprocess
 import random
 from pprint import pprint
@@ -37,7 +38,7 @@ def get_output_stockfish(depth=5, fen=startingpos):
 
 
 def get_next_fen(fen, move):
-    s = get_output(f"(echo 'position fen {startingpos} moves {move}'; echo 'd') | {stockfish} | grep Fen")
+    s = get_output(f"(echo 'position fen {fen} moves {move}'; echo 'd') | {stockfish} | grep Fen")
     s = s.replace('Fen: ', '')
     return s.strip()
 
@@ -53,13 +54,15 @@ def get_output_dummy_chess(depth=5, fen=startingpos):
     return turnmaps
 
 
-def compare_outputs(path=[], depth=5, fen=startingpos):
+def compare_outputs(depth=5, fen=startingpos, path=[]):
+    if depth < 1:
+        return True
     print(f"path={path}, depth={depth}, fen={fen}")
     sfmaps = get_output_stockfish(depth, fen)
     dcmaps = get_output_dummy_chess(depth, fen)
     print(f"totals: sf={sfmaps['total']}, dc={dcmaps['total']}")
     if sfmaps == dcmaps:
-        return True
+        return path == []
     flag_exit = False
     for k in sfmaps.keys():
         if k not in dcmaps:
@@ -75,9 +78,10 @@ def compare_outputs(path=[], depth=5, fen=startingpos):
     diff = [k for k in sfmaps.keys() if sfmaps[k] != dcmaps[k] and k != 'total']
     random.shuffle(diff)
     for m in diff:
-        res = compare_outputs(path=path+[m], depth=depth-1, fen=get_next_fen(startingpos, m))
+        res = compare_outputs(depth=depth-1, fen=get_next_fen(fen, m), path=path+[m])
     return False
 
 
 if __name__ == "__main__":
-    compare_outputs()
+    #compare_outputs(depth=5, fen=startingpos)
+    compare_outputs(depth=2, fen='r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 0')

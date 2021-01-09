@@ -128,6 +128,8 @@ public:
           m = bitmask::_pos_pair(i, j);
         }
         ++nodes;
+      } else if(depth <= 0) {
+        ++nodes;
       } else {
         double cur_alpha = alpha;
         _get_fixed_depth_move(c, depth - 1, alpha, m, nodes);
