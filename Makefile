@@ -1,5 +1,6 @@
 DBGFLAGS = -g3
 OPTFLAGS = -Ofast -DNDEBUG -flto -fwhole-program -march=native
+PROFFLAGS = $(OPTFLAGS) -pg
 CXXFLAGS = -std=c++17 -I. -Wall -Wextra -Wno-unused -Wno-parentheses -m64
 # CXXFLAGS += -fopt-info
 LDFLAGS =
@@ -22,7 +23,7 @@ dummy_chess_bench_board: bench_board.cpp $(SOURCES) $(HPPFILES) Makefile
 	$(CXX) $(OPTFLAGS) $(CXXFLAGS) bench_board.cpp $(SOURCES) $(LDFLAGS) -o $@
 
 dummy_chess_perft: perft.cpp $(SOURCES) $(HPPFILES) Makefile
-	$(CXX) $(OPTFLAGS) $(CXXFLAGS) perft.cpp $(SOURCES) $(LDFLAGS) -o $@
+	$(CXX) $(PROFFLAGS) $(CXXFLAGS) perft.cpp $(SOURCES) $(LDFLAGS) -o $@
 
 clean:
 	rm -vf *.o

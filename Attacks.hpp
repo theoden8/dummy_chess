@@ -126,7 +126,7 @@ struct Moves<WPAWNM> {
   }
 
   static constexpr inline bool is_promotion_move(pos_t i, pos_t j) {
-    return board::_y(j) == 8-1;
+    return board::_y(j) == -1+8;
   }
 
   static constexpr inline pos_t get_enpassant_trace(pos_t i, pos_t j) {
@@ -160,7 +160,7 @@ struct Moves<BPAWNM> {
   }
 
   static constexpr inline bool is_promotion_move(pos_t i, pos_t j) {
-    return board::_y(j) == 1-1;
+    return board::_y(j) == -1+1;
   }
 
   static constexpr piece_bitboard_t get_basic_move(pos_t i) {

@@ -197,7 +197,7 @@ public:
     enpassant_ = 0xFF;
   }
 
-  void update_castlings(pos_t i) {
+  void update_castlings(pos_t i, pos_t j) {
     const pos_t shift = (self[i].color == WHITE) ? 0 : board::SIZE-board::LEN;
     const piece_bitboard_t castleline = 0xFFULL << shift;
     const piece_bitboard_t castleleft = 0x04ULL << shift;
@@ -208,6 +208,15 @@ public:
       castlings_ &= ~castleleft;
     } else if((castlings_ & castleright) && self[i].value == ROOK && i == board::_pos(H, 1) + shift) {
       castlings_ &= ~castleright;
+    }
+
+    const pos_t antishift = (self[i].color == BLACK) ? 0 : board::SIZE-board::LEN;
+    const piece_bitboard_t anticastleleft = 0x04ULL << antishift;
+    const piece_bitboard_t anticastleright = 0x40ULL << antishift;
+    if((castlings_ & anticastleleft) && self[j].value == ROOK && j == board::_pos(A, 1) + antishift) {
+      castlings_ &= ~anticastleleft;
+    } else if((castlings_ & anticastleright) && self[j].value == ROOK && j == board::_pos(H, 1) + antishift) {
+      castlings_ &= ~anticastleright;
     }
   }
 
@@ -228,7 +237,7 @@ public:
           enpassant_ = enpassant_trace;
           if(killwhat == event::killnothing)++halfmoves_;
           else halfmoves_ = 0;
-          update_castlings(i);
+          update_castlings(i, j);
           move_pos(i, j);
           update_state_pos(i);
           update_state_pos(j);
@@ -244,7 +253,7 @@ public:
           auto halfmoves = event::extract_byte(ev);
           auto enpassant_ = event::extract_byte(ev);
           ++halfmoves_;
-          update_castlings(i);
+          update_castlings(i, j);
           move_pos(i, j);
           update_state_pos(i);
           update_state_pos(j);
@@ -283,6 +292,7 @@ public:
           auto halfmoves = event::extract_byte(ev);
           auto enpassant_ = event::extract_byte(ev);
           auto enpassant_trace = event::extract_byte(ev);
+          update_castlings(i, j);
           put_pos(i, self.get_piece(EMPTY));
           put_pos(j, self.pieces[Piece::get_piece_index(becomewhat, activePlayer())]);
           update_state_pos(i);
