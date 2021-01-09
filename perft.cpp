@@ -12,7 +12,15 @@ int main(int argc, char *argv[]) {
     event_t ev1 = e.get_move_event(i, j);
     e.act_event(ev1);
     e.get_fixed_depth_move(depth);
-    printf("%s%s: %lu\n", board::_pos_str(i).c_str(), board::_pos_str(j).c_str(), e.nodes_searched);
+    std::string sp = "";
+    switch((e.is_promotion_move(i,j)) ? e.get_promotion_as(j) : EMPTY) {
+      case KNIGHT:sp='n';break;
+      case BISHOP:sp='b';break;
+      case ROOK:sp='r';break;
+      case QUEEN:sp='q';break;
+      default:break;
+    }
+    printf("%s: %lu\n", (board::_pos_str(i) + board::_pos_str(j) + sp).c_str(), e.nodes_searched);
     total += e.nodes_searched;
     e.unact_event();
   });
