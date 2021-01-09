@@ -327,12 +327,12 @@ template <> struct Moves<KINGM> {
     if(castlings) {
       // can't castle when checked
       if(attack_mask & (1ULL << i))castlings=0x00;
-      constexpr piece_bitboard_t castleleft = 0x40ULL << shift;
-      constexpr piece_bitboard_t castleleftcheck = 0x20ULL << shift;
-      constexpr piece_bitboard_t castleleftcheckocc = 0x60ULL << shift;
-      constexpr piece_bitboard_t castleright = 0x04ULL << shift;
-      constexpr piece_bitboard_t castlerightcheck = 0x08ULL << shift;
-      constexpr piece_bitboard_t castlerightcheckocc = 0x0EULL << shift;
+      constexpr piece_bitboard_t castleleft = 0x04ULL << shift;
+      constexpr piece_bitboard_t castleleftcheck = 0x0CULL << shift;
+      constexpr piece_bitboard_t castleleftcheckocc = 0x0EULL << shift;
+      constexpr piece_bitboard_t castleright = 0x40ULL << shift;
+      constexpr piece_bitboard_t castlerightcheck = 0x60ULL << shift;
+      constexpr piece_bitboard_t castlerightcheckocc = 0x60ULL << shift;
       if((castlings & castleleft)
           && !(attack_mask & castleleftcheck)
           && !(occupied & castleleftcheckocc))

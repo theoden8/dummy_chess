@@ -473,7 +473,7 @@ public:
     return get_sliding_attacks_to(j, c)
         | (Attacks<KNIGHTM>::get_attacks(j) & get_piece(KNIGHT,c).mask)
         | (Attacks<KINGM>::get_attacks(j,occupied) & get_piece(KING,c).mask)
-        | (get_piece(PAWN,c).get_attack(j,occupied) & get_piece(PAWN,c).mask);
+        | (get_piece(PAWN,enemy_of(c)).get_attack(j,occupied) & get_piece(PAWN,c).mask);
   }
 
   inline piece_bitboard_t get_attack_counts_to(pos_t j, COLOR c=NEUTRAL) const {
@@ -488,13 +488,13 @@ public:
     });
   }
 
-  inline piece_bitboard_t get_attack_mask(COLOR c) const {
+  inline piece_bitboard_t get_attack_mask(COLOR c=NEUTRAL) const {
     if(c==NEUTRAL)c=activePlayer();
     if(c==BOTH)return get_attack_mask(WHITE)|get_attack_mask(BLACK);
     const piece_bitboard_t occupied = get_piece_positions(BOTH);
     piece_bitboard_t mask = 0x00;
     for(int p = 0; p < NO_PIECES; ++p) {
-      mask |= get_piece((PIECE)p, c).get_attacks(occupied&~get_piece(KING,c).mask);
+      mask |= get_piece((PIECE)p, c).get_attacks(occupied&~get_piece(KING,enemy_of(c)).mask);
     }
     return mask;
   }

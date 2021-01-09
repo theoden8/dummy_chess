@@ -35,6 +35,7 @@ struct Interface {
   } ncurses_color_palette;
 
   void run() {
+    setlocale(LC_ALL, "");
     initscr();
     start_color();
     // label, fg, bg
@@ -105,8 +106,17 @@ struct Interface {
         return;
       }
     }
-    if(pins & (1ULL << board::_pos(A+x,1+y))) {
-    //if(board.state_checkline[board.activePlayer()] & (1ULL << board::_pos(A+x,1+y))) {
+    const COLOR active = board.activePlayer();
+//    const piece_bitboard_t highlight = board.get_piece(KING,active).get_moves(board.get_king_pos(active),
+//                                                                              board.get_piece_positions(active),
+//                                                                              board.get_piece_positions(enemy_of(active)),
+//                                                                              board.get_attack_mask(enemy_of(active)),
+//                                                                              board.castlings_);
+    //const piece_bitboard_t highlight = board.get_attack_mask(enemy_of(active));
+    //const piece_bitboard_t highlight = pins;
+    const piece_bitboard_t highlight = board.state_checkline[active];
+    //const piece_bitboard_t highlight = board.get_attacks_to(board.get_king_pos(active), enemy_of(active));
+    if(highlight & (1ULL << board::_pos(A+x,1+y))) {
       attron(COLOR_PAIR(NC_COLOR_PINS));
       return;
     }
@@ -142,7 +152,19 @@ struct Interface {
     if(p.value == EMPTY) {
       addch(' ');
     } else {
-      addch(toupper(p.str()));
+      if(p.value==PAWN  &&p.color==WHITE)addstr("♙");
+      if(p.value==KNIGHT&&p.color==WHITE)addstr("♘");
+      if(p.value==BISHOP&&p.color==WHITE)addstr("♗");
+      if(p.value==ROOK  &&p.color==WHITE)addstr("♖");
+      if(p.value==QUEEN &&p.color==WHITE)addstr("♕");
+      if(p.value==KING  &&p.color==WHITE)addstr("♔");
+      if(p.value==PAWN  &&p.color==BLACK)addstr("♟");
+      if(p.value==KNIGHT&&p.color==BLACK)addstr("♞");
+      if(p.value==BISHOP&&p.color==BLACK)addstr("♝");
+      if(p.value==ROOK  &&p.color==BLACK)addstr("♜");
+      if(p.value==QUEEN &&p.color==BLACK)addstr("♛");
+      if(p.value==KING  &&p.color==BLACK)addstr("♚");
+      //addch(toupper(p.str()));
     }
     for(int c=0;c<CELL_PMW;++c)addch(' ');
     nc_reset_color();
@@ -242,10 +264,10 @@ struct Interface {
     attron(A_BOLD);
     const COLOR c = board.activePlayer();
     //set statusbar message
-    //event_t lastevent = board.last_event();
-    //const pos_t marker = event::extract_byte(lastevent);
-    //const pos_t from = event::extract_byte(lastevent);
-    //const pos_t to = event::extract_byte(lastevent);
+    event_t lastevent = board.last_event();
+    const pos_t marker = event::extract_byte(lastevent);
+    const pos_t from = event::extract_byte(lastevent);
+    const pos_t to = event::extract_byte(lastevent);
     //int len = printw("[ %s ]", activePlayer().c_str());
     //int len = printw("[ %s %hhu, (%hhu) %hhu->%hhu ]", activePlayer().c_str(), event::compress_castlings(board.castlings_), marker, from, to);
     //int len = printw("[ %s %llx ]", activePlayer().c_str(), board.state_checkline);

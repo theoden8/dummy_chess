@@ -4,8 +4,8 @@ CXXFLAGS = -std=c++17 -I. -Wall -Wextra -Wno-unused -Wno-parentheses -m64
 # CXXFLAGS += -fopt-info
 LDFLAGS =
 HPPFILES = $(wildcard *.hpp)
-NC_CFLAGS =  $(shell pkgconf --libs ncurses ncursesw)
-NC_LDFLAGS = $(shell pkgconf --libs ncurses ncursesw)
+NC_CFLAGS =  $(shell pkgconf --cflags ncursesw)
+NC_LDFLAGS = $(shell pkgconf --libs ncursesw)
 SOURCES = m42.cpp
 
 CORES = $(shell getconf _NPROCESSORS_ONLN)

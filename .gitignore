@@ -8,3 +8,5 @@ m42.*
 !/scripts/m42_download
 !/scripts/perft_compare.py
 scripts/
+
+tempfile

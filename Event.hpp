@@ -82,13 +82,13 @@ namespace event {
     return ((basicevent >> 8) << 8) | PROMOTION_MARKER;
   }
 
-  pos_t extract_byte(event_t &ev) {
+  inline pos_t extract_byte(event_t &ev) {
     pos_t byte = ev & 0xFF;
     ev >>= 8;
     return byte;
   }
 
-  pos_t extract_castlings(event_t &ev) {
+  inline piece_bitboard_t extract_castlings(event_t &ev) {
     return decompress_castlings(extract_byte(ev));
   }
 } // namespace event
