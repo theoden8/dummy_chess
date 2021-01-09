@@ -419,8 +419,6 @@ public:
   }
 
   void update_state_on_event(event_t ev=0x00, bool forward=true) {
-    //init_state_attacks();
-    //update_state_attack_mask();
     if(forward) {
       update_state_checkline();
       init_state_pins();
@@ -673,5 +671,43 @@ public:
       std::cout << std::endl;
     }
   }
+
+  fen::FEN export_as_fen() const {
+    fen::FEN f = {
+      .board = std::string(),
+      .active_player = activePlayer(),
+      .castling_compressed = event::compress_castlings(castlings_),
+      .enpassant = enpassant_,
+      .halfmove_clock = halfmoves_,
+      .fullmove = uint16_t(history.size() / 2),
+    };
+    for(pos_t y_ = 0; y_ < board::LEN; ++y_) {
+      const pos_t y = board::LEN - y_ - 1;
+      pos_t emptycount = 0;
+      for(pos_t x = 0; x < board::LEN; ++x) {
+        const pos_t ind = board::_pos(A+x, 1+y);
+        if(self[ind].value == EMPTY) {
+          ++emptycount;
+          continue;
+        }
+        if(emptycount > 0) {
+          f.board += std::to_string(emptycount);
+          emptycount = 0;
+        }
+        f.board += self[ind].str();
+      }
+      if(emptycount > 0) {
+        f.board += std::to_string(emptycount);
+        emptycount = 0;
+      }
+      if(y != 0)f.board+="/";
+    }
+    return f;
+  }
 };
+
 bool Board::m42_initialized = false;
+
+fen::FEN fen::export_from_board(const Board &board) {
+  return board.export_as_fen();
+}

@@ -106,7 +106,7 @@ struct Interface {
       }
     }
     if(pins & (1ULL << board::_pos(A+x,1+y))) {
-    //if(board.state_checkline & (1ULL << board::_pos(A+x,1+y))) {
+    //if(board.state_checkline[board.activePlayer()] & (1ULL << board::_pos(A+x,1+y))) {
       attron(COLOR_PAIR(NC_COLOR_PINS));
       return;
     }
@@ -240,6 +240,7 @@ struct Interface {
   void draw_statusbar(const int LEFT, int &top) {
     move(top + 2, LEFT);
     attron(A_BOLD);
+    const COLOR c = board.activePlayer();
     //set statusbar message
     //event_t lastevent = board.last_event();
     //const pos_t marker = event::extract_byte(lastevent);
@@ -248,7 +249,7 @@ struct Interface {
     //int len = printw("[ %s ]", activePlayer().c_str());
     //int len = printw("[ %s %hhu, (%hhu) %hhu->%hhu ]", activePlayer().c_str(), event::compress_castlings(board.castlings_), marker, from, to);
     //int len = printw("[ %s %llx ]", activePlayer().c_str(), board.state_checkline);
-    int len = printw("[ %s %llx %hhu ]", activePlayer().c_str(), board.state_checkline, board.halfmoves_);
+    int len = printw("[ %s %llx %llx %hhu ]", activePlayer().c_str(), board.state_checkline[c], board.state_checkline[enemy_of(c)], board.halfmoves_);
     nc_reset_color();
     for(int i = 0; i < 20 - len; ++i)addch(' ');
   }

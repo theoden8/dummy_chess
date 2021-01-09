@@ -1,0 +1,83 @@
+#!/usr/bin/env python3
+
+
+import os
+import subprocess
+import random
+from pprint import pprint
+
+
+def get_file_content_str(filename):
+    s = ""
+    with open(filename) as f:
+       for line in f:
+           s += line
+    return s
+
+
+def get_output(command):
+    tempfile = "tempfile"
+    subprocess.call(command + " 2>&1 > " + tempfile, shell=True)
+    s = get_file_content_str(tempfile)
+    subprocess.call("rm -f " + tempfile, shell=True)
+    return s
+
+
+startingpos = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
+stockfish = 'stockfish'
+def get_output_stockfish(depth=5, fen=startingpos):
+    s = get_output(f"(echo 'position fen {fen}'; echo 'go perft {depth}') | {stockfish}")
+    turnmaps = {}
+    for line in s.split('\n'):
+        if ':' in line:
+            left, right = line.split(':')
+            left = left.replace('Nodes searched', 'total')
+            turnmaps[left.strip()] = right.strip();
+    return turnmaps
+
+
+def get_next_fen(fen, move):
+    s = get_output(f"(echo 'position fen {startingpos} moves {move}'; echo 'd') | {stockfish} | grep Fen")
+    s = s.replace('Fen: ', '')
+    return s.strip()
+
+
+def get_output_dummy_chess(depth=5, fen=startingpos):
+    perft = './dummy_chess_perft'
+    s = get_output(f'{perft} {depth} "{fen}"')
+    turnmaps = {}
+    for line in s.split('\n'):
+        if ':' in line:
+            left, right = line.split(':')
+            turnmaps[left.strip()] = right.strip();
+    return turnmaps
+
+
+def compare_outputs(path=[], depth=5, fen=startingpos):
+    print(f"path={path}, depth={depth}, fen={fen}")
+    sfmaps = get_output_stockfish(depth, fen)
+    dcmaps = get_output_dummy_chess(depth, fen)
+    print(f"totals: sf={sfmaps['total']}, dc={dcmaps['total']}")
+    if sfmaps == dcmaps:
+        return True
+    flag_exit = False
+    for k in sfmaps.keys():
+        if k not in dcmaps:
+            print(f'cannot find move {path + [k]}')
+            flag_exit = True
+    for k in dcmaps.keys():
+        if k not in sfmaps:
+            print(f'extra move in {path + [k]}')
+            flag_exit = True
+    if flag_exit:
+        print(f"path={path}, depth={depth}, fen={fen}")
+        return False
+    diff = [k for k in sfmaps.keys() if sfmaps[k] != dcmaps[k] and k != 'total']
+    random.shuffle(diff)
+    for m in diff:
+        res = compare_outputs(path=path+[m], depth=depth-1, fen=get_next_fen(startingpos, m))
+    return False
+
+
+if __name__ == "__main__":
+    compare_outputs()

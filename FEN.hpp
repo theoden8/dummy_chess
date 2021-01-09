@@ -11,6 +11,7 @@
 
 using namespace std::string_literals;
 
+struct Board;
 
 namespace fen {
   typedef struct _FEN {
@@ -111,4 +112,31 @@ namespace fen {
   const FEN doublecheck_test_pos = fen::load_from_string("rnbqkbnr/pppp1ppp/8/8/4N3/5N2/PPPPQPPP/R1B1KB1R w KQkq - 8 8"s);
   const FEN check_test_pos = fen::load_from_string("rnbqkb1r/pppp1ppp/5n2/4N3/8/8/PPPPQPPP/RNB1KB1R w KQkq - 2 5"s);
   const FEN promotion_test_pos = fen::load_from_string("1k3n1n/4PPP1/8/8/8/8/1pp1PPPP/4K3 w - - 0 1"s);
+
+  FEN export_from_board(const Board &board);
+
+  std::string export_as_string(const fen::FEN &f) {
+    std::string s = f.board;
+    s += ' ';
+    s += (f.active_player == WHITE) ? 'w' : 'b';
+    s += ' ';
+    if(!f.castling_compressed) {
+      s += '-';
+    } else {
+      if(f.castling_compressed & (0x1 << 3))s+='K';
+      if(f.castling_compressed & (0x1 << 2))s+='Q';
+      if(f.castling_compressed & (0x1 << 1))s+='k';
+      if(f.castling_compressed & (0x1 << 0))s+='q';
+    }
+    s += ' ';
+    s += (f.enpassant == event::enpassantnotrace) ? "-"s : board::_pos_str(f.enpassant);
+    s += " "s + std::to_string(f.halfmove_clock) + " "s + std::to_string(f.fullmove);
+    return s;
+  }
+
+  std::string export_as_string(const Board &board) {
+    std::string s = export_as_string(export_from_board(board));
+    assert(s == export_as_string(fen::load_from_string(s)));
+    return s;
+  }
 } // namespace fen
