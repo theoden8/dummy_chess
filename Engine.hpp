@@ -144,8 +144,8 @@ public:
   // for optimizing traversal
   move_t get_fixed_depth_move(pos_t depth=1) {
     move_t m = board::nomove;
-    double alpha = -1e9;
     nodes_searched = 0;
+    double alpha = -1e9;
     _get_fixed_depth_move(activePlayer(), depth, alpha, m, nodes_searched);
     return m;
   }

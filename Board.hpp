@@ -36,7 +36,6 @@ public:
     halfmoves_(f.halfmove_clock)
   {
     if(!m42_initialized) {
-      std::cout << "init" << std::endl;
       M42::init();
       m42_initialized = true;
     }
@@ -410,23 +409,26 @@ public:
 
   void init_update_state() {
     init_state_attacks();
-    init_state_pmoves();
-    update_state_pins();
-    update_state_checkline();
+    init_state_checkline();
+    init_state_pins();
+    init_state_moves();
   }
 
   void update_state_pos(pos_t pos) {
     update_state_attacks_pos(pos);
-    update_state_moves_pos(pos);
   }
 
   void update_state_on_event(event_t ev=0x00, bool forward=true) {
+    //init_state_attacks();
+    //update_state_attack_mask();
     if(forward) {
-      update_state_pins();
       update_state_checkline();
+      init_state_pins();
+      init_state_moves();
     } else {
-      update_state_pins();
       update_state_checkline();
+      init_state_pins();
+      init_state_moves();
     }
   }
 
@@ -486,23 +488,17 @@ public:
     bitmask::foreach(affected, [&](pos_t i) mutable -> void {
       state_attacks[i] = self[i].get_attack(i, occupied & ~get_piece(KING,enemy_of(self[i].color)).mask);
     });
-    update_state_attack_mask();
-  }
-
-  piece_bitboard_t state_attack_masks[2] = {0ULL,0ULL};
-  inline void update_state_attack_mask() {
-    const piece_bitboard_t occupied = get_piece_positions(BOTH);
-    for(COLOR c : {WHITE,BLACK}) {
-      piece_bitboard_t mask = 0x00;
-      for(int p = 0; p < NO_PIECES; ++p) {
-        mask |= get_piece((PIECE)p, enemy_of(c)).get_attacks(occupied&~get_piece(KING,c).mask);
-      }
-      state_attack_masks[c] = mask;
-    }
   }
 
   inline piece_bitboard_t get_attack_mask(COLOR c) const {
-    return state_attack_masks[c];
+    if(c==NEUTRAL)c=activePlayer();
+    if(c==BOTH)return get_attack_mask(WHITE)|get_attack_mask(BLACK);
+    const piece_bitboard_t occupied = get_piece_positions(BOTH);
+    piece_bitboard_t mask = 0x00;
+    for(int p = 0; p < NO_PIECES; ++p) {
+      mask |= get_piece((PIECE)p, c).get_attacks(occupied&~get_piece(KING,c).mask);
+    }
+    return mask;
   }
 
   template <typename F>
@@ -527,7 +523,7 @@ public:
                                          & (get_piece(BISHOP,ec).mask | get_piece(QUEEN,ec).mask);
     if(bishop_xray) {
       bitmask::foreach(bishop_xray, [&](pos_t i) mutable -> void {
-        if(self[i].value == ROOK || self[i].value == QUEEN) {
+        if(self[i].value == BISHOP || self[i].value == QUEEN) {
           const piece_bitboard_t srcbit = 1ULL << i;
           const piece_bitboard_t r = get_piece(BISHOP,c).get_attacking_xray(i,j,foes|dstbit,friends) & ~srcbit;
           func(i, r | dstbit);
@@ -540,18 +536,47 @@ public:
     return bitmask::log2_of_exp2(get_piece(KING, c).mask);
   }
 
+  piece_bitboard_t state_checkline[NO_COLORS] = {0x00,0x00};
+  void init_state_checkline(COLOR c=NEUTRAL) {
+    if(c==NEUTRAL)c=activePlayer();
+    const piece_bitboard_t occupied = get_piece_positions(BOTH);
+    const pos_t kingpos = get_king_pos(c);
+    const piece_bitboard_t attackers = get_attacks_to(kingpos, enemy_of(c));
+    if(!attackers) {
+      state_checkline[c] = ~0x00ULL;
+      return;
+    } else if(!bitmask::is_exp2(attackers)) {
+      state_checkline[c] = 0x00;
+      return;
+    }
+    const pos_t attacker = bitmask::log2_of_exp2(attackers);
+    state_checkline[c] = self[attacker].get_attacking_ray(kingpos,attacker,occupied&~get_piece(KING,c).mask);
+    state_checkline[c] |= (1ULL << attacker);
+  }
+
+  piece_bitboard_t state_update_checkline_kingattacks[NO_COLORS] = {~0ULL,~0ULL};
+  void update_state_checkline() {
+    const COLOR c = activePlayer();
+    const piece_bitboard_t attackers = get_attacks_to(get_king_pos(c), enemy_of(c));
+    if(attackers == state_update_checkline_kingattacks[c])return;
+    state_update_checkline_kingattacks[c]=attackers;
+    init_state_checkline();
+  }
+
   piece_bitboard_t state_pins[NO_COLORS] = {0x00, 0x00};
   std::array<piece_bitboard_t, board::SIZE> state_pins_rays;
-  void update_state_pins() {
+  void init_state_pins() {
+    for(auto &spr:state_pins_rays)spr=~0x00ULL;
     for(COLOR c : {WHITE,BLACK}) {
       state_pins[c] = 0x00;
-      for(auto &spr:state_pins_rays)spr=~0x00ULL;
       const piece_bitboard_t friends = get_piece_positions(c) & ~get_piece(KING,c).mask;
       iter_attacking_xrays(get_king_pos(c), [&](pos_t i, piece_bitboard_t r) mutable -> void {
         const pos_t attacker = i;
         r |= 1ULL << attacker;
+        r &= ~get_piece(KING,c).mask;
         const piece_bitboard_t pin = friends & r;
         if(pin) {
+          assert(bitmask::is_exp2(pin));
           state_pins[c] |= pin;
           state_pins_rays[bitmask::log2_of_exp2(pin)] = r;
         }
@@ -567,24 +592,6 @@ public:
 
   inline piece_bitboard_t get_pin_line_of(pos_t i) const {
     return state_pins_rays[i];
-  }
-
-  piece_bitboard_t state_checkline = 0x00;
-  void update_state_checkline() {
-    const COLOR c = activePlayer();
-    const pos_t kingpos = get_king_pos(c);
-    const piece_bitboard_t attackers = get_attacks_to(kingpos, enemy_of(c));
-    if(!attackers) {
-      state_checkline = ~0x00ULL;
-      return;
-    } else if(!bitmask::is_exp2(attackers)) {
-      state_checkline = 0x00;
-      return;
-    }
-    const piece_bitboard_t occupied = get_piece_positions(BOTH);
-    const pos_t attacker = bitmask::log2_of_exp2(attackers);
-    state_checkline = self[attacker].get_attacking_ray(kingpos,attacker,occupied&~get_piece(KING,c).mask);
-    state_checkline |= (1ULL << attacker);
   }
 
   // fifty-halfmoves-draw
@@ -625,71 +632,42 @@ public:
     return is_draw_halfmoves() || is_draw_material() || is_draw_stalemate();
   }
 
-  std::array <piece_bitboard_t, board::SIZE> state_pmoves = {UINT64_C(0x00)};
-  void init_state_pmoves() {
-    for(auto&m:state_pmoves)m=UINT64_C(0x00);
+  std::array <piece_bitboard_t, board::SIZE> state_moves = {UINT64_C(0x00)};
+  void init_state_moves() {
+    for(auto&m:state_moves)m=UINT64_C(0x00);
+    if(is_draw_halfmoves() || is_draw_material())return;
     for(COLOR c : {WHITE,BLACK}) {
-      if(is_draw_halfmoves() || is_draw_material())return;
       const piece_bitboard_t friends = get_piece_positions(c),
                              foes  = get_piece_positions(enemy_of(c)),
-                             attack_mask = get_attack_mask(c);
+                             attack_mask = get_attack_mask(enemy_of(c)),
+                             pins = get_pins(c);
+      const bool doublecheck = (state_checkline[c] == 0x00);
       for(pos_t p = 0; p < NO_PIECES; ++p) {
+        if(doublecheck && p!=KING)continue;
         get_piece((PIECE)p,c).foreach([&](pos_t pos) mutable noexcept -> void {
-          state_pmoves[pos] = get_piece((PIECE)p,c).get_moves(pos,friends,foes,attack_mask,castlings_,enpassant_);
+          if(p==PAWN||p==KING) {
+            state_moves[pos] = get_piece((PIECE)p,c).get_moves(pos,friends,foes,attack_mask,castlings_,enpassant_);
+          } else {
+            state_moves[pos] = get_attacks_from(pos) & ~friends;
+          }
+          if(p != KING)state_moves[pos]&=state_checkline[c];
+          if(pins & (1ULL << pos))state_moves[pos] &= get_pin_line_of(pos);
         });
       }
     }
   }
 
-  void update_state_moves_pos(pos_t pos) {
-    const pos_t x = board::_x(pos), y = board::_y(pos);
-    const PIECE p = self[pos].value;
-    const piece_bitboard_t pawns_affected = (
-        (get_piece(PAWN,WHITE).mask & (
-          (y > -1+2 ? 1ULL << (pos - board::LEN) : 0)
-          | ((y > -1+2 && x > A) ? 1ULL << (pos - board::LEN - 1) : 0)
-          | ((y > -1+2 && x < H) ? 1ULL << (pos - board::LEN + 1) : 0)
-          | ((y == -1+4) ? 1ULL << (pos - 2*board::LEN) : 0)
-          | ((p==PAWN && x > A) ? 1ULL << (pos - 1) : 0)
-          | ((p==PAWN && x < H) ? 1ULL << (pos + 1) : 0)
-        ))
-      | (get_piece(PAWN,BLACK).mask & (
-          ((y < 7-1) ? 1ULL << (pos + board::LEN) : 0)
-          | ((y < 7-1 && x > A) ? 1ULL << (pos + board::LEN - 1) : 0)
-          | ((y < 7-1 && x < H) ? 1ULL << (pos + board::LEN + 1) : 0)
-          | ((y == -1+5) ? 1ULL << (pos + 2*board::LEN) : 0)
-          | ((p==PAWN && x > A) ? 1ULL << (pos - 1) : 0)
-          | ((p==PAWN && x < H) ? 1ULL << (pos + 1) : 0)
-      ))
-    );
-    const piece_bitboard_t affected = (1ULL << pos)
-                                      | get_sliding_attacks_to(pos, BOTH)
-                                      | get_piece(KING,WHITE).mask | get_piece(KING,BLACK).mask
-                                      | pawns_affected;
-    const piece_bitboard_t piece_masks[NO_COLORS] = {get_piece_positions(WHITE), get_piece_positions(BLACK)};
-    const piece_bitboard_t attack_masks[NO_COLORS] = {get_attack_mask(WHITE), get_attack_mask(BLACK)};
-    bitmask::foreach(affected, [&](pos_t i) mutable -> void {
-      const COLOR c = self[i].color;
-      state_pmoves[i] = self[i].get_moves(i,piece_masks[c],piece_masks[enemy_of(c)],attack_masks[c],castlings_,enpassant_);
-    });
-  }
-
   inline piece_bitboard_t get_moves_from(pos_t pos, COLOR c=NEUTRAL) const {
     if(c==NEUTRAL)c=activePlayer();
-    if(c==BOTH)return get_moves_from(pos,WHITE)|get_moves_from(pos,BLACK);
-
-    const PIECE p = self[pos].value;
+    if(c==BOTH)return state_moves[pos];
     if(self[pos].color!=c)return 0x00;
-    piece_bitboard_t pmoves = state_pmoves[pos];
-    if(p!=KING)pmoves&=state_checkline;
-    if(get_pins(c)&(1ULL<<pos))pmoves&=get_pin_line_of(pos);
-    return pmoves;
+    return state_moves[pos];
   }
 
-  void print() {
+  void print() const {
     for(pos_t i = board::LEN; i > 0; --i) {
       for(pos_t j = 0; j < board::LEN; ++j) {
-        Piece &p = self[(i-1) * board::LEN + j];
+        const Piece &p = self[(i-1) * board::LEN + j];
         std::cout << p.str() << " ";
       }
       std::cout << std::endl;
