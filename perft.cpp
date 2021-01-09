@@ -9,8 +9,18 @@ int main(int argc, char *argv[]) {
   printf("Perft %d\n", depth);
   size_t total = 0;
   e.iter_moves([&](pos_t i, pos_t j) mutable -> void {
-    event_t ev1 = e.get_move_event(i, j);
-    e.act_event(ev1);
+    event_t ev = e.get_move_event(i, j);
+    std::string sp;
+    if((ev & 0xff) == event::PROMOTION_MARKER) {
+      switch(e.get_promotion_as(j)) {
+        case KNIGHT:sp='n';break;
+        case BISHOP:sp='b';break;
+        case ROOK:sp='r';break;
+        case QUEEN:sp='q';break;
+        default:break;
+      }
+    }
+    e.act_event(ev);
     size_t nds = 0;
     if(depth > 1) {
       e.get_fixed_depth_move(-1+depth);
@@ -19,14 +29,6 @@ int main(int argc, char *argv[]) {
       nds = 1;
     } else {
       nds = 0;
-    }
-    std::string sp = "";
-    switch((e.is_promotion_move(i,j)) ? e.get_promotion_as(j) : EMPTY) {
-      case KNIGHT:sp='n';break;
-      case BISHOP:sp='b';break;
-      case ROOK:sp='r';break;
-      case QUEEN:sp='q';break;
-      default:break;
     }
     printf("%s: %lu\n", (board::_pos_str(i) + board::_pos_str(j) + sp).c_str(), nds);
     total += nds;
