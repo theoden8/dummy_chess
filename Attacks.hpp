@@ -98,27 +98,21 @@ template <> struct MultiAttacks<BPAWNM> {
 };
 
 
-template <MPIECE MP>
-static constexpr std::enable_if_t<MP == WPAWNM || MP == BPAWNM, piece_bitboard_t>
-get_pawn_moves(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes, pos_t enpassant) {
-  const piece_bitboard_t enpassant_mask = (enpassant == event::enpassantnotrace) ? 0x00 : 1ULL << enpassant;
-  const piece_bitboard_t attacks = Attacks<MP>::get_attacks(i) & (foes|enpassant_mask);
-  const piece_bitboard_t moves = Moves<MP>::get_basic_move(i) & ~(friends | foes);
-  if(bitmask::count_bits(moves) != 1) {
-    return attacks|moves;
-  }
-  const int pos_to = bitmask::log2_of_exp2(moves),
-            pos_from = i;
-  if(std::abs(pos_from - pos_to) == board::LEN) {
-    return attacks|moves;
-  }
-  return attacks;
-}
-
 template <>
 struct Moves<WPAWNM> {
-  static constexpr piece_bitboard_t get_moves(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes, pos_t enpassant) {
-    return get_pawn_moves<WPAWNM>(i, friends, foes, enpassant);
+  static piece_bitboard_t get_moves(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes, pos_t enpassant) {
+    const piece_bitboard_t enpassant_mask = 1ULL << enpassant; // 0 if enpassant == 0xff
+    const piece_bitboard_t attack_moves = Attacks<WPAWNM>::get_attacks(i) & (foes|enpassant_mask);
+    const piece_bitboard_t free_pushes = Moves<WPAWNM>::get_push_moves(i) & ~(friends | foes);
+    // none/both cells free
+    if(!bitmask::is_exp2(free_pushes)) {
+      return attack_moves|free_pushes;
+    }
+    // only one cell free
+    if(i + board::LEN == bitmask::log2_of_exp2(free_pushes)) {
+      return attack_moves|free_pushes;
+    }
+    return attack_moves;
   }
 
   static constexpr inline bool is_enpassant_move(pos_t i, pos_t j) {
@@ -134,7 +128,7 @@ struct Moves<WPAWNM> {
     return j-board::LEN;
   }
 
-  static constexpr piece_bitboard_t get_basic_move(pos_t i) {
+  static constexpr piece_bitboard_t get_push_moves(pos_t i) {
     const piece_bitboard_t maskpos = 1ULL << i;
     piece_bitboard_t mask = maskpos<<board::LEN;
     if(1+board::_y(i) == 2) {
@@ -146,8 +140,19 @@ struct Moves<WPAWNM> {
 
 template <>
 struct Moves<BPAWNM> {
-  static constexpr piece_bitboard_t get_moves(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes, pos_t enpassant) {
-    return get_pawn_moves<BPAWNM>(i, friends, foes, enpassant);
+  static piece_bitboard_t get_moves(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes, pos_t enpassant) {
+    const piece_bitboard_t enpassant_mask = 1ULL << enpassant; // 0 if enpassant == 0xff
+    const piece_bitboard_t attack_moves = Attacks<BPAWNM>::get_attacks(i) & (foes|enpassant_mask);
+    const piece_bitboard_t free_pushes = Moves<BPAWNM>::get_push_moves(i) & ~(friends | foes);
+    // none/both cells free
+    if(!bitmask::is_exp2(free_pushes)) {
+      return attack_moves|free_pushes;
+    }
+    // only one cell free
+    if(i - board::LEN == bitmask::log2_of_exp2(free_pushes)) {
+      return attack_moves|free_pushes;
+    }
+    return attack_moves;
   }
 
   static constexpr inline bool is_enpassant_move(pos_t i, pos_t j) {
@@ -163,7 +168,7 @@ struct Moves<BPAWNM> {
     return board::_y(j) == -1+1;
   }
 
-  static constexpr piece_bitboard_t get_basic_move(pos_t i) {
+  static constexpr piece_bitboard_t get_push_moves(pos_t i) {
     const piece_bitboard_t maskpos = 1ULL << i;
     piece_bitboard_t mask = maskpos>>board::LEN;
     if(1+board::_y(i) == 7) {

@@ -151,4 +151,24 @@ public:
     _get_fixed_depth_move(activePlayer(), depth, alpha, m, nodes_searched);
     return m;
   }
+
+  void _perft(pos_t depth, size_t &nodes) {
+    iter_moves([&](pos_t i, pos_t j) mutable -> void {
+      event_t ev = get_move_event(i, j);
+      act_event(ev);
+      if(depth == 1) {
+        ++nodes;
+      } else if(depth <= 0) {
+        ++nodes;
+      } else {
+        _perft(depth - 1, nodes);
+      }
+      unact_event();
+    });
+  }
+
+  void perft(pos_t depth=1) {
+    nodes_searched = 0;
+    _perft(depth, nodes_searched);
+  }
 };

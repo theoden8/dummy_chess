@@ -23,7 +23,7 @@ int main(int argc, char *argv[]) {
     e.act_event(ev);
     size_t nds = 0;
     if(depth > 1) {
-      e.get_fixed_depth_move(-1+depth);
+      e.perft(-1+depth);
       nds = e.nodes_searched;
     } else if(depth == 1) {
       nds = 1;

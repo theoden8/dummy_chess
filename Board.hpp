@@ -163,8 +163,8 @@ public:
     pos_pair_t rookmove = 0x00;
     if(self[i].color == WHITE)rookmove = Moves<KINGM>::castle_rook_move<WHITE>(i,j);
     if(self[i].color == BLACK)rookmove = Moves<KINGM>::castle_rook_move<BLACK>(i,j);
-    pos_t r_i = bitmask::first(rookmove),
-          r_j = bitmask::second(rookmove);
+    const pos_t r_i = bitmask::first(rookmove),
+                r_j = bitmask::second(rookmove);
     return event::castling(i, j, r_i, r_j, castlings_, halfmoves_, enpassant_);
   }
 
@@ -306,7 +306,7 @@ public:
     update_state_on_event(ev, true);
   }
 
-  event_t last_event() const {
+  inline event_t last_event() const {
     if(history.empty())return 0x00;
     return history.back();
   }
@@ -394,7 +394,7 @@ public:
   }
 
   event_t get_move_event(pos_t i, pos_t j) const {
-    event_t ev;
+    event_t ev = 0x00;
     const pos_t promote_as = j & ~board::MOVEMASK;
     j &= board::MOVEMASK;
     if(is_castling_move(i, j)) {
@@ -568,14 +568,15 @@ public:
     const piece_bitboard_t attackers = get_attacks_to(get_king_pos(c), enemy_of(c));
     if(attackers == state_update_checkline_kingattacks[c])return;
     state_update_checkline_kingattacks[c]=attackers;
-    init_state_checkline();
+    init_state_checkline(c);
   }
 
   piece_bitboard_t state_pins[NO_COLORS] = {0x00, 0x00};
   std::array<piece_bitboard_t, board::SIZE> state_pins_rays;
   void init_state_pins() {
     for(auto &spr:state_pins_rays)spr=~0x00ULL;
-    for(COLOR c : {WHITE,BLACK}) {
+    const COLOR c = activePlayer();
+    {
       state_pins[c] = 0x00;
       const piece_bitboard_t friends = get_piece_positions(c) & ~get_piece(KING,c).mask;
       iter_attacking_xrays(get_king_pos(c), [&](pos_t i, piece_bitboard_t r) mutable -> void {
@@ -644,7 +645,8 @@ public:
   void init_state_moves() {
     for(auto&m:state_moves)m=UINT64_C(0x00);
     if(is_draw_halfmoves() || is_draw_material())return;
-    for(COLOR c : {WHITE,BLACK}) {
+    const COLOR c = activePlayer();
+    {
       const piece_bitboard_t friends = get_piece_positions(c),
                              foes  = get_piece_positions(enemy_of(c)),
                              attack_mask = get_attack_mask(enemy_of(c)),
@@ -659,7 +661,7 @@ public:
             state_moves[pos] = get_attacks_from(pos) & ~friends;
           }
           if(p != KING)state_moves[pos]&=state_checkline[c];
-          if(pins & (1ULL << pos))state_moves[pos] &= get_pin_line_of(pos);
+          if(pins & (1ULL << pos))state_moves[pos]&=get_pin_line_of(pos);
         });
       }
     }
