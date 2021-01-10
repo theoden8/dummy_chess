@@ -641,9 +641,9 @@ public:
     return is_draw_halfmoves() || is_draw_material() || is_draw_stalemate();
   }
 
-  std::array <piece_bitboard_t, board::SIZE> state_moves = {UINT64_C(0x00)};
+  std::array <piece_bitboard_t, board::SIZE> state_moves = {0x00};
   void init_state_moves() {
-    for(auto&m:state_moves)m=UINT64_C(0x00);
+    for(auto&m:state_moves)m=0x00;
     if(is_draw_halfmoves() || is_draw_material())return;
     const COLOR c = activePlayer();
     {
@@ -655,15 +655,22 @@ public:
       for(pos_t p = 0; p < NO_PIECES; ++p) {
         if(doublecheck && p!=KING)continue;
         get_piece((PIECE)p,c).foreach([&](pos_t pos) mutable noexcept -> void {
-          if(p==PAWN||p==KING) {
-            state_moves[pos] = get_piece((PIECE)p,c).get_moves(pos,friends,foes,attack_mask,castlings_,enpassant_);
+          if(p==PAWN) {
+            state_moves[pos] = get_attacks_from(pos) & (foes|(1ULL << enpassant_));
+            state_moves[pos] |= get_push_moves(c, pos, friends|foes);
+            state_moves[pos] &= state_checkline[c];
+          } else if(p==KING) {
+            state_moves[pos] = get_attacks_from(pos) & ~friends & ~attack_mask;
+            state_moves[pos] |= Moves<KINGM>::get_castling_moves(pos, friends|foes, attack_mask, castlings_, c);
           } else {
             state_moves[pos] = get_attacks_from(pos) & ~friends;
+            state_moves[pos] &= state_checkline[c];
           }
-          if(p != KING)state_moves[pos]&=state_checkline[c];
-          if(pins & (1ULL << pos))state_moves[pos]&=get_pin_line_of(pos);
         });
       }
+      bitmask::foreach(pins, [&](pos_t pos) mutable -> void {
+        state_moves[pos]&=get_pin_line_of(pos);
+      });
     }
   }
 

@@ -83,23 +83,6 @@ struct Piece {
     return get_attacking_ray(i, j, friends | (foes ^ blockers));
   }
 
-  // attack from specific position by this type of piece
-  inline constexpr piece_bitboard_t get_moves(pos_t pos, piece_bitboard_t friends, piece_bitboard_t foes,
-                                              piece_bitboard_t attack_mask=0x00, piece_bitboard_t castlings=0x00,
-                                              pos_t enpassant=event::enpassantnotrace) const
-  {
-    const MPIECE mp = get_mpiece_value(value, color);
-    if(mp==WPAWNM) return Moves<WPAWNM>::get_moves(pos,friends,foes,enpassant);
-    if(mp==BPAWNM) return Moves<BPAWNM>::get_moves(pos,friends,foes,enpassant);
-    if(mp==KNIGHTM)return Moves<KNIGHTM>::get_moves(pos,friends,foes);
-    if(mp==BISHOPM)return Moves<BISHOPM>::get_moves(pos,friends,foes);
-    if(mp==ROOKM)  return Moves<ROOKM>::get_moves(pos,friends,foes);
-    if(mp==QUEENM) return Moves<QUEENM>::get_moves(pos,friends,foes);
-    if(mp==KINGM&&color==WHITE)return Moves<KINGM>::get_moves<WHITE>(pos,friends,foes,attack_mask,castlings);
-    if(mp==KINGM&&color==BLACK)return Moves<KINGM>::get_moves<BLACK>(pos,friends,foes,attack_mask,castlings);
-    return 0x00ULL;
-  }
-
   // multi-attacks
   inline constexpr piece_bitboard_t get_attacks(piece_bitboard_t occupied) const {
     const MPIECE mp = get_mpiece_value(value, color);

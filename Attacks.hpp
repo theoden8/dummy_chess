@@ -53,11 +53,7 @@ template <MPIECE MP> struct MultiAttacks {
   }
 };
 
-template <MPIECE MP> struct Moves {
-  static constexpr piece_bitboard_t get_moves(piece_bitboard_t mask, piece_bitboard_t friends, piece_bitboard_t foes) {
-    return Attacks<MP>::get_attacks(mask, friends|foes) & ~friends;
-  }
-};
+template <MPIECE MP> struct Moves;
 
 // pawn attacks
 template <> struct Attacks<WPAWNM> {
@@ -100,21 +96,6 @@ template <> struct MultiAttacks<BPAWNM> {
 
 template <>
 struct Moves<WPAWNM> {
-  static piece_bitboard_t get_moves(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes, pos_t enpassant) {
-    const piece_bitboard_t enpassant_mask = 1ULL << enpassant; // 0 if enpassant == 0xff
-    const piece_bitboard_t attack_moves = Attacks<WPAWNM>::get_attacks(i) & (foes|enpassant_mask);
-    const piece_bitboard_t free_pushes = Moves<WPAWNM>::get_push_moves(i) & ~(friends | foes);
-    // none/both cells free
-    if(!bitmask::is_exp2(free_pushes)) {
-      return attack_moves|free_pushes;
-    }
-    // only one cell free
-    if(i + board::LEN == bitmask::log2_of_exp2(free_pushes)) {
-      return attack_moves|free_pushes;
-    }
-    return attack_moves;
-  }
-
   static constexpr inline bool is_enpassant_move(pos_t i, pos_t j) {
     return (j - i) == 2*board::LEN;
   }
@@ -136,25 +117,15 @@ struct Moves<WPAWNM> {
     }
     return mask;
   }
+
+  static inline piece_bitboard_t get_push_moves(pos_t i, piece_bitboard_t occupied) {
+    const piece_bitboard_t pushes = ((1ULL << i) << board::LEN) & ~occupied;
+    return (pushes | ((pushes & (bitmask::hline << (-1+3)*board::LEN)) << board::LEN)) & ~occupied;
+  }
 };
 
 template <>
 struct Moves<BPAWNM> {
-  static piece_bitboard_t get_moves(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes, pos_t enpassant) {
-    const piece_bitboard_t enpassant_mask = 1ULL << enpassant; // 0 if enpassant == 0xff
-    const piece_bitboard_t attack_moves = Attacks<BPAWNM>::get_attacks(i) & (foes|enpassant_mask);
-    const piece_bitboard_t free_pushes = Moves<BPAWNM>::get_push_moves(i) & ~(friends | foes);
-    // none/both cells free
-    if(!bitmask::is_exp2(free_pushes)) {
-      return attack_moves|free_pushes;
-    }
-    // only one cell free
-    if(i - board::LEN == bitmask::log2_of_exp2(free_pushes)) {
-      return attack_moves|free_pushes;
-    }
-    return attack_moves;
-  }
-
   static constexpr inline bool is_enpassant_move(pos_t i, pos_t j) {
     return (i - j) == 2*board::LEN;
   }
@@ -176,7 +147,19 @@ struct Moves<BPAWNM> {
     }
     return mask;
   }
+
+  static inline piece_bitboard_t get_push_moves(pos_t i, piece_bitboard_t occupied) {
+    const piece_bitboard_t pushes = ((1ULL << i) >> board::LEN) & ~occupied;
+    return (pushes | ((pushes & (bitmask::hline << (-1+6)*board::LEN)) >> board::LEN)) & ~occupied;
+  }
 };
+
+
+inline piece_bitboard_t get_push_moves(COLOR c, pos_t i, piece_bitboard_t occupied) {
+  if(c==WHITE)return Moves<WPAWNM>::get_push_moves(i, occupied);
+  if(c==BLACK)return Moves<BPAWNM>::get_push_moves(i, occupied);
+  return 0x00;
+}
 
 
 // knight attacks
@@ -190,13 +173,6 @@ template <> struct Attacks <KNIGHTM> {
 template <> struct MultiAttacks<KNIGHTM> {
   static inline piece_bitboard_t get_attacks(piece_bitboard_t knights) {
     return M42::calc_knight_attacks(knights);
-  }
-};
-
-template <> struct Moves<KNIGHTM> {
-  static piece_bitboard_t get_moves(piece_bitboard_t mask, piece_bitboard_t friends, piece_bitboard_t foes) {
-    // knights, rooks, bishops and queens, no pins/checks considerations
-    return Attacks<KNIGHTM>::get_attacks(mask) & ~friends;
   }
 };
 
@@ -255,7 +231,7 @@ template <> struct Attacks<ROOKM> {
       const piece_bitboard_t rankattacks = M42::rank_attacks(i, occupied);
       const piece_bitboard_t shift = board::LEN * y_i;
       if(x_j < x_i) {
-        const piece_bitboard_t left = (bitmask::hline >> board::LEN - x_i) << shift;
+        const piece_bitboard_t left = (bitmask::hline >> (board::LEN - x_i)) << shift;
         r = rankattacks & left;
       } else if(x_i < x_j) {
         const piece_bitboard_t right = ((bitmask::hline << (x_i + 1)) & bitmask::hline) << shift;
@@ -321,23 +297,21 @@ template <> struct Attacks<KINGM> {
 
 // king moves
 template <> struct Moves<KINGM> {
-  template <COLOR CC>
-  static inline constexpr piece_bitboard_t get_moves(pos_t i, piece_bitboard_t friends, piece_bitboard_t foes,
-                                                     piece_bitboard_t attack_mask, piece_bitboard_t castlings)
+  static constexpr piece_bitboard_t get_castling_moves(pos_t i, piece_bitboard_t occupied, piece_bitboard_t attack_mask,
+                                                              piece_bitboard_t castlings, COLOR CC)
   {
-    const piece_bitboard_t occupied = friends | foes;
-    constexpr pos_t shift = (CC == WHITE) ? 0 : (board::SIZE-board::LEN);
+    const pos_t shift = (CC == WHITE) ? 0 : (board::SIZE-board::LEN);
     castlings &= bitmask::hline << shift;
     piece_bitboard_t castlemoves = 0x00;
     if(castlings) {
       // can't castle when checked
       if(attack_mask & (1ULL << i))castlings=0x00;
-      constexpr piece_bitboard_t castleleft = 0x04ULL << shift;
-      constexpr piece_bitboard_t castleleftcheck = 0x0CULL << shift;
-      constexpr piece_bitboard_t castleleftcheckocc = 0x0EULL << shift;
-      constexpr piece_bitboard_t castleright = 0x40ULL << shift;
-      constexpr piece_bitboard_t castlerightcheck = 0x60ULL << shift;
-      constexpr piece_bitboard_t castlerightcheckocc = 0x60ULL << shift;
+      const piece_bitboard_t castleleft = 0x04ULL << shift;
+      const piece_bitboard_t castleleftcheck = 0x0CULL << shift;
+      const piece_bitboard_t castleleftcheckocc = 0x0EULL << shift;
+      const piece_bitboard_t castleright = 0x40ULL << shift;
+      const piece_bitboard_t castlerightcheck = 0x60ULL << shift;
+      const piece_bitboard_t castlerightcheckocc = 0x60ULL << shift;
       if((castlings & castleleft)
           && !(attack_mask & castleleftcheck)
           && !(occupied & castleleftcheckocc))
@@ -347,7 +321,7 @@ template <> struct Moves<KINGM> {
           && !(occupied & castlerightcheckocc))
         castlemoves|=castleright;
     }
-    return (Attacks<KINGM>::get_attacks(i, friends|foes) & ~friends & ~attack_mask) | castlemoves;
+    return castlemoves;
   }
 
   template <COLOR CC>

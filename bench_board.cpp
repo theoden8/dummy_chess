@@ -10,7 +10,7 @@ int main() {
   printf("\n");
   printf("starting position\n");
   constexpr uint64_t shannon_number[] = { 20, 400, 8902, 197281, 4865609, 119060324, 3195901860 };
-  for(int depth = 1; depth <= 5; ++depth) {
+  for(int depth = 1; depth <= 6; ++depth) {
     Engine e(fen::starting_pos);
     auto start = system_clock::now();
     e.perft(depth);
