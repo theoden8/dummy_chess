@@ -96,6 +96,11 @@ template <> struct MultiAttacks<BPAWNM> {
 
 template <>
 struct Moves<WPAWNM> {
+  static inline piece_bitboard_t get_push_moves(pos_t i, piece_bitboard_t occupied) {
+    const piece_bitboard_t pushes = ((1ULL << i) << board::LEN) & ~occupied;
+    return (pushes | ((pushes & (bitmask::hline << (-1+3)*board::LEN)) << board::LEN)) & ~occupied;
+  }
+
   static constexpr inline bool is_enpassant_move(pos_t i, pos_t j) {
     return (j - i) == 2*board::LEN;
   }
@@ -108,24 +113,15 @@ struct Moves<WPAWNM> {
     assert(is_enpassant_move(i, j));
     return j-board::LEN;
   }
-
-  static constexpr piece_bitboard_t get_push_moves(pos_t i) {
-    const piece_bitboard_t maskpos = 1ULL << i;
-    piece_bitboard_t mask = maskpos<<board::LEN;
-    if(1+board::_y(i) == 2) {
-      mask|=maskpos<<(2*board::LEN);
-    }
-    return mask;
-  }
-
-  static inline piece_bitboard_t get_push_moves(pos_t i, piece_bitboard_t occupied) {
-    const piece_bitboard_t pushes = ((1ULL << i) << board::LEN) & ~occupied;
-    return (pushes | ((pushes & (bitmask::hline << (-1+3)*board::LEN)) << board::LEN)) & ~occupied;
-  }
 };
 
 template <>
 struct Moves<BPAWNM> {
+  static inline piece_bitboard_t get_push_moves(pos_t i, piece_bitboard_t occupied) {
+    const piece_bitboard_t pushes = ((1ULL << i) >> board::LEN) & ~occupied;
+    return (pushes | ((pushes & (bitmask::hline << (-1+6)*board::LEN)) >> board::LEN)) & ~occupied;
+  }
+
   static constexpr inline bool is_enpassant_move(pos_t i, pos_t j) {
     return (i - j) == 2*board::LEN;
   }
@@ -137,20 +133,6 @@ struct Moves<BPAWNM> {
 
   static constexpr inline bool is_promotion_move(pos_t i, pos_t j) {
     return board::_y(j) == -1+1;
-  }
-
-  static constexpr piece_bitboard_t get_push_moves(pos_t i) {
-    const piece_bitboard_t maskpos = 1ULL << i;
-    piece_bitboard_t mask = maskpos>>board::LEN;
-    if(1+board::_y(i) == 7) {
-      mask|=maskpos>>(2*board::LEN);
-    }
-    return mask;
-  }
-
-  static inline piece_bitboard_t get_push_moves(pos_t i, piece_bitboard_t occupied) {
-    const piece_bitboard_t pushes = ((1ULL << i) >> board::LEN) & ~occupied;
-    return (pushes | ((pushes & (bitmask::hline << (-1+6)*board::LEN)) >> board::LEN)) & ~occupied;
   }
 };
 

@@ -25,30 +25,30 @@ struct Piece {
     mask(loc)
   {}
 
-  constexpr bool is_set(pos_t i) const {
+  inline constexpr bool is_set(pos_t i) const {
     return mask & (1LLU << i);
   }
 
-  constexpr bool is_empty() const {
+  inline constexpr bool is_empty() const {
     return value == EMPTY;
   }
 
-  constexpr void set_pos(pos_t i) {
+  inline constexpr void set_pos(pos_t i) {
     assert(!is_set(i));
     mask |= 1LLU << i;
   }
 
-  constexpr void unset_pos(pos_t i) {
+  inline constexpr void unset_pos(pos_t i) {
     assert(is_set(i));
     mask &= ~(1LLU << i);
   }
 
-  constexpr void move(pos_t i, pos_t j) {
-    this->unset_pos(i);
-    this->set_pos(j);
+  inline constexpr void move(pos_t i, pos_t j) {
+    unset_pos(i);
+    set_pos(j);
   }
 
-  constexpr pos_t size() const {
+  inline constexpr pos_t size() const {
     return bitmask::count_bits(mask);
   }
 
@@ -109,7 +109,7 @@ struct Piece {
     bitmask::print(mask);
   }
 
-  constexpr char str() const {
+  inline constexpr char str() const {
     char c = '*';
     switch(value) {
       case EMPTY: return c;

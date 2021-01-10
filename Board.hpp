@@ -420,7 +420,6 @@ public:
   void init_update_state() {
     init_state_attacks();
     init_state_checkline();
-    init_state_pins();
     init_state_moves();
   }
 
@@ -431,11 +430,9 @@ public:
   void update_state_on_event(event_t ev=0x00, bool forward=true) {
     if(forward) {
       update_state_checkline();
-      init_state_pins();
       init_state_moves();
     } else {
       update_state_checkline();
-      init_state_pins();
       init_state_moves();
     }
   }
@@ -501,43 +498,12 @@ public:
   inline piece_bitboard_t get_attack_mask(COLOR c=NEUTRAL) const {
     if(c==NEUTRAL)c=activePlayer();
     if(c==BOTH)return get_attack_mask(WHITE)|get_attack_mask(BLACK);
-    const piece_bitboard_t occupied = get_piece_positions(BOTH);
+    const piece_bitboard_t occupied = get_piece_positions(BOTH) & ~get_piece(KING, enemy_of(c)).mask;
     piece_bitboard_t mask = 0x00;
     for(int p = 0; p < NO_PIECES; ++p) {
-      mask |= get_piece((PIECE)p, c).get_attacks(occupied&~get_piece(KING,enemy_of(c)).mask);
+      mask |= get_piece((PIECE)p, c).get_attacks(occupied);
     }
     return mask;
-  }
-
-  template <typename F>
-  inline void iter_attacking_xrays(pos_t j, F &&func, COLOR c=NEUTRAL) const {
-    if(c==NEUTRAL)return;
-    const piece_bitboard_t dstbit = 1ULL << j;
-    const COLOR ec = enemy_of(c);
-    const piece_bitboard_t friends = get_piece_positions(c),
-                           foes = get_piece_positions(ec);
-    const piece_bitboard_t rook_xray = get_piece(ROOK,c).get_xray_attack(j,foes,friends)
-                                       & (get_piece(ROOK,ec).mask | get_piece(QUEEN,ec).mask);
-    if(rook_xray) {
-      bitmask::foreach(rook_xray, [&](pos_t i) mutable -> void {
-        if(self[i].value == ROOK || self[i].value == QUEEN) {
-          const piece_bitboard_t srcbit = 1ULL << i;
-          const piece_bitboard_t r = get_piece(ROOK,c).get_attacking_xray(i,j,foes|dstbit,friends) & ~srcbit;
-          func(i, r | dstbit);
-        }
-      });
-    }
-    const piece_bitboard_t bishop_xray = get_piece(BISHOP,c).get_xray_attack(j,foes,friends)
-                                         & (get_piece(BISHOP,ec).mask | get_piece(QUEEN,ec).mask);
-    if(bishop_xray) {
-      bitmask::foreach(bishop_xray, [&](pos_t i) mutable -> void {
-        if(self[i].value == BISHOP || self[i].value == QUEEN) {
-          const piece_bitboard_t srcbit = 1ULL << i;
-          const piece_bitboard_t r = get_piece(BISHOP,c).get_attacking_xray(i,j,foes|dstbit,friends) & ~srcbit;
-          func(i, r | dstbit);
-        }
-      });
-    }
   }
 
   inline pos_t get_king_pos(COLOR c) const {
@@ -563,44 +529,12 @@ public:
   }
 
   piece_bitboard_t state_update_checkline_kingattacks[NO_COLORS] = {~0ULL,~0ULL};
-  void update_state_checkline() {
+  inline void update_state_checkline() {
     const COLOR c = activePlayer();
     const piece_bitboard_t attackers = get_attacks_to(get_king_pos(c), enemy_of(c));
     if(attackers == state_update_checkline_kingattacks[c])return;
     state_update_checkline_kingattacks[c]=attackers;
     init_state_checkline(c);
-  }
-
-  piece_bitboard_t state_pins[NO_COLORS] = {0x00, 0x00};
-  std::array<piece_bitboard_t, board::SIZE> state_pins_rays;
-  void init_state_pins() {
-    for(auto &spr:state_pins_rays)spr=~0x00ULL;
-    const COLOR c = activePlayer();
-    {
-      state_pins[c] = 0x00;
-      const piece_bitboard_t friends = get_piece_positions(c) & ~get_piece(KING,c).mask;
-      iter_attacking_xrays(get_king_pos(c), [&](pos_t i, piece_bitboard_t r) mutable -> void {
-        const pos_t attacker = i;
-        r |= 1ULL << attacker;
-        r &= ~get_piece(KING,c).mask;
-        const piece_bitboard_t pin = friends & r;
-        if(pin) {
-          assert(bitmask::is_exp2(pin));
-          state_pins[c] |= pin;
-          state_pins_rays[bitmask::log2_of_exp2(pin)] = r;
-        }
-      }, c);
-    }
-  }
-
-  inline piece_bitboard_t get_pins(COLOR c=NEUTRAL) const {
-    if(c==NEUTRAL)c=activePlayer();
-    if(c==BOTH)return get_pins(WHITE)|get_pins(BLACK);
-    return state_pins[c];
-  }
-
-  inline piece_bitboard_t get_pin_line_of(pos_t i) const {
-    return state_pins_rays[i];
   }
 
   // fifty-halfmoves-draw
@@ -644,8 +578,9 @@ public:
   std::array <piece_bitboard_t, board::SIZE> state_moves = {0x00};
   void init_state_moves() {
     for(auto&m:state_moves)m=0x00;
-    if(is_draw_halfmoves() || is_draw_material())return;
+    if(is_draw_halfmoves()||is_draw_material())return;
     const COLOR c = activePlayer();
+    // maybe do this as a loop for incremental updates
     {
       const piece_bitboard_t friends = get_piece_positions(c),
                              foes  = get_piece_positions(enemy_of(c)),
@@ -668,9 +603,70 @@ public:
           }
         });
       }
-      bitmask::foreach(pins, [&](pos_t pos) mutable -> void {
-        state_moves[pos]&=get_pin_line_of(pos);
+      init_state_pins();
+    }
+  }
+
+  inline piece_bitboard_t get_pins(COLOR c=NEUTRAL) const {
+    if(c==NEUTRAL)c=activePlayer();
+    if(c==BOTH)return get_pins(WHITE)|get_pins(BLACK);
+    return state_pins[c];
+  }
+
+  template <typename F>
+  inline void iter_attacking_xrays(pos_t j, F &&func, COLOR c=NEUTRAL) const {
+    if(c==NEUTRAL)return;
+    const piece_bitboard_t dstbit = 1ULL << j;
+    const COLOR ec = enemy_of(c);
+    const piece_bitboard_t friends = get_piece_positions(c),
+                           foes = get_piece_positions(ec);
+    const piece_bitboard_t rook_xray = get_piece(ROOK,c).get_xray_attack(j,foes,friends)
+                                       & (get_piece(ROOK,ec).mask | get_piece(QUEEN,ec).mask);
+    if(rook_xray) {
+      bitmask::foreach(rook_xray, [&](pos_t i) mutable -> void {
+        if(self[i].value == ROOK || self[i].value == QUEEN) {
+          const piece_bitboard_t srcbit = 1ULL << i;
+          const piece_bitboard_t r = get_piece(ROOK,c).get_attacking_xray(i,j,foes|dstbit,friends) & ~srcbit;
+          func(i, r | dstbit);
+        }
       });
+    }
+    const piece_bitboard_t bishop_xray = get_piece(BISHOP,c).get_xray_attack(j,foes,friends)
+                                         & (get_piece(BISHOP,ec).mask | get_piece(QUEEN,ec).mask);
+    if(bishop_xray) {
+      bitmask::foreach(bishop_xray, [&](pos_t i) mutable -> void {
+        if(self[i].value == BISHOP || self[i].value == QUEEN) {
+          const piece_bitboard_t srcbit = 1ULL << i;
+          const piece_bitboard_t r = get_piece(BISHOP,c).get_attacking_xray(i,j,foes|dstbit,friends) & ~srcbit;
+          func(i, r | dstbit);
+        }
+      });
+    }
+  }
+
+  piece_bitboard_t state_pins[NO_COLORS] = {0x00, 0x00};
+  std::array<piece_bitboard_t, board::SIZE> state_pins_rays;
+  void init_state_pins() {
+    for(auto &spr:state_pins_rays)spr=~0x00ULL;
+    const COLOR c = activePlayer();
+    // maybe do this as a loop for incremental updates
+    {
+      state_pins[c] = 0x00;
+      const piece_bitboard_t friends = get_piece_positions(c) & ~get_piece(KING,c).mask;
+      iter_attacking_xrays(get_king_pos(c), [&](pos_t i, piece_bitboard_t r) mutable -> void {
+        const pos_t attacker = i;
+        r |= 1ULL << attacker;
+        r &= ~get_piece(KING,c).mask;
+        const piece_bitboard_t pin = friends & r;
+        if(pin) {
+          assert(bitmask::is_exp2(pin));
+          pos_t pin_pos = bitmask::log2_of_exp2(pin);
+          state_pins[c] |= pin;
+          state_pins_rays[pin_pos] = r;
+          // update moves
+          state_moves[pin_pos] &= r;
+        }
+      }, c);
     }
   }
 
