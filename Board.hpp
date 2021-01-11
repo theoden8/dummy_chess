@@ -224,6 +224,7 @@ public:
     history.push_back(ev);
     const pos_t marker = event::extract_byte(ev);
     assert(event::decompress_castlings(event::compress_castlings(castlings_)) == castlings_);
+    state_hist_attacks.push_back(state_attacks);
     switch(marker) {
       case event::BASIC_MARKER:
         {
@@ -324,11 +325,11 @@ public:
           castlings_ = event::extract_castlings(ev);
           halfmoves_ = event::extract_byte(ev);
           move_pos(j, i);
-          update_state_pos(i);
+          //update_state_pos(i);
           if(killwhat != event::killnothing) {
             put_pos(j, self.pieces[killwhat]);
           }
-          update_state_pos(j);
+          //update_state_pos(j);
           enpassant_ = event::extract_byte(ev);
           auto enpassant_trace = event::extract_byte(ev);
         }
@@ -343,11 +344,11 @@ public:
           halfmoves_ = event::extract_byte(ev);
           enpassant_ = event::extract_byte(ev);
           move_pos(j, i);
-          update_state_pos(j);
-          update_state_pos(i);
+          //update_state_pos(j);
+          //update_state_pos(i);
           move_pos(r_j, r_i);
-          update_state_pos(r_j);
-          update_state_pos(r_i);
+          //update_state_pos(r_j);
+          //update_state_pos(r_i);
         }
       break;
       case event::ENPASSANT_MARKER:
@@ -359,10 +360,10 @@ public:
           halfmoves_ = event::extract_byte(ev);
           enpassant_ = event::extract_byte(ev);
           put_pos(killwhere, self.get_piece(PAWN, enemy_of(self[j].color)));
-          update_state_pos(killwhere);
+          //update_state_pos(killwhere);
           move_pos(j, i);
-          update_state_pos(j);
-          update_state_pos(i);
+          //update_state_pos(j);
+          //update_state_pos(i);
           enpassant_ = j;
         }
       break;
@@ -382,9 +383,9 @@ public:
           } else {
             put_pos(j, self.get_piece(EMPTY));
           }
-          update_state_pos(j);
+          //update_state_pos(j);
           put_pos(i, self.get_piece(PAWN, c));
-          update_state_pos(i);
+          //update_state_pos(i);
         }
       break;
     }
@@ -427,13 +428,21 @@ public:
     update_state_attacks_pos(pos);
   }
 
+  using board_mailbox_t = std::array <piece_bitboard_t, board::SIZE>;
+  std::vector<board_mailbox_t> state_hist_attacks;
+  std::vector<board_mailbox_t> state_hist_moves;
   void update_state_on_event(event_t ev=0x00, bool forward=true) {
     if(forward) {
       update_state_checkline();
+      state_hist_moves.push_back(state_moves);
       init_state_moves();
     } else {
+      state_attacks = state_hist_attacks.back();
+      state_hist_attacks.pop_back();
       update_state_checkline();
-      init_state_moves();
+      state_moves = state_hist_moves.back();
+      state_hist_moves.pop_back();
+      //init_state_moves();
     }
   }
 
