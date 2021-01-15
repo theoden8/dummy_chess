@@ -6,7 +6,6 @@
 #include <Piece.hpp>
 #include <Event.hpp>
 #include <FEN.hpp>
-#include <Random.hpp>
 
 
 // board view of the game
