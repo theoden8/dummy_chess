@@ -12,6 +12,8 @@
 #include <array>
 #include <functional>
 
+#include <Optimizations.hpp>
+
 
 // type alias: position index on bitboard
 typedef uint8_t pos_t;
@@ -33,7 +35,7 @@ namespace bitmask {
   }
 
   inline constexpr pos_t second(pos_pair_t p) {
-    return p & 0xFF;
+    return (pos_t)p;
   }
 
   template <typename T>

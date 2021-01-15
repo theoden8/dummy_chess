@@ -111,7 +111,7 @@ struct Interface {
 //                                                                              board.get_piece_positions(active),
 //                                                                              board.get_piece_positions(enemy_of(active)),
 //                                                                              board.get_attack_mask(enemy_of(active)),
-//                                                                              board.castlings_);
+//                                                                              board.get_castlings_mask());
     //const piece_bitboard_t highlight = board.get_attack_mask(enemy_of(active));
     const piece_bitboard_t highlight = pins;
     //const piece_bitboard_t highlight = board.state_checkline[active];
@@ -269,7 +269,9 @@ struct Interface {
     const pos_t from = event::extract_byte(lastevent);
     const pos_t to = event::extract_byte(lastevent);
     //int len = printw("[ %s ]", activePlayer().c_str());
-    int len = printw("[ %s %hhu, (%hhu) %hhu->%hhu ]", activePlayer().c_str(), event::compress_castlings(board.castlings_), marker, from, to);
+    //int len = printw("[ %s %hhu %hhu->%hhu ]", activePlayer().c_str(), fen::compress_castlings(board.get_castlings_mask()), from, to);
+    int len = printw("[ %s [%hu %hu %hu %hu]", activePlayer().c_str(), board.castlings[0], board.castlings[1],
+                                               board.castlings[2], board.castlings[3]);
     //int len = printw("[ %s %llx ]", activePlayer().c_str(), board.state_checkline);
     //int len = printw("[ %s %llx %llx %hhu ]", activePlayer().c_str(), board.state_checkline[c], board.state_checkline[enemy_of(c)], board.halfmoves_);
     nc_reset_color();
@@ -278,6 +280,8 @@ struct Interface {
 
   void draw_pgn(const int LEFT, const int TOP, int &top) {
     move(top, LEFT);
+    printw("Evaluation: %.5f", board.evaluation);
+    move(++top, LEFT);
     int turn = 1;
     constexpr size_t initial_margin = 5,
                      ply_length = 9, // ' dxe8=Q++ '
@@ -394,7 +398,7 @@ struct Interface {
       break;
       case 'f':
         {
-          move_t m = board.get_fixed_depth_move(4);
+          move_t m = board.get_fixed_depth_move(5);
           if(m != board::nomove) {
             event_t ev = board.get_move_event(bitmask::first(m), bitmask::second(m));
             pgn.handle_event(ev);

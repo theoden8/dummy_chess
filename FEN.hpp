@@ -23,6 +23,28 @@ namespace fen {
     uint16_t fullmove;
   } FEN;
 
+  constexpr inline pos_t compress_castlings(piece_bitboard_t castlings) {
+    pos_t comp = 0;
+    comp |= (castlings & 0x04LLU) ? 1 : 0; comp <<= 1;
+    comp |= (castlings & 0x40LLU) ? 1 : 0; comp <<= 1;
+    comp |= (castlings & (0x04LLU << (board::SIZE-board::LEN))) ? 1 : 0; comp <<= 1;
+    comp |= (castlings & (0x40LLU << (board::SIZE-board::LEN))) ? 1 : 0;
+    return comp;
+  }
+
+  constexpr inline piece_bitboard_t decompress_castlings(pos_t comp) {
+    piece_bitboard_t castlings = 0x00;
+    if(comp&1)castlings|=(0x40LLU << (board::SIZE-board::LEN));
+    comp>>=1;
+    if(comp&1)castlings|=(0x04LLU << (board::SIZE-board::LEN));
+    comp>>=1;
+    if(comp&1)castlings|=(0x40LLU);
+    comp>>=1;
+    if(comp&1)castlings|=(0x04LLU);
+    comp>>=1;
+    return castlings;
+  }
+
   FEN load_from_string(std::string s) {
     size_t i = 0;
     FEN f = {
@@ -65,7 +87,7 @@ namespace fen {
       }
       ++i;
     }
-    f.castling_compressed = event::compress_castlings(castlings);
+    f.castling_compressed = fen::compress_castlings(castlings);
     // skip space
     while(isspace(s[i]))++i;
     // enpassant

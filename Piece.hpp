@@ -10,9 +10,9 @@
 
 // interface to piece bitboard
 struct Piece {
-  const PIECE value;
-  const COLOR color;
-  const pos_t piece_index;
+  PIECE value;
+  COLOR color;
+  pos_t piece_index;
   piece_bitboard_t mask;
 
   static inline constexpr pos_t get_piece_index(PIECE p, COLOR c) {
@@ -104,7 +104,7 @@ struct Piece {
     bitmask::foreach(mask, func);
   }
 
-  void print() {
+  inline void print() {
     std::cout << int(size()) << std::endl;
     bitmask::print(mask);
   }

@@ -11,6 +11,7 @@ typedef enum { PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING, EMPTY, NO_PIECES=EMPTY }
 
 // two bytes, one for each move; second byte may contain information about promotion (2 bits)
 typedef pos_pair_t move_t;
+typedef uint16_t move_index_t;
 
 // type alias: bitboard (as a mask)
 typedef uint64_t piece_bitboard_t;
@@ -23,6 +24,7 @@ inline constexpr COLOR enemy_of(COLOR c) {
   return (c == WHITE) ? BLACK : WHITE;
 }
 
+typedef enum { KING_SIDE, QUEEN_SIDE } CASTLING_SIDE;
 
 enum {
   A,B,C,D,E,F,G,H
@@ -37,16 +39,29 @@ namespace board {
                   PROMOTE_ROOK = 2<<6,
                   PROMOTE_QUEEN = 3<<6;
   constexpr move_t nomove = bitmask::_pos_pair(0xff, 0xff);
+  constexpr move_index_t nocastlings = ~move_index_t(0);
+  constexpr pos_t CASTLING_K_WHITE = 0,
+                  CASTLING_Q_WHITE = 1,
+                  CASTLING_K_BLACK = 2,
+                  CASTLING_Q_BLACK = 3;
 
-  inline constexpr pos_t _x(pos_t i) {
+  INLINE constexpr pos_t _castling_index(COLOR c, CASTLING_SIDE side) {
+    if (c==WHITE && side==KING_SIDE)return CASTLING_K_WHITE;
+    if (c==WHITE && side==QUEEN_SIDE)return CASTLING_Q_WHITE;
+    if (c==BLACK && side==KING_SIDE)return CASTLING_K_BLACK;
+    if (c==BLACK && side==QUEEN_SIDE)return CASTLING_Q_BLACK;
+    return 0xff;
+  }
+
+  ALWAYS_INLINE constexpr pos_t _x(pos_t i) {
     return i % LEN;
   }
 
-  inline constexpr pos_t _y(pos_t i) {
+  ALWAYS_INLINE constexpr pos_t _y(pos_t i) {
     return i / LEN;
   }
 
-  inline constexpr pos_t _pos(pos_t i, pos_t j) {
+  ALWAYS_INLINE constexpr pos_t _pos(pos_t i, pos_t j) {
     return i + (j - 1) * LEN;
   }
 
@@ -56,5 +71,11 @@ namespace board {
     p += 'a' + board::_x(i);
     p += '1' + board::_y(i);
     return p;
+  }
+
+  std::string _move_str(move_t m) {
+    const pos_t i = bitmask::first(m) & board::MOVEMASK,
+                j = bitmask::second(m) & board::MOVEMASK;
+    return _pos_str(i) + _pos_str(j);
   }
 } // namespace board

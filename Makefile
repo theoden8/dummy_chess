@@ -11,13 +11,16 @@ SOURCES = m42.cpp
 
 CORES = $(shell getconf _NPROCESSORS_ONLN)
 all :; @$(MAKE) _all -j$(CORES)
-_all : dummy_chess dummy_chess_curses dummy_chess_bench_board dummy_chess_perft
+_all : dummy_chess dummy_chess_curses dummy_chess_curses_rel dummy_chess_bench_board dummy_chess_perft
 
 dummy_chess: main.cpp $(SOURCES) $(HPPFILES) Makefile
 	$(CXX) $(DBGFLAGS) $(CXXFLAGS) main.cpp $(SOURCES) $(LDFLAGS) -o $@
 
 dummy_chess_curses: ui.cpp $(SOURCES) $(HPPFILES) Makefile
 	$(CXX) $(DBGFLAGS) $(CXXFLAGS) $(NC_CFLAGS) ui.cpp $(SOURCES) $(LDFLAGS) $(NC_LDFLAGS) $(LDFLAGS) -o $@
+
+dummy_chess_curses_rel: ui.cpp $(SOURCES) $(HPPFILES) Makefile
+	$(CXX) $(OPTFLAGS) $(CXXFLAGS) $(NC_CFLAGS) ui.cpp $(SOURCES) $(LDFLAGS) $(NC_LDFLAGS) $(LDFLAGS) -o $@
 
 dummy_chess_bench_board: bench_board.cpp $(SOURCES) $(HPPFILES) Makefile
 	$(CXX) $(OPTFLAGS) $(CXXFLAGS) bench_board.cpp $(SOURCES) $(LDFLAGS) -o $@
@@ -27,4 +30,4 @@ dummy_chess_perft: perft.cpp $(SOURCES) $(HPPFILES) Makefile
 
 clean:
 	rm -vf *.o
-	rm -vf dummy_chess dummy_chess_curses dummy_chess_bench_board
+	rm -vf dummy_chess dummy_chess_curses dummy_chess_curses_rel dummy_chess_bench_board dummy_chess_perft
