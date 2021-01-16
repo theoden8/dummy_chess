@@ -660,8 +660,24 @@ public:
           }
         });
       }
+      init_state_moves_checkline_enpassant_takes(c);
       init_state_pins();
     }
+  }
+
+  void init_state_moves_checkline_enpassant_takes(COLOR c=NEUTRAL) {
+    if(c==NEUTRAL)c=activePlayer();
+    const pos_t etrace = enpassant_;
+    const pos_t epawn = enpassant_pawn();
+    if(etrace == event::enpassantnotrace)return;
+    if(!bitmask::is_exp2(state_checkline[c]))return;
+    const pos_t attacker = bitmask::log2_of_exp2(state_checkline[c]);
+    if(epawn != attacker)return;
+    const piece_bitboard_t apawns = get_pawn_attacks_to(etrace,c);
+    if(!apawns)return;
+    bitmask::foreach(apawns, [&](pos_t apawn) mutable -> void {
+      state_moves[apawn] |= (1ULL << etrace);
+    });
   }
 
   INLINE piece_bitboard_t get_pins(COLOR c=NEUTRAL) const {
