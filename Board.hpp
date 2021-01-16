@@ -6,15 +6,32 @@
 #include <Piece.hpp>
 #include <Event.hpp>
 #include <FEN.hpp>
+#include <Zobrist.hpp>
 
 
 // board view of the game
 class Board {
-private:
-  static bool m42_initialized;
+protected:
+  static bool initialized;
   std::array <move_index_t, board::SIZE> board_;
   COLOR activePlayer_;
   std::vector<event_t> history;
+
+  struct board_info {
+    std::array<piece_bitboard_t, 12> piecemasks;
+    COLOR active_player;
+    pos_t enpassant_castlings;
+
+    INLINE bool operator==(board_info other) const noexcept {
+      return piecemasks == other.piecemasks && active_player == other.active_player
+        && enpassant_castlings == other.enpassant_castlings;
+    }
+  };
+  static constexpr board_info noboardinfo = {
+    .piecemasks = {0,0,0,0,0,0,0,0,0,0,0},
+    .active_player = NEUTRAL,
+    .enpassant_castlings = 0xff,
+  };
 public:
   Board &self = *this;
   pos_t enpassant_ = event::enpassantnotrace;
@@ -34,9 +51,10 @@ public:
     enpassant_(f.enpassant),
     halfmoves_(f.halfmove_clock)
   {
-    if(!m42_initialized) {
+    if(!initialized) {
       M42::init();
-      m42_initialized = true;
+      zobrist::init();
+      initialized = true;
     }
     for(pos_t i = 0; i < board::SIZE; ++i) {
       set_pos(i, get_piece(EMPTY, NEUTRAL));
@@ -53,8 +71,8 @@ public:
         case 'q':p=QUEEN;break;
         case 'k':p=KING;break;
       }
-      pos_t x = board::_x(i),
-            y = board::LEN - board::_y(i) - 1;
+      const pos_t x = board::_x(i),
+                  y = board::LEN - board::_y(i) - 1;
       put_pos(board::_pos(A+x, 1+y), get_piece(p, c));
     }
     if(!(f.castling_compressed & (1 << 0)))unset_castling(BLACK,QUEEN_SIDE);
@@ -98,6 +116,21 @@ public:
 
   INLINE constexpr Piece get_piece(Piece &p) {
     return get_piece(p.value, p.color);
+  }
+
+  INLINE board_info get_board_info() const {
+    pos_t enpassant_castlings = (((enpassant_ == event::enpassantnotrace) ? 0x0f : board::_x(enpassant_)) << 4);
+    enpassant_castlings |= get_castlings_compressed();
+    return (board_info){
+      .piecemasks = {
+        get_piece(PAWN,WHITE).mask, get_piece(KNIGHT,WHITE).mask, get_piece(BISHOP,WHITE).mask,
+        get_piece(ROOK,WHITE).mask, get_piece(QUEEN,WHITE).mask, get_piece(KING,WHITE).mask,
+        get_piece(PAWN,BLACK).mask, get_piece(KNIGHT,BLACK).mask, get_piece(BISHOP,BLACK).mask,
+        get_piece(ROOK,BLACK).mask, get_piece(QUEEN,BLACK).mask, get_piece(KING,BLACK).mask
+      },
+      .active_player = activePlayer(),
+      .enpassant_castlings = enpassant_castlings
+    };
   }
 
   INLINE void unset_pos(pos_t i) {
@@ -223,6 +256,10 @@ public:
     return mask;
   }
 
+  INLINE pos_t get_castlings_compressed() const {
+    return fen::compress_castlings(get_castlings_mask());
+  }
+
   void update_castlings(pos_t i, pos_t j) {
     const COLOR c = self[i].color;
     const pos_t shift = (c == WHITE) ? 0 : board::SIZE-board::LEN;
@@ -249,6 +286,24 @@ public:
         castlings[cstl] = board::nocastlings;
       }
     }
+  }
+
+  ALWAYS_UNROLL zobrist::key_t zb_hash() {
+    zobrist::key_t zb = 0x00;
+    for(COLOR c : {WHITE,BLACK}) {
+      for(PIECE p : {PAWN,KNIGHT,BISHOP,ROOK,QUEEN,KING}) {
+        zb ^= zobrist::zb_hash_piece(get_piece(p,c).mask, p,c);
+      }
+    }
+    std::vector<bool> castlings_bool;
+    castlings_bool.push_back(is_castling(WHITE,KING_SIDE));
+    castlings_bool.push_back(is_castling(WHITE,QUEEN_SIDE));
+    castlings_bool.push_back(is_castling(BLACK,KING_SIDE));
+    castlings_bool.push_back(is_castling(BLACK,QUEEN_SIDE));
+    zb ^= zobrist::zb_hash_castlings(castlings_bool);
+    zb ^= zobrist::zb_hash_enpassant(enpassant_);
+    zb ^= zobrist::zb_hash_player(activePlayer());
+    return zb;
   }
 
   void act_event(event_t ev) {
@@ -826,7 +881,7 @@ public:
   }
 };
 
-bool Board::m42_initialized = false;
+bool Board::initialized = false;
 
 fen::FEN fen::export_from_board(const Board &board) {
   return board.export_as_fen();

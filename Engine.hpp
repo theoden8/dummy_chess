@@ -158,7 +158,21 @@ public:
     return m;
   }
 
-  void _perft(pos_t depth, size_t &nodes) {
+  struct perft_info {
+    board_info info;
+    pos_t depth;
+    size_t nodes;
+  };
+  size_t zb_hit, zb_miss;
+  size_t _perft(pos_t depth, std::array<perft_info, ZOBRIST_SIZE> &perft_store) {
+    zobrist::key_t k = zb_hash();
+    board_info info = get_board_info();
+    if(perft_store[k].info == info && perft_store[k].depth == depth) {
+      ++zb_hit;
+      return perft_store[k].nodes;
+    }
+    ++zb_miss;
+    size_t nodes = 0;
     iter_moves([&](pos_t i, pos_t j) mutable -> void {
       const event_t ev = get_move_event(i, j);
       act_event(ev);
@@ -167,14 +181,30 @@ public:
       } else if(depth <= 0) {
         ++nodes;
       } else {
-        _perft(depth - 1, nodes);
+        nodes += _perft(depth - 1, perft_store);
       }
       unact_event();
     });
+    perft_store[k] = {
+      .info = info,
+      .depth = depth,
+      .nodes = nodes
+    };
+    return nodes;
   }
 
-  inline void perft(pos_t depth=1) {
-    nodes_searched = 0;
-    _perft(depth, nodes_searched);
+  inline size_t perft(pos_t depth=1) {
+    auto *perft_store = new std::array<perft_info, ZOBRIST_SIZE>{};
+    zb_hit = 0, zb_miss = 0;
+    for(zobrist::key_t i = 0; i < perft_store->size(); ++i) {
+      perft_store->at(i) = {
+        .info = noboardinfo,
+        .depth = 0xff,
+        .nodes = 0
+      };
+    }
+    size_t nds = _perft(depth, *perft_store);
+    delete perft_store;
+    return nds;
   }
 };

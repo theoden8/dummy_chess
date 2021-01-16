@@ -1,9 +1,9 @@
 DBGFLAGS = -g3
 OPTFLAGS = -Ofast -DNDEBUG -flto -fwhole-program -march=native
 PROFFLAGS = $(OPTFLAGS) -pg
-CXXFLAGS = -std=c++17 -I. -Wall -Wextra -Wno-unused -Wno-parentheses -m64
+CXXFLAGS = -std=c++17 -I. -Wall -Wextra -Wno-unused -Wno-parentheses -m64 $(shell pkgconf --cflags libbsd)
 # CXXFLAGS += -fopt-info
-LDFLAGS =
+LDFLAGS = $(shell pkgconf --libs libbsd)
 HPPFILES = $(wildcard *.hpp)
 NC_CFLAGS =  $(shell pkgconf --cflags ncursesw)
 NC_LDFLAGS = $(shell pkgconf --libs ncursesw)

@@ -44,6 +44,7 @@ namespace board {
                   CASTLING_Q_WHITE = 1,
                   CASTLING_K_BLACK = 2,
                   CASTLING_Q_BLACK = 3;
+  constexpr pos_t NO_PIECE_INDICES = int(NO_PIECES)*int(NO_COLORS) + 1;
 
   INLINE constexpr pos_t _castling_index(COLOR c, CASTLING_SIDE side) {
     if (c==WHITE && side==KING_SIDE)return CASTLING_K_WHITE;
