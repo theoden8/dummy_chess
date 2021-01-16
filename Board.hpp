@@ -447,6 +447,8 @@ public:
     init_state_moves();
     state_hist_attacks.reserve(100);
     state_hist_moves.reserve(100);
+    state_hist_pins.reserve(100);
+    state_hist_pins_rays.reserve(100);
   }
 
   INLINE void update_state_pos(pos_t pos) {
@@ -516,6 +518,13 @@ public:
         | (Attacks<ROOKM>::get_attacks(j,occupied) & (get_piece(ROOK,c).mask|get_piece(QUEEN,c).mask));
   }
 
+  INLINE piece_bitboard_t get_pawn_attacks_to(pos_t j, COLOR c=NEUTRAL) const {
+    if(c==NEUTRAL)c=activePlayer();
+    if(c==BOTH)return get_attacks_to(j,WHITE)|get_attacks_to(j,BLACK);
+    const piece_bitboard_t occupied = get_piece_positions(BOTH);
+    return get_piece(PAWN,enemy_of(c)).get_attack(j,occupied) & get_piece(PAWN,c).mask;
+  }
+
   INLINE piece_bitboard_t get_attacks_to(pos_t j, COLOR c=NEUTRAL) const {
     if(c==NEUTRAL)c=activePlayer();
     if(c==BOTH)return get_attacks_to(j,WHITE)|get_attacks_to(j,BLACK);
@@ -523,7 +532,7 @@ public:
     return get_sliding_attacks_to(j, c)
         | (Attacks<KNIGHTM>::get_attacks(j) & get_piece(KNIGHT,c).mask)
         | (Attacks<KINGM>::get_attacks(j,occupied) & get_piece(KING,c).mask)
-        | (get_piece(PAWN,enemy_of(c)).get_attack(j,occupied) & get_piece(PAWN,c).mask);
+        | get_pawn_attacks_to(j, c);
   }
 
   INLINE piece_bitboard_t get_attack_counts_to(pos_t j, COLOR c=NEUTRAL) const {
@@ -715,6 +724,35 @@ public:
           state_moves[pin_pos] &= r;
         }
       }, c);
+    }
+    init_horizontal_enpassant_pin();
+  }
+
+  void init_horizontal_enpassant_pin() {
+    if(enpassant_ == event::enpassantnotrace)return;
+    // maybe do this as a loop for incremental updates
+    {
+      const COLOR c = activePlayer();
+      if(state_checkline[c] != ~0ULL)return;
+      const pos_t etrace = enpassant_;
+      const pos_t epawn = enpassant_pawn();
+      const pos_t kingpos = get_king_pos(c);
+      const piece_bitboard_t h = bitmask::hline << (board::_y(kingpos) * board::LEN);
+      if(!((h & get_piece(ROOK,enemy_of(c)).mask) || (h & get_piece(QUEEN, enemy_of(c)).mask)))return;
+      if(!(h & (1ULL << epawn)))return;
+      const piece_bitboard_t apawns = get_pawn_attacks_to(etrace,c);
+      if(!apawns)return;
+      bitmask::foreach(apawns, [&](pos_t apawn) mutable -> void {
+        put_pos(apawn, get_piece(EMPTY));
+        put_pos(epawn, get_piece(EMPTY));
+        //printf("consider horizontal pin %hhu -> %hhu\n", apawn, etrace);
+        if(get_sliding_attacks_to(kingpos,enemy_of(c))) {
+          //printf("horizontal pin disable %hhu -> %hhu\n", apawn, etrace);
+          state_moves[apawn] &= ~(1ULL << etrace);
+        }
+        put_pos(apawn, pieces[get_piece(PAWN,c).piece_index]);
+        put_pos(epawn, pieces[get_piece(PAWN,enemy_of(c)).piece_index]);
+      });
     }
   }
 

@@ -11,7 +11,7 @@
 
 using namespace std::string_literals;
 
-struct Board;
+class Board;
 
 namespace fen {
   typedef struct _FEN {
