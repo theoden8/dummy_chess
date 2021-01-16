@@ -398,7 +398,7 @@ struct Interface {
       break;
       case 'f':
         {
-          move_t m = board.get_fixed_depth_move(5);
+          move_t m = board.get_fixed_depth_move(6);
           if(m != board::nomove) {
             event_t ev = board.get_move_event(bitmask::first(m), bitmask::second(m));
             pgn.handle_event(ev);

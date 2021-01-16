@@ -26,5 +26,8 @@ int main() {
   b.make_move(board::_pos(B, 7), board::_pos(B, 5));
   b.retract_move();
   b.retract_move();
-  printf("best move: %s\n", board::_move_str(b.get_fixed_depth_move(3)).c_str());
+  printf("best move: %s\n", board::_move_str(b.get_fixed_depth_move(6)).c_str());
+  printf("evaluation: %.5f\n", b.evaluation);
+  printf("nodes searched: %lu\n", b.nodes_searched);
+  printf("hit rate: %.3f\n", double(b.zb_hit) / double(b.zb_hit + b.zb_miss));
 }

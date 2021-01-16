@@ -296,11 +296,8 @@ public:
       }
     }
     std::vector<bool> castlings_bool;
-    castlings_bool.push_back(is_castling(WHITE,KING_SIDE));
-    castlings_bool.push_back(is_castling(WHITE,QUEEN_SIDE));
-    castlings_bool.push_back(is_castling(BLACK,KING_SIDE));
-    castlings_bool.push_back(is_castling(BLACK,QUEEN_SIDE));
-    zb ^= zobrist::zb_hash_castlings(castlings_bool);
+    zb ^= zobrist::zb_hash_castlings({is_castling(WHITE,KING_SIDE), is_castling(WHITE,QUEEN_SIDE),
+                                      is_castling(BLACK,KING_SIDE), is_castling(BLACK,QUEEN_SIDE) });
     zb ^= zobrist::zb_hash_enpassant(enpassant_);
     zb ^= zobrist::zb_hash_player(activePlayer());
     return zb;

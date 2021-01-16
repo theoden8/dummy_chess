@@ -108,53 +108,53 @@ public:
     if(!can_move())return -1e9;
 
     h += h_material(c);
-    //h += h_pins(c) / 100;
+    h += h_pins(c) / 100;
     h += h_attack_cells(c) / 1e4;
     return h;
   }
 
-  double heuristic(COLOR c) const {
+  double evaluate() const {
+    const COLOR c = play_as;
     return heuristic_of(c) - heuristic_of(enemy_of(c));
   }
 
-  std::tuple<double, move_t> _get_fixed_depth_move(COLOR c, pos_t depth, double alpha, size_t &nodes) {
+  std::pair<double, move_t> alpha_beta(double alpha, double beta, int depth) {
+    if(depth == 0) {
+      ++nodes_searched;
+      return {evaluate(), board::nomove};
+    }
+    bool returning = false;
     move_t m = board::nomove;
     iter_moves([&](pos_t i, pos_t j) mutable -> void {
+      if(returning)return;
       const event_t ev = get_move_event(i, j);
       act_event(ev);
-      if(depth == 1) {
-        auto h = heuristic(c);
-        // me: return best one (maximize), enemy: return worst one (minimize)
-        if(alpha == UNINITIALIZED || (c == activePlayer() && h < alpha) || (c != activePlayer() && h > alpha)) {
-          alpha = (c == activePlayer()) ? -h : h;
-          printf("new heuristic after=%s depth=%hhu alpha=%.5f\n", board::_move_str(bitmask::_pos_pair(i,j)).c_str(), depth, alpha);
-          m = bitmask::_pos_pair(i, j);
-        }
-        ++nodes;
-      } else if(depth <= 0) {
-        ++nodes;
-      } else {
-        // me: return best one (maximize), enemy: return worst one (minimize)
-        auto [new_alpha, _] = _get_fixed_depth_move(c, depth - 1, alpha, nodes);
-        if(alpha == UNINITIALIZED || (c != activePlayer() && alpha < new_alpha) || (c == activePlayer() && alpha > new_alpha)) {
-          alpha = new_alpha;
-          m = bitmask::_pos_pair(i, j);
-          printf("update move=%s depth=%hhu %s=%.5f\n", board::_move_str(m).c_str(), depth, "alpha", new_alpha);
-        }
+      double score = -alpha_beta(-beta, -alpha, depth - 1).first;
+      //printf("depth=%d, score=%.5f, %s\n", depth,score,board::_move_str(bitmask::_pos_pair(i,j)).c_str());
+      if(score >= beta) {
+        m = bitmask::_pos_pair(i,j);
+        returning=true;
+      } else if(score > alpha) {
+        m = bitmask::_pos_pair(i,j);
+        alpha = score;
       }
       unact_event();
     });
-    return std::make_tuple(alpha, m);
+    if(returning) {
+      return {beta, m};
+    }
+    return {alpha, m};
   }
 
   size_t nodes_searched = 0;
   double evaluation = 1e-9;
+  COLOR play_as = WHITE;
   const double UNINITIALIZED = -1e9;
   move_t get_fixed_depth_move(pos_t depth=1) {
     nodes_searched = 0;
-    auto [alpha, m] = _get_fixed_depth_move(activePlayer(), depth, UNINITIALIZED, nodes_searched);
-    printf("alpha=%.5f\n", alpha);
-    evaluation = alpha;
+    play_as = activePlayer();
+    auto [_, m] = alpha_beta(-1e9, 1e9, depth);
+    evaluation = _;
     return m;
   }
 
