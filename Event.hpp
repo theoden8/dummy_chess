@@ -12,11 +12,10 @@ namespace event {
   constexpr pos_t enpassantnotrace = 0xFF;
 
   constexpr pos_t BASIC_MARKER = 0xFF;
-  constexpr inline event_t basic(move_t m, pos_t killwhat, pos_t halfmoves, pos_t enpassant=enpassantnotrace, pos_t enpassant_trace=enpassantnotrace) {
+  constexpr inline event_t basic(move_t m, pos_t killwhat, pos_t enpassant=enpassantnotrace, pos_t enpassant_trace=enpassantnotrace) {
     event_t e = 0x00;
     e = (e << 8)  | enpassant_trace;
     e = (e << 8)  | enpassant;
-    e = (e << 8)  | halfmoves;
     e = (e << 8)  | killwhat;
     e = (e << 16) | m;
     e = (e << 8)  | BASIC_MARKER;
@@ -24,10 +23,9 @@ namespace event {
   }
 
   constexpr pos_t CASTLING_MARKER = 0xFE;
-  constexpr inline event_t castling(move_t kingmove, move_t rookmove, pos_t halfmoves, pos_t enpassant) {
+  constexpr inline event_t castling(move_t kingmove, move_t rookmove, pos_t enpassant) {
     event_t e = 0x00;
     e = (e << 8)  | enpassant;
-    e = (e << 8)  | halfmoves;
     e = (e << 16) | rookmove;
     e = (e << 16) | kingmove;
     e = (e << 8)  | CASTLING_MARKER;
@@ -35,10 +33,9 @@ namespace event {
   }
 
   constexpr pos_t ENPASSANT_MARKER = 0xFD;
-  constexpr inline event_t enpassant(move_t m, pos_t killwhere, pos_t halfmoves, pos_t enpassant) {
+  constexpr inline event_t enpassant(move_t m, pos_t killwhere, pos_t enpassant) {
     event_t e = 0x00;
     e = (e << 8)  | enpassant;
-    e = (e << 8)  | halfmoves;
     e = (e << 8)  | killwhere;
     e = (e << 16) | m;
     e = (e << 8)  | ENPASSANT_MARKER;

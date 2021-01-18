@@ -30,8 +30,8 @@ struct PGN {
     switch(marker) {
       case event::BASIC_MARKER:
         {
-          const pos_t i = event::extract_byte(ev);
           const pos_t j = event::extract_byte(ev);
+          const pos_t i = event::extract_byte(ev);
           const pos_t killwhat = event::extract_byte(ev);
           p = "";
           if(board[i].value==PAWN && board[j].value==PAWN && killwhat!=event::killnothing) {
@@ -39,6 +39,7 @@ struct PGN {
             p += 'a' + board::_x(j);
           } else {
             if(board[i].value!=PAWN)p+=toupper(board[i].str());
+            else p+='a'+board::_x(i);
             if(killwhat!=event::killnothing)p+='x';
             p += board::_pos_str(j);
           }
@@ -46,8 +47,8 @@ struct PGN {
       break;
       case event::CASTLING_MARKER:
         {
-          const pos_t i = event::extract_byte(ev);
           const pos_t j = event::extract_byte(ev);
+          const pos_t i = event::extract_byte(ev);
           if(board::_x(j) == C) {
             p = "O-O-O";
           } else {
@@ -57,8 +58,8 @@ struct PGN {
       break;
       case event::ENPASSANT_MARKER:
         {
-          const pos_t i = event::extract_byte(ev);
           const pos_t j = event::extract_byte(ev);
+          const pos_t i = event::extract_byte(ev);
           p += 'a' + board::_x(i);
           p += 'x';
           p += board::_pos_str(j);
@@ -66,10 +67,10 @@ struct PGN {
       break;
       case event::PROMOTION_MARKER:
         {
-          const pos_t i = event::extract_byte(ev);
           const pos_t to_byte = event::extract_byte(ev);
             const pos_t j = to_byte & board::MOVEMASK;
             const PIECE becomewhat = board.get_promotion_as(to_byte);
+          const pos_t i = event::extract_byte(ev);
           const pos_t killwhat = event::extract_byte(ev);
           if(killwhat != event::killnothing) {
             p += 'a' + board::_x(i);

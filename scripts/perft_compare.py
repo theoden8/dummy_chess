@@ -84,6 +84,7 @@ def compare_outputs(depth=5, fen=startingpos, path=[]):
 
 if __name__ == "__main__":
     # https://github.com/official-stockfish/Stockfish/blob/master/tests/perft.sh
+    # https://www.chessprogramming.org/Perft_Results
     compare_outputs(depth=5, fen=startingpos)
     compare_outputs(depth=4, fen='r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 0')
     compare_outputs(depth=6, fen='8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 0')

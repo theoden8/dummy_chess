@@ -3,7 +3,7 @@
 
 
 int main(int argc, char *argv[]) {
-  int depth = (argc >= 2) ? atoi(argv[1]) : 5;
+  int depth = (argc >= 2) ? atoi(argv[1]) : 6;
   fen::FEN f = (argc >= 3) ? fen::load_from_string(argv[2]) : fen::starting_pos;
   Engine e(f);
   printf("Perft %d\n", depth);
@@ -23,7 +23,7 @@ int main(int argc, char *argv[]) {
     e.act_event(ev);
     size_t nds = 0;
     if(depth > 1) {
-      nds = e.perft(-1+depth);
+      nds = e.perft(depth-1);
     } else if(depth == 1) {
       nds = 1;
     } else {
