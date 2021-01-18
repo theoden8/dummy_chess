@@ -1,6 +1,9 @@
 #pragma once
 
 
+#include <cfloat>
+#include <algorithm>
+
 #include <FEN.hpp>
 #include <Board.hpp>
 
@@ -105,7 +108,7 @@ public:
     double h = 0;
     if(self.is_draw())return 0;
     // checkmate
-    if(!can_move())return -1e9;
+    if(!can_move())return -1e7;
 
     h += h_material(c);
     h += h_pins(c) / 100;
@@ -118,43 +121,91 @@ public:
     return heuristic_of(c) - heuristic_of(enemy_of(c));
   }
 
-  std::pair<double, move_t> alpha_beta(double alpha, double beta, int depth) {
+  struct ab_info {
+    board_info info;
+    pos_t depth;
+    double eval;
+    move_t m;
+  };
+  std::pair<double, move_t> alpha_beta(double alpha, double beta, pos_t depth, std::array<ab_info, ZOBRIST_SIZE> &ab_store) {
     if(depth == 0) {
       ++nodes_searched;
       return {evaluate(), board::nomove};
     }
-    bool returning = false;
-    move_t m = board::nomove;
-    iter_moves([&](pos_t i, pos_t j) mutable -> void {
-      if(returning)return;
-      const event_t ev = get_move_event(i, j);
-      act_event(ev);
-      double score = -alpha_beta(-beta, -alpha, depth - 1).first;
-      //printf("depth=%d, score=%.5f, %s\n", depth,score,board::_move_str(bitmask::_pos_pair(i,j)).c_str());
-      if(score >= beta) {
-        m = bitmask::_pos_pair(i,j);
-        returning=true;
-      } else if(score > alpha) {
-        m = bitmask::_pos_pair(i,j);
-        alpha = score;
-      }
-      unact_event();
-    });
-    if(returning) {
-      return {beta, m};
+    zobrist::key_t k = zb_hash();
+    auto info = get_board_info();
+    if(ab_store[k].info == info && depth <= ab_store[k].depth) {
+      ++zb_hit;
+      return {ab_store[k].eval, ab_store[k].m};
     }
-    return {alpha, m};
+    ++zb_miss;
+    std::vector<move_t> moves;
+    moves.reserve(10);
+    iter_moves([&](pos_t i, pos_t j) mutable -> void {
+      moves.push_back(bitmask::_pos_pair(i,j));
+    });
+    move_t m_best = board::nomove;
+    for(move_t m : moves) {
+      make_move(m);
+      double score = -alpha_beta(-beta, -alpha, depth - 1, ab_store).first;
+      //printf("depth=%d, score=%.5f, %s\n", depth,score,board::_move_str(m).c_str());
+      if(score >= beta) {
+        retract_move();
+        ab_store[k] = { .info=info, .depth=depth, .eval=beta, .m=m };
+        return {beta, m};
+      } else if(score > alpha) {
+        alpha = score;
+        m_best = m;
+      }
+      retract_move();
+    };
+    ab_store[k] = { .info=info, .depth=depth, .eval=alpha, .m=m_best };
+    return {alpha, m_best};
+  }
+
+  std::pair<double, move_t> iterative_deepening_dfs(pos_t depth, std::array<ab_info, ZOBRIST_SIZE> &ab_store) {
+    if(depth == 0)return {DBL_MAX, board::nomove};
+    std::vector<move_t> moves;
+    moves.reserve(10);
+    iter_moves([&](pos_t i, pos_t j) mutable -> void {
+      moves.push_back(bitmask::_pos_pair(i,j));
+    });
+    std::vector<std::pair<double, move_t>> bestmoves;
+    for(auto m:moves)bestmoves.push_back({0.,m});
+    for(pos_t d = 1; d < depth; ++d) {
+      double alpha = -DBL_MAX;
+      for(auto &[eval, m] : bestmoves) {
+        make_move(m);
+        auto [score, bestmove] = alpha_beta(-DBL_MAX, -alpha, d, ab_store); score = -score;
+        eval = score;
+        if(eval >= alpha) {
+          alpha = eval;
+        }
+        retract_move();
+      }
+      std::sort(bestmoves.begin(), bestmoves.end());
+      std::reverse(bestmoves.begin(), bestmoves.end());
+    }
+    if(bestmoves.empty())return {DBL_MAX, board::nomove};
+    return bestmoves.back();
   }
 
   size_t nodes_searched = 0;
-  double evaluation = 1e-9;
+  double evaluation = DBL_MAX;
   COLOR play_as = WHITE;
   const double UNINITIALIZED = -1e9;
   move_t get_fixed_depth_move(pos_t depth=1) {
     nodes_searched = 0;
+    zb_hit = 0, zb_miss = 0;
     play_as = activePlayer();
-    auto [_, m] = alpha_beta(-1e9, 1e9, depth);
+    std::array<ab_info, ZOBRIST_SIZE> *ab_store = new std::array<ab_info, ZOBRIST_SIZE>{};
+    for(size_t i = 0; i < ZOBRIST_SIZE; ++i) {
+      ab_store->at(i).info.active_player = NEUTRAL;
+    }
+//    auto [_, m] = alpha_beta(-1e9, 1e9, depth, *ab_store);
+    auto [_, m] = iterative_deepening_dfs(depth, *ab_store);
     evaluation = _;
+    delete ab_store;
     return m;
   }
 
@@ -163,7 +214,7 @@ public:
     pos_t depth;
     size_t nodes;
   };
-  size_t zb_hit, zb_miss;
+  size_t zb_hit = 0, zb_miss = 0;
   size_t _perft(pos_t depth, std::array<perft_info, ZOBRIST_SIZE> &perft_store) {
     zobrist::key_t k = zb_hash();
     board_info info = get_board_info();
@@ -197,11 +248,7 @@ public:
     auto *perft_store = new std::array<perft_info, ZOBRIST_SIZE>{};
     zb_hit = 0, zb_miss = 0;
     for(zobrist::key_t i = 0; i < perft_store->size(); ++i) {
-      perft_store->at(i) = {
-        .info = noboardinfo,
-        .depth = 0xff,
-        .nodes = 0
-      };
+      perft_store->at(i).info.active_player = NEUTRAL;
     }
     size_t nds = _perft(depth, *perft_store);
     delete perft_store;
