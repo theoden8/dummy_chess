@@ -23,7 +23,7 @@ typedef uint16_t pos_pair_t;
 // https://graphics.stanford.edu/~seander/bithacks.html
 // bit-hacks from stanford graphics, to be placed here
 namespace bitmask {
-  const uint64_t vline = UINT64_C(72340172838076673);
+  const uint64_t vline = UINT64_C(0x0101010101010101);
   const uint64_t hline = UINT64_C(0xFF);
 
   inline constexpr pos_pair_t _pos_pair(pos_t a, pos_t b) {

@@ -39,7 +39,7 @@ public:
   move_t get_random_move() const {
     std::vector<move_t> moves;
     iter_moves([&](pos_t i, pos_t j) mutable -> void {
-      moves.push_back(bitmask::_pos_pair(i, j));
+      moves.emplace_back(bitmask::_pos_pair(i, j));
     });
     if(moves.empty())return board::nomove;
     return moves[rand() % moves.size()];
@@ -49,7 +49,7 @@ public:
   move_t get_random_move_from(pos_t i) const {
     std::vector<move_t> moves;
     iter_moves_from(i, [&](pos_t i, pos_t j) mutable -> void {
-      moves.push_back(bitmask::_pos_pair(i, j));
+      moves.emplace_back(bitmask::_pos_pair(i, j));
     });
     if(moves.empty()) {
       return board::nomove;
@@ -140,9 +140,9 @@ public:
     }
     ++zb_miss;
     std::vector<move_t> moves;
-    moves.reserve(10);
+    moves.reserve(16);
     iter_moves([&](pos_t i, pos_t j) mutable -> void {
-      moves.push_back(bitmask::_pos_pair(i,j));
+      moves.emplace_back(bitmask::_pos_pair(i,j));
     });
     move_t m_best = board::nomove;
     for(move_t m : moves) {
@@ -166,12 +166,12 @@ public:
   std::pair<double, move_t> iterative_deepening_dfs(pos_t depth, std::array<ab_info, ZOBRIST_SIZE> &ab_store) {
     if(depth == 0)return {DBL_MAX, board::nomove};
     std::vector<move_t> moves;
-    moves.reserve(10);
+    moves.reserve(16);
     iter_moves([&](pos_t i, pos_t j) mutable -> void {
-      moves.push_back(bitmask::_pos_pair(i,j));
+      moves.emplace_back(bitmask::_pos_pair(i,j));
     });
     std::vector<std::pair<double, move_t>> bestmoves;
-    for(auto m:moves)bestmoves.push_back({0.,m});
+    for(auto m:moves)bestmoves.emplace_back(0.,m);
     for(pos_t d = 1; d < depth; ++d) {
       double alpha = -DBL_MAX;
       for(auto &[eval, m] : bestmoves) {
@@ -200,7 +200,7 @@ public:
     play_as = activePlayer();
     std::array<ab_info, ZOBRIST_SIZE> *ab_store = new std::array<ab_info, ZOBRIST_SIZE>{};
     for(size_t i = 0; i < ZOBRIST_SIZE; ++i) {
-      ab_store->at(i).info.active_player = NEUTRAL;
+      ab_store->at(i).info.unset();
     }
 //    auto [_, m] = alpha_beta(-1e9, 1e9, depth, *ab_store);
     auto [_, m] = iterative_deepening_dfs(depth, *ab_store);
@@ -227,10 +227,9 @@ public:
     iter_moves([&](pos_t i, pos_t j) mutable -> void {
       const event_t ev = get_move_event(i, j);
       act_event(ev);
-      if(depth == 1) {
+      if(depth == 1 || depth == 0) {
         ++nodes;
-      } else if(depth <= 0) {
-        ++nodes;
+        ++nodes_searched;
       } else {
         nodes += _perft(depth - 1, perft_store);
       }

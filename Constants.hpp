@@ -46,6 +46,16 @@ namespace board {
                   CASTLING_Q_BLACK = 3;
   constexpr pos_t NO_PIECE_INDICES = int(NO_PIECES)*int(NO_COLORS) + 1;
 
+  INLINE PIECE get_promotion_as(pos_t j) {
+    switch(j & ~board::MOVEMASK) {
+      case board::PROMOTE_KNIGHT:return KNIGHT;
+      case board::PROMOTE_BISHOP:return BISHOP;
+      case board::PROMOTE_ROOK:return ROOK;
+      case board::PROMOTE_QUEEN:return QUEEN;
+    }
+    return PAWN;
+  }
+
   INLINE constexpr pos_t _castling_index(COLOR c, CASTLING_SIDE side) {
     if (c==WHITE && side==KING_SIDE)return CASTLING_K_WHITE;
     if (c==WHITE && side==QUEEN_SIDE)return CASTLING_Q_WHITE;
@@ -74,9 +84,19 @@ namespace board {
     return p;
   }
 
-  std::string _move_str(move_t m) {
+  std::string _move_str(move_t m, bool ispawn=false) {
     const pos_t i = bitmask::first(m) & board::MOVEMASK,
                 j = bitmask::second(m) & board::MOVEMASK;
-    return _pos_str(i) + _pos_str(j);
+    std::string sp;
+    if(ispawn && (board::_y(j) == -1+1 || board::_y(j) == -1+8)) {
+      switch(board::get_promotion_as(bitmask::second(m))) {
+        case KNIGHT:sp='n';break;
+        case BISHOP:sp='b';break;
+        case ROOK:sp='r';break;
+        case QUEEN:sp='q';break;
+        default:break;
+      }
+    }
+    return _pos_str(i) + _pos_str(j) + sp;
   }
 } // namespace board

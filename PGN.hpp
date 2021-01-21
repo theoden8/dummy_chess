@@ -26,13 +26,14 @@ struct PGN {
 
   void write_event(event_t ev) {
     std::string p;
-    pos_t marker = event::extract_byte(ev);
+    const uint8_t marker = event::extract_marker(ev);
     switch(marker) {
       case event::BASIC_MARKER:
         {
-          const pos_t j = event::extract_byte(ev);
-          const pos_t i = event::extract_byte(ev);
-          const pos_t killwhat = event::extract_byte(ev);
+          const move_t m = event::extract_move(ev);
+          const pos_t i = bitmask::first(m),
+                      j = bitmask::second(m);
+          const pos_t killwhat = event::extract_piece_ind(ev);
           p = "";
           if(board[i].value==PAWN && board[j].value==PAWN && killwhat!=event::killnothing) {
             p += 'a' + board::_x(i);
@@ -47,8 +48,9 @@ struct PGN {
       break;
       case event::CASTLING_MARKER:
         {
-          const pos_t j = event::extract_byte(ev);
-          const pos_t i = event::extract_byte(ev);
+          const move_t m = event::extract_move(ev);
+          const pos_t i = bitmask::first(m),
+                      j = bitmask::second(m);
           if(board::_x(j) == C) {
             p = "O-O-O";
           } else {
@@ -58,8 +60,9 @@ struct PGN {
       break;
       case event::ENPASSANT_MARKER:
         {
-          const pos_t j = event::extract_byte(ev);
-          const pos_t i = event::extract_byte(ev);
+          const move_t m = event::extract_move(ev);
+          const pos_t i = bitmask::first(m),
+                      j = bitmask::second(m);
           p += 'a' + board::_x(i);
           p += 'x';
           p += board::_pos_str(j);
@@ -67,11 +70,12 @@ struct PGN {
       break;
       case event::PROMOTION_MARKER:
         {
-          const pos_t to_byte = event::extract_byte(ev);
+          const move_t m = event::extract_move(ev);
+          const pos_t i = bitmask::first(m),
+                      to_byte = bitmask::second(m);
             const pos_t j = to_byte & board::MOVEMASK;
-            const PIECE becomewhat = board.get_promotion_as(to_byte);
-          const pos_t i = event::extract_byte(ev);
-          const pos_t killwhat = event::extract_byte(ev);
+            const PIECE becomewhat = board::get_promotion_as(to_byte);
+          const pos_t killwhat = event::extract_piece_ind(ev);
           if(killwhat != event::killnothing) {
             p += 'a' + board::_x(i);
             p += 'x';
@@ -83,7 +87,7 @@ struct PGN {
       break;
     }
     ++cur_ply;
-    ply.push_back(p);
+    ply.emplace_back(p);
   }
 
   void handle_event(event_t ev) {

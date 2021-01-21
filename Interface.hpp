@@ -83,7 +83,7 @@ struct Interface {
     } else if(x==cursor_x&&y==cursor_y) {
       attron(COLOR_PAIR(NC_COLOR_SELECTION));
       return;
-    } else if(board.enpassant_ == board::_pos(A+x,1+y)) {
+    } else if(board.enpassant_trace() != event::enpassantnotrace && board.enpassant_trace() == board::_pos(A+x,1+y)) {
       attron(COLOR_PAIR(NC_COLOR_ENPASSANT));
       return;
     }
@@ -280,7 +280,7 @@ struct Interface {
 
   void draw_pgn(const int LEFT, const int TOP, int &top) {
     move(top, LEFT);
-    printw("Evaluation: %.5f", board.evaluation);
+    printw("Evaluation: %.5f", board.evaluation == DBL_MAX ? 0 : board.evaluation);
     move(++top, LEFT);
     int turn = 1;
     constexpr size_t initial_margin = 5,

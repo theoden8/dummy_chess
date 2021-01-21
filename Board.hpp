@@ -25,15 +25,14 @@ protected:
     INLINE bool operator==(board_info other) const noexcept {
       return active_player == other.active_player && enpassant_castlings == other.enpassant_castlings && piecemasks == other.piecemasks;
     }
-  };
-  static constexpr board_info noboardinfo = {
-    .piecemasks = {0,0,0,0,0,0,0,0,0,0,0,0},
-    .active_player = NEUTRAL,
-    .enpassant_castlings = 0xff,
+
+    INLINE void unset() {
+      active_player = NEUTRAL;
+    }
   };
 public:
   Board &self = *this;
-  pos_t enpassant_ = event::enpassantnotrace;
+  std::vector<std::pair<move_index_t, pos_t>> enpassants;
   std::array<move_index_t, 4> castlings = {board::nocastlings, board::nocastlings, board::nocastlings, board::nocastlings};
   std::vector<move_index_t> halfmoves;
   std::array<Piece, 2*6+1>  pieces = {
@@ -47,7 +46,6 @@ public:
   };
   Board(const fen::FEN f):
     activePlayer_(f.active_player),
-    enpassant_(f.enpassant),
     halfmoves({f.halfmove_clock})
   {
     if(!initialized) {
@@ -79,6 +77,9 @@ public:
     if(!(f.castling_compressed & (1 << 2)))unset_castling(WHITE,QUEEN_SIDE);
     if(!(f.castling_compressed & (1 << 3)))unset_castling(WHITE,KING_SIDE);
     init_update_state();
+    if(f.enpassant != event::enpassantnotrace) {
+      enpassants.emplace_back(get_current_ply(), f.enpassant);
+    }
   }
 
   INLINE constexpr COLOR activePlayer() const {
@@ -118,7 +119,7 @@ public:
   }
 
   INLINE board_info get_board_info() const {
-    pos_t enpassant_castlings = (((enpassant_ == event::enpassantnotrace) ? 0x0f : board::_x(enpassant_)) << 4);
+    pos_t enpassant_castlings = (((enpassant_trace() == event::enpassantnotrace) ? 0x0f : board::_x(enpassant_trace())) << 4);
     enpassant_castlings |= get_castlings_compressed();
     return (board_info){
       .piecemasks = {
@@ -190,7 +191,7 @@ public:
       if(self[i].color==WHITE)enpassant_trace=Moves<WPAWNM>::get_enpassant_trace(i,j);
       if(self[i].color==BLACK)enpassant_trace=Moves<BPAWNM>::get_enpassant_trace(i,j);
     }
-    return event::basic(bitmask::_pos_pair(i, j | promote_flag), killwhat, enpassant_, enpassant_trace);
+    return event::basic(bitmask::_pos_pair(i, j | promote_flag), killwhat, enpassant_trace);
   }
 
   event_t ev_castle(pos_t i, pos_t j) const {
@@ -200,52 +201,57 @@ public:
     if(self[i].color == BLACK)rookmove = Moves<KINGM>::castle_rook_move<BLACK>(i,j);
     const pos_t r_i = bitmask::first(rookmove),
                 r_j = bitmask::second(rookmove);
-    return event::castling(bitmask::_pos_pair(i, j), bitmask::_pos_pair(r_i, r_j), enpassant_);
+    return event::castling(bitmask::_pos_pair(i, j), bitmask::_pos_pair(r_i, r_j));
   }
 
   event_t ev_take_enpassant(pos_t i, pos_t j) const {
     assert(j <= board::MOVEMASK);
-    return event::enpassant(bitmask::_pos_pair(i, j), enpassant_pawn(), enpassant_);
+    return event::enpassant(bitmask::_pos_pair(i, j), enpassant_pawn());
+  }
+
+  INLINE pos_t enpassant_trace() const {
+    if(enpassants.empty())return event::enpassantnotrace;
+    const auto [ply, e] = enpassants.back();
+    if(ply == get_current_ply()) {
+      return e;
+    }
+    return event::enpassantnotrace;
   }
 
   INLINE pos_t enpassant_pawn() const {
-    if(enpassant_ == event::enpassantnotrace)return 0xFF;
-    const pos_t x = board::_x(enpassant_);
-    return board::_y(enpassant_) == 3-1 ? board::_pos(A+x, 4) : board::_pos(A+x, 5);
+    if(enpassant_trace() == event::enpassantnotrace)return 0xFF;
+    const pos_t x = board::_x(enpassant_trace());
+    return board::_y(enpassant_trace()) == 3-1 ? board::_pos(A+x, 4) : board::_pos(A+x, 5);
   }
 
-  INLINE PIECE get_promotion_as(pos_t j) const {
-    switch(j & ~board::MOVEMASK) {
-      case board::PROMOTE_KNIGHT:return KNIGHT;
-      case board::PROMOTE_BISHOP:return BISHOP;
-      case board::PROMOTE_ROOK:return ROOK;
-      case board::PROMOTE_QUEEN:return QUEEN;
+  void set_enpassant(pos_t e) {
+    enpassants.emplace_back(get_current_ply(), e);
+  }
+
+  INLINE void restore_enpassants() {
+    while(!enpassants.empty() && enpassants.back().first > get_current_ply()) {
+      enpassants.pop_back();
     }
-    return PAWN;
   }
 
   INLINE event_t ev_promotion(pos_t i, pos_t j) const {
     return event::promotion_from_basic(ev_basic(i, j));
   }
 
-  INLINE void reset_enpassants() {
-    enpassant_ = 0xFF;
-  }
-
   INLINE pos_t get_halfmoves() const {
     if(halfmoves.size() == 1) {
       return halfmoves.front();
     }
-    return history.size() - halfmoves.back();
+    return get_current_ply() - halfmoves.back();
   }
 
   INLINE void update_halfmoves() {
-    halfmoves.push_back(history.size());
+    halfmoves.emplace_back(get_current_ply());
   }
 
   INLINE void restore_halfmoves() {
     if(halfmoves.size() == 1)return;
-    while(halfmoves.back() > history.size()) {
+    while(halfmoves.back() > get_current_ply()) {
       halfmoves.pop_back();
     }
   }
@@ -259,8 +265,8 @@ public:
   }
 
   INLINE void unset_castling(COLOR c, CASTLING_SIDE side) {
-    if(castlings[board::_castling_index(c, side)] >= history.size()) {
-      castlings[board::_castling_index(c, side)] = history.size();
+    if(castlings[board::_castling_index(c, side)] >= get_current_ply()) {
+      castlings[board::_castling_index(c, side)] = get_current_ply();
     }
   }
 
@@ -299,13 +305,13 @@ public:
 
   ALWAYS_UNROLL INLINE void restore_castlings() {
     for(pos_t cstl = 0; cstl < castlings.size(); ++cstl) {
-      if(castlings[cstl] > history.size()) {
+      if(castlings[cstl] > get_current_ply()) {
         castlings[cstl] = board::nocastlings;
       }
     }
   }
 
-  zobrist::key_t zb_hash() {
+  zobrist::key_t zb_hash() const {
     zobrist::key_t zb = 0x00;
     for(pos_t i = 0; i < board::NO_PIECE_INDICES - 1; ++i) {
       bitmask::foreach(pieces[i].mask, [&](pos_t pos) mutable -> void {
@@ -316,8 +322,8 @@ public:
     if(is_castling(WHITE,KING_SIDE) )zb^=zobrist::rnd_hashes[zobrist::rnd_start_castlings + 1];
     if(is_castling(BLACK,QUEEN_SIDE))zb^=zobrist::rnd_hashes[zobrist::rnd_start_castlings + 2];
     if(is_castling(BLACK,KING_SIDE) )zb^=zobrist::rnd_hashes[zobrist::rnd_start_castlings + 3];
-    if(enpassant_ != event::enpassantnotrace) {
-      zb ^= zobrist::rnd_hashes[zobrist::rnd_start_enpassant + board::_x(enpassant_)];
+    if(enpassant_trace() != event::enpassantnotrace) {
+      zb ^= zobrist::rnd_hashes[zobrist::rnd_start_enpassant + board::_x(enpassant_trace())];
     }
     if(activePlayer() == BLACK) {
       zb ^= zobrist::rnd_hashes[zobrist::rnd_start_moveside];
@@ -325,20 +331,24 @@ public:
     return zb;
   }
 
+  INLINE move_index_t get_current_ply() const {
+    return history.size();
+  }
+
   void act_event(event_t ev) {
-    history.push_back(ev);
-    const pos_t marker = event::extract_byte(ev);
+    history.emplace_back(ev);
+    const uint8_t marker = event::extract_marker(ev);
     assert(fen::decompress_castlings(fen::compress_castlings(get_castlings_mask())) == get_castlings_mask());
     backup_state_on_event();
     switch(marker) {
       case event::BASIC_MARKER:
         {
-          const pos_t j = event::extract_byte(ev);
-          const pos_t i = event::extract_byte(ev);
-          const pos_t killwhat = event::extract_byte(ev);
-          auto enpassant_old = event::extract_byte(ev);
-          auto enpassant_trace = event::extract_byte(ev);
-          enpassant_ = enpassant_trace;
+          const move_t m = event::extract_move(ev);
+          const pos_t i = bitmask::first(m);
+          const pos_t j = bitmask::second(m);
+          const pos_t killwhat = event::extract_piece_ind(ev);
+          const pos_t new_enpassant = event::extract_pos(ev);
+          set_enpassant(new_enpassant);
           if(killwhat != event::killnothing) {
             update_halfmoves();
           }
@@ -350,11 +360,12 @@ public:
       break;
       case event::CASTLING_MARKER:
         {
-          const pos_t j = event::extract_byte(ev);
-          const pos_t i = event::extract_byte(ev);
-          const pos_t r_j = event::extract_byte(ev);
-          const pos_t r_i = event::extract_byte(ev);
-          auto enpassant_ = event::extract_byte(ev);
+          const move_t m = event::extract_move(ev);
+          const pos_t i = bitmask::first(m),
+                      j = bitmask::second(m);
+          const move_t r_m = event::extract_move(ev);
+          const pos_t r_i = bitmask::first(r_m),
+                      r_j = bitmask::second(r_m);
           update_castlings(i, j);
           move_pos(i, j);
           update_state_pos(i);
@@ -362,39 +373,36 @@ public:
           move_pos(r_i, r_j);
           update_state_pos(r_i);
           update_state_pos(r_j);
-          reset_enpassants();
         }
       break;
       case event::ENPASSANT_MARKER:
         {
-          const pos_t j = event::extract_byte(ev);
-          const pos_t i = event::extract_byte(ev);
-          const pos_t killwhere = event::extract_byte(ev);
-          auto enpassant_ = event::extract_byte(ev);
+          const move_t m = event::extract_move(ev);
+          const pos_t i = bitmask::first(m),
+                      j = bitmask::second(m);
+          const pos_t killwhere = event::extract_pos(ev);
           put_pos(killwhere, self.get_piece(EMPTY));
           update_state_pos(killwhere);
           move_pos(i, j);
           update_state_pos(i);
           update_state_pos(j);
-          reset_enpassants();
           update_halfmoves();
         }
       break;
       case event::PROMOTION_MARKER:
         {
-          const pos_t to_byte = event::extract_byte(ev);
+          const move_t m = event::extract_move(ev);
+          const pos_t i = bitmask::first(m),
+                      to_byte = bitmask::second(m);
             const pos_t j = to_byte & board::MOVEMASK;
-            const PIECE becomewhat = get_promotion_as(to_byte);
-          const pos_t i = event::extract_byte(ev);
-          const pos_t killwhat = event::extract_byte(ev);
-          auto enpassant_ = event::extract_byte(ev);
-          auto enpassant_trace = event::extract_byte(ev);
+            const PIECE becomewhat = board::get_promotion_as(to_byte);
+          const pos_t killwhat = event::extract_piece_ind(ev);
+          auto new_enpassant = event::extract_pos(ev);
           update_castlings(i, j);
           put_pos(i, self.get_piece(EMPTY));
           put_pos(j, self.pieces[Piece::get_piece_index(becomewhat, activePlayer())]);
           update_state_pos(i);
           update_state_pos(j);
-          reset_enpassants();
           update_halfmoves();
         }
       break;
@@ -403,7 +411,7 @@ public:
     update_state_on_event();
   }
 
-  INLINE  event_t last_event() const {
+  INLINE event_t last_event() const {
     if(history.empty())return 0x00;
     return history.back();
   }
@@ -411,30 +419,32 @@ public:
   void unact_event() {
     if(history.empty())return;
     event_t ev = history.back();
-    const pos_t marker = event::extract_byte(ev);
+    const uint8_t marker = event::extract_marker(ev);
     switch(marker) {
       case event::BASIC_MARKER:
         {
-          const pos_t j = event::extract_byte(ev);
-          const pos_t i = event::extract_byte(ev);
-          const pos_t killwhat = event::extract_byte(ev);
+          const move_t m = event::extract_move(ev);
+          const pos_t i = bitmask::first(m),
+                      j = bitmask::second(m);
+          const pos_t killwhat = event::extract_piece_ind(ev);
+          auto new_enpassant = event::extract_byte(ev);
           move_pos(j, i);
           //update_state_pos(i);
           if(killwhat != event::killnothing) {
             put_pos(j, self.pieces[killwhat]);
           }
           //update_state_pos(j);
-          enpassant_ = event::extract_byte(ev);
           auto enpassant_trace = event::extract_byte(ev);
         }
       break;
       case event::CASTLING_MARKER:
         {
-          const pos_t j = event::extract_byte(ev);
-          const pos_t i = event::extract_byte(ev);
-          const pos_t r_j = event::extract_byte(ev);
-          const pos_t r_i = event::extract_byte(ev);
-          enpassant_ = event::extract_byte(ev);
+          const move_t m = event::extract_move(ev);
+          const pos_t i = bitmask::first(m),
+                      j = bitmask::second(m);
+          const move_t r_m = event::extract_move(ev);
+          const pos_t r_i = bitmask::first(r_m),
+                      r_j = bitmask::second(r_m);
           move_pos(j, i);
           //update_state_pos(j);
           //update_state_pos(i);
@@ -445,25 +455,24 @@ public:
       break;
       case event::ENPASSANT_MARKER:
         {
-          const pos_t j = event::extract_byte(ev);
-          const pos_t i = event::extract_byte(ev);
-          const pos_t killwhere = event::extract_byte(ev);
-          enpassant_ = event::extract_byte(ev);
+          const move_t m = event::extract_move(ev);
+          const pos_t i = bitmask::first(m),
+                      j = bitmask::second(m);
+          const pos_t killwhere = event::extract_pos(ev);
           put_pos(killwhere, self.get_piece(PAWN, enemy_of(self[j].color)));
           //update_state_pos(killwhere);
           move_pos(j, i);
           //update_state_pos(j);
           //update_state_pos(i);
-          enpassant_ = j;
         }
       break;
       case event::PROMOTION_MARKER:
         {
-          const pos_t j = event::extract_byte(ev) & board::MOVEMASK;
-          const pos_t i = event::extract_byte(ev);
-          const pos_t killwhat = event::extract_byte(ev);
-          enpassant_ = event::extract_byte(ev);
-          auto enpassant_trace = event::extract_byte(ev);
+          const move_t m = event::extract_move(ev);
+          const pos_t i = bitmask::first(m),
+                      j = bitmask::second(m) & board::MOVEMASK;
+          const pos_t killwhat = event::extract_piece_ind(ev);
+          auto new_enpassant = event::extract_byte(ev);
 
           const COLOR c = self[j].color;
           if(killwhat != event::killnothing) {
@@ -479,6 +488,7 @@ public:
     }
     activePlayer_ = enemy_of(activePlayer());
     history.pop_back();
+    restore_enpassants();
     restore_castlings();
     restore_halfmoves();
     restore_state_on_event();
@@ -494,7 +504,7 @@ public:
     j &= board::MOVEMASK;
     if(is_castling_move(i, j)) {
       ev = ev_castle(i, j);
-    } else if(self[i].value == PAWN && j == enpassant_) {
+    } else if(self[i].value == PAWN && j == enpassant_trace()) {
       ev = ev_take_enpassant(i, j);
     } else if(is_promotion_move(i, j)) {
       ev = ev_promotion(i, j | promote_as);
@@ -520,7 +530,8 @@ public:
     init_state_attacks();
     init_state_checkline();
     init_state_moves();
-    halfmoves.reserve(40);
+    halfmoves.reserve(bitmask::count_bits(get_piece_positions(BOTH)) - 2);
+    enpassants.reserve(16);
     state_hist_attacks.reserve(100);
     state_hist_moves.reserve(100);
     state_hist_pins.reserve(100);
@@ -532,10 +543,10 @@ public:
   }
 
   void backup_state_on_event() {
-    state_hist_attacks.push_back(state_attacks);
-    state_hist_moves.push_back(state_moves);
-    state_hist_pins.push_back(state_pins);
-    state_hist_pins_rays.push_back(state_pins_rays);
+    state_hist_attacks.emplace_back(state_attacks);
+    state_hist_moves.emplace_back(state_moves);
+    state_hist_pins.emplace_back(state_pins);
+    state_hist_pins_rays.emplace_back(state_pins_rays);
   }
 
   using board_mailbox_t = std::array <piece_bitboard_t, board::SIZE>;
@@ -724,7 +735,7 @@ public:
         if(doublecheck && p!=KING)continue;
         get_piece((PIECE)p,c).foreach([&](pos_t pos) mutable noexcept -> void {
           if(p==PAWN) {
-            state_moves[pos] = get_attacks_from(pos) & (foes|(1ULL << enpassant_));
+            state_moves[pos] = get_attacks_from(pos) & (foes|(1ULL << enpassant_trace()));
             state_moves[pos] |= get_push_moves(c, pos, friends|foes);
             state_moves[pos] &= state_checkline[c];
           } else if(p==KING) {
@@ -743,7 +754,7 @@ public:
 
   void init_state_moves_checkline_enpassant_takes(COLOR c=NEUTRAL) {
     if(c==NEUTRAL)c=activePlayer();
-    const pos_t etrace = enpassant_;
+    const pos_t etrace = enpassant_trace();
     const pos_t epawn = enpassant_pawn();
     if(etrace == event::enpassantnotrace)return;
     if(!bitmask::is_exp2(state_checkline[c]))return;
@@ -821,12 +832,12 @@ public:
   }
 
   void init_horizontal_enpassant_pin() {
-    if(enpassant_ == event::enpassantnotrace)return;
+    if(enpassant_trace() == event::enpassantnotrace)return;
     // maybe do this as a loop for incremental updates
     {
       const COLOR c = activePlayer();
       if(state_checkline[c] != ~0ULL)return;
-      const pos_t etrace = enpassant_;
+      const pos_t etrace = enpassant_trace();
       const pos_t epawn = enpassant_pawn();
       const pos_t kingpos = get_king_pos(c);
       const piece_bitboard_t h = bitmask::hline << (board::_y(kingpos) * board::LEN);
@@ -871,12 +882,16 @@ public:
     }
   }
 
+  std::string _move_str(move_t m) const {
+    return board::_move_str(m, self[bitmask::first(m)].value == PAWN);
+  }
+
   fen::FEN export_as_fen() const {
     fen::FEN f = {
       .board = std::string(),
       .active_player = activePlayer(),
       .castling_compressed = fen::compress_castlings(get_castlings_mask()),
-      .enpassant = enpassant_,
+      .enpassant = enpassant_trace(),
       .halfmove_clock = get_halfmoves(),
       .fullmove = uint16_t(history.size() / 2),
     };
