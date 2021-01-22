@@ -9,6 +9,13 @@
 #include <Engine.hpp>
 
 
+#ifndef NDEBUG
+#define _printf printf
+#else
+#define _printf(X)
+#endif
+
+
 struct UCI {
   Engine *engine = nullptr;
 
@@ -16,8 +23,17 @@ struct UCI {
   {}
 
   void init(const fen::FEN &f) {
-    if(engine != nullptr)return;
+    destroy();
+    _printf("init\n");
     engine = new Engine(f);
+  }
+
+  void destroy() {
+    if(engine != nullptr) {
+      _printf("destroy\n");
+      delete engine;
+      engine = nullptr;
+    }
   }
 
   // https://gist.github.com/DOBRO/2592c6dad754ba67e6dcaec8c90165bf
@@ -74,6 +90,7 @@ struct UCI {
   };
 
   bool should_quit = false;
+  bool should_stop = false;
   void run() {
     std::vector<std::string> cmd = {""s};
     char c = 0;
@@ -88,9 +105,9 @@ struct UCI {
       if(isspace(c) && cmd.empty()) {
         continue;
       } else if(!isspace(c)) {
-        cmd.back() += tolower(c);
+        cmd.back() += c;
       } else if(isspace(c) && !cmd.back().empty()) {
-        cmd.push_back(""s);
+        cmd.emplace_back(""s);
       }
     }
     if(cmd.size() > 1 || !cmd.back().empty()) {
@@ -99,14 +116,14 @@ struct UCI {
   }
 
   void process_cmd(std::vector<std::string> cmd) {
-    printf("processing cmd {");
+    _printf("processing cmd {");
     for(size_t i=0;i<cmd.size();++i) {
-      printf("\"%s\"", cmd[i].c_str());
+      _printf("\"%s\"", cmd[i].c_str());
       if(i != cmd.size() - 1) {
-        printf(", ");
+        _printf(", ");
       }
     }
-    printf("}\n");
+    _printf("}\n");
     while(cmdmap.find(cmd.front()) == std::end(cmdmap)) {
       cmd.erase(cmd.begin());
       if(cmd.empty()) {
@@ -114,24 +131,74 @@ struct UCI {
       }
     }
     switch(cmdmap.at(cmd.front())) {
-      case CMD_UCI:return;
+      case CMD_UCI:respond(RESP_UCIOK);return;
       case CMD_DEBUG:return;
       case CMD_ISREADY:
         init(fen::starting_pos);
         respond(RESP_READYOK);
       return;
-      case CMD_SETOPTION:return;
-      case CMD_REGISTER:
+      case CMD_SETOPTION:
+        // no options
       return;
+      case CMD_REGISTER:return;
       case CMD_UCINEWGAME:
+        destroy();
       return;
       case CMD_POSITION:
+        {
+          fen::FEN f;
+          size_t ind = 1;
+          if(cmd[1] == "startpos"s) {
+            ++ind;
+            f = fen::starting_pos;
+          } else {
+            std::string s;
+            for(; ind < cmd.size(); ++ind) {
+              if(cmd[ind] == "moves")break;
+              if(ind != 1)s += " ";
+              s += cmd[ind];
+            }
+            f = fen::load_from_string(s);
+          }
+          init(f);
+          if(ind < cmd.size() && cmd[ind] == "moves"s) {
+            std::vector<move_t> moves;
+            ++ind;
+            for(; ind < cmd.size(); ++ind) {
+              assert(cmd[ind].length() == 4 || cmd[ind].length() == 5);
+              const pos_t i_file = tolower(cmd[ind][0]) - 'a';
+              const pos_t i_rank = cmd[ind][1] - '0';
+              const pos_t i = board::_pos(A+i_file, i_rank);
+              const pos_t j_file = tolower(cmd[ind][2]) - 'a';
+              const pos_t j_rank = cmd[ind][3] - '0';
+              pos_t j = board::_pos(A+j_file, j_rank);
+              if(cmd[ind].length() == 5) {
+                switch(tolower(cmd[ind][4])) {
+                  case 'k':j|=board::PROMOTE_KNIGHT;break;
+                  case 'b':j|=board::PROMOTE_BISHOP;break;
+                  case 'r':j|=board::PROMOTE_ROOK;break;
+                  case 'q':j|=board::PROMOTE_QUEEN;break;
+                  default:break;
+                }
+              }
+              moves.emplace_back(bitmask::_pos_pair(i, j));
+            }
+            for(const auto m : moves) {
+              engine->make_move(m);
+            }
+          }
+          engine->print();
+        }
       return;
       case CMD_GO:
+        should_stop = false;
+        //TODO
       return;
       case CMD_STOP:
+        should_stop = true;
       return;
       case CMD_PONDERHIT:
+        //TODO
       return;
       case CMD_QUIT:
         should_quit = true;
@@ -141,15 +208,12 @@ struct UCI {
   }
 
   void respond(RESPONSE resp, std::vector<std::string> args = {}) {
-    printf("%s", respmap.at(resp).c_str());
-    for(auto &a:args)printf(" %s", a.c_str());
-    printf("\n");
+    _printf("%s", respmap.at(resp).c_str());
+    for(auto &a:args)_printf(" %s", a.c_str());
+    _printf("\n");
   }
 
   ~UCI() {
-    if(engine != nullptr) {
-      delete engine;
-      engine = nullptr;
-    }
+    destroy();
   }
 };
