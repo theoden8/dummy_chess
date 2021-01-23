@@ -683,7 +683,7 @@ public:
 
   INLINE bool is_checkmate() const {
     const COLOR c = activePlayer();
-    return state_checkline[c] && (get_attacks_from(get_king_pos(c)) & ~get_attack_mask(enemy_of(c)));
+    return (state_checkline[c] != ~0ULL) && (get_attacks_from(get_king_pos(c)) & ~get_attack_mask(enemy_of(c)));
   }
 
   INLINE bool can_move(COLOR c=NEUTRAL) const {
