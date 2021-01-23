@@ -10,7 +10,6 @@
 #include <climits>
 
 #include <array>
-#include <functional>
 
 #include <Optimizations.hpp>
 

@@ -40,7 +40,7 @@ struct PGN {
             p += 'a' + board::_x(j);
           } else {
             if(board[i].value!=PAWN)p+=toupper(board[i].str());
-            else p+='a'+board::_x(i);
+            else if(killwhat!=event::killnothing) p+='a'+board::_x(i);
             if(killwhat!=event::killnothing)p+='x';
             p += board::_pos_str(j);
           }
@@ -102,7 +102,7 @@ struct PGN {
       ending = "1/2 - 1/2 (50 moves)";
     } else if(board.is_draw_material()) {
       ending = "1/2 - 1/2 (material)";
-    } else if(!board.can_move() && no_checks > 0) {
+    } else if(board.is_checkmate()) {
       ply.back() += '#';
       ending = (c == WHITE) ? "1-0"s : "0-1"s;
     } else if(no_checks > 0) {

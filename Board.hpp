@@ -678,7 +678,12 @@ public:
 
   // fifty-halfmoves-draw
   INLINE bool is_draw_halfmoves() const {
-    return get_halfmoves() == 50;
+    return get_halfmoves() == 50 && !is_checkmate();
+  }
+
+  INLINE bool is_checkmate() const {
+    const COLOR c = activePlayer();
+    return state_checkline[c] && (get_attacks_from(get_king_pos(c)) & ~get_attack_mask(enemy_of(c)));
   }
 
   INLINE bool can_move(COLOR c=NEUTRAL) const {

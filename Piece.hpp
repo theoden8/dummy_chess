@@ -96,15 +96,17 @@ struct Piece {
     return 0x00ULL;
   }
 
-  inline void foreach(std::function<void(pos_t)>&&func) {
+  template <typename F>
+  INLINE void foreach(F &&func) {
     bitmask::foreach(mask, func);
   }
 
-  inline void foreach(std::function<void(pos_t)>&&func) const {
+  template <typename F>
+  INLINE void foreach(F &&func) const {
     bitmask::foreach(mask, func);
   }
 
-  inline void print() {
+  void print() {
     std::cout << int(size()) << std::endl;
     bitmask::print(mask);
   }

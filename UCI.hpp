@@ -208,9 +208,9 @@ struct UCI {
   }
 
   void respond(RESPONSE resp, std::vector<std::string> args = {}) {
-    _printf("%s", respmap.at(resp).c_str());
-    for(auto &a:args)_printf(" %s", a.c_str());
-    _printf("\n");
+    printf("%s", respmap.at(resp).c_str());
+    for(auto &a:args)printf(" %s", a.c_str());
+    printf("\n");
   }
 
   ~UCI() {
