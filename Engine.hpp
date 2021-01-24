@@ -30,15 +30,15 @@ public:
   }
 
   template <typename F>
-  ALWAYS_UNROLL inline void iter_moves(F &&func) const {
-    for(pos_t i = 0; i < board::SIZE; ++i) {
+  ALWAYS_UNROLL INLINE void iter_moves(F &&func) const {
+    bitmask::foreach(state_piece_positions[activePlayer()], [&](pos_t i) mutable -> void {
       iter_moves_from(i, func);
-    }
+    });
   }
 
   INLINE size_t count_moves() const {
     size_t no_moves = 0;
-    for(pos_t i = 0; i < board::SIZE; ++i) {
+    bitmask::foreach(state_piece_positions[activePlayer()], [&](pos_t i) mutable -> void {
       pos_t moves_from = bitmask::count_bits(get_moves_from(i));
       if(self[i].value == PAWN && (board::_y(i) == 2-1 || board::_y(i) == 7-1)
           && (
@@ -49,7 +49,7 @@ public:
         moves_from *= 4;
       }
       no_moves += moves_from;
-    }
+    });
     return no_moves;
   }
 
