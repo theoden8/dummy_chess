@@ -111,7 +111,7 @@ public:
   double h_attack_cells(COLOR c) const {
     const piece_bitboard_t occupied = get_piece_positions(BOTH);
     double attacks = 0;
-    bitmask::foreach(state_piece_positions[activePlayer()], [&](pos_t i) mutable -> void {
+    bitmask::foreach(state_piece_positions[c], [&](pos_t i) mutable -> void {
       auto a = self.get_attacks_from(i);
       attacks += bitmask::count_bits(a & occupied) + bitmask::count_bits(a);
     });
