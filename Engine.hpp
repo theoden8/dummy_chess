@@ -36,6 +36,23 @@ public:
     }
   }
 
+  INLINE size_t count_moves() const {
+    size_t no_moves = 0;
+    for(pos_t i = 0; i < board::SIZE; ++i) {
+      pos_t moves_from = bitmask::count_bits(get_moves_from(i));
+      if(self[i].value == PAWN && (board::_y(i) == 2-1 || board::_y(i) == 7-1)
+          && (
+            (self[i].color == WHITE && board::_y(i) == 7-1)
+            || (self[i].color == BLACK && board::_y(i) == 2-1)
+        ))
+      {
+        moves_from *= 4;
+      }
+      no_moves += moves_from;
+    }
+    return no_moves;
+  }
+
   move_t get_random_move() const {
     std::vector<move_t> moves;
     iter_moves([&](pos_t i, pos_t j) mutable -> void {
@@ -220,6 +237,9 @@ public:
   };
   size_t zb_hit = 0, zb_miss = 0;
   size_t _perft(pos_t depth, std::array<perft_info, ZOBRIST_SIZE> &perft_store) {
+    if(depth == 1 || depth == 0) {
+      return count_moves();
+    }
     zobrist::key_t k = zb_hash();
     board_info info = get_board_info();
     if(perft_store[k].info == info && perft_store[k].depth == depth) {
@@ -230,14 +250,10 @@ public:
     ++zb_miss;
     size_t nodes = 0;
     iter_moves([&](pos_t i, pos_t j) mutable -> void {
-      if(depth == 1 || depth == 0) {
-        ++nodes;
-      } else {
-        make_move(i, j);
-        ++nodes_searched;
-        nodes += _perft(depth - 1, perft_store);
-        retract_move();
-      }
+      make_move(i, j);
+      ++nodes_searched;
+      nodes += _perft(depth - 1, perft_store);
+      retract_move();
     });
     if(overwrite) {
       perft_store[k] = {
