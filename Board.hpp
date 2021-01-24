@@ -527,6 +527,7 @@ public:
   }
 
   void init_update_state() {
+    init_state_piece_positions();
     init_state_attacks();
     init_state_checkline();
     init_state_moves();
@@ -543,9 +544,10 @@ public:
   }
 
   void backup_state_on_event() {
+    const COLOR c = activePlayer();
     state_hist_attacks.emplace_back(state_attacks);
     state_hist_moves.emplace_back(state_moves);
-    state_hist_pins.emplace_back(state_pins);
+    state_hist_pins.emplace_back(state_pins[c]);
     state_hist_pins_rays.emplace_back(state_pins_rays);
   }
 
@@ -553,38 +555,44 @@ public:
   std::vector<board_mailbox_t> state_hist_attacks;
   std::vector<board_mailbox_t> state_hist_moves;
   void update_state_on_event() {
+    init_state_piece_positions();
     update_state_checkline();
     init_state_moves();
   }
 
   void restore_state_on_event() {
+    const COLOR c = activePlayer();
+    init_state_piece_positions();
     state_attacks = state_hist_attacks.back();
     state_hist_attacks.pop_back();
     update_state_checkline();
     state_moves = state_hist_moves.back();
     state_hist_moves.pop_back();
-    state_pins = state_hist_pins.back();
+    state_pins[c] = state_hist_pins.back();
     state_hist_pins.pop_back();
     state_pins_rays = state_hist_pins_rays.back();
     state_hist_pins_rays.pop_back();
   }
 
-  ALWAYS_UNROLL inline piece_bitboard_t get_piece_positions(COLOR c, bool remove_king=false) const {
-    if(c==NEUTRAL)return get_piece(EMPTY).mask;
-    if(c==BOTH)return ~get_piece_positions(NEUTRAL);
+  std::array<piece_bitboard_t, NO_COLORS> state_piece_positions = {0x00, 0x00};
+  ALWAYS_UNROLL INLINE piece_bitboard_t get_piece_positions(COLOR c) const {
+    assert(c != NEUTRAL);
+    if(c==BOTH)return ~get_piece(EMPTY).mask;
     piece_bitboard_t mask = 0ULL;
     for(PIECE p : {PAWN,KNIGHT,BISHOP,ROOK,QUEEN,KING}) {
       mask|=self.get_piece(p, c).mask;
     }
-    if(remove_king) {
-      mask&=~get_piece(KING, c).mask;
-    }
     return mask;
   }
 
-  std::array <piece_bitboard_t, board::SIZE> state_attacks = {UINT64_C(0x00)};
+  void init_state_piece_positions() {
+    state_piece_positions[WHITE] = get_piece_positions(WHITE);
+    state_piece_positions[BLACK] = get_piece_positions(BLACK);
+  }
+
+  std::array <piece_bitboard_t, board::SIZE> state_attacks = {0x00};
   ALWAYS_UNROLL void init_state_attacks() {
-    for(auto&a:state_attacks)a=UINT64_C(0x00);
+    for(auto&a:state_attacks)a=0ULL;
     for(COLOR c : {WHITE, BLACK}) {
       const piece_bitboard_t occupied = get_piece_positions(BOTH) & ~get_piece(KING, enemy_of(c)).mask;
       for(PIECE p : {PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING}) {
@@ -711,11 +719,12 @@ public:
     {
       return false;
     }
-    return (bitmask::count_bits(get_piece_positions(BOTH)) == 2) // two kings
-        || (bitmask::count_bits(get_piece_positions(BOTH)) == 3 // material draw, kings and a bishop/knight
+    const piece_bitboard_t occupied = get_piece_positions(BOTH);
+    return (bitmask::count_bits(occupied) == 2) // two kings
+        || (bitmask::count_bits(occupied) == 3 // material draw, kings and a bishop/knight
             && get_piece(KNIGHT,WHITE).size() + get_piece(BISHOP,WHITE).size()
                + get_piece(KNIGHT,BLACK).size() + get_piece(BISHOP,BLACK).size() == 1)
-        || (bitmask::count_bits(get_piece_positions(BOTH)) == 4 // material draw, kings and a bishop/knight each
+        || (bitmask::count_bits(occupied) == 4 // material draw, kings and a bishop/knight each
             && get_piece(KNIGHT,WHITE).size() + get_piece(BISHOP,WHITE).size() == 1
             && get_piece(KNIGHT,BLACK).size() + get_piece(BISHOP,BLACK).size() == 1);
   }
@@ -731,8 +740,8 @@ public:
     const COLOR c = activePlayer();
     // maybe do this as a loop for incremental updates
     {
-      const piece_bitboard_t friends = get_piece_positions(c),
-                             foes  = get_piece_positions(enemy_of(c)),
+      const piece_bitboard_t friends = state_piece_positions[c],
+                             foes  = state_piece_positions[enemy_of(c)],
                              attack_mask = get_attack_mask(enemy_of(c)),
                              pins = get_pins(c);
       const bool doublecheck = (state_checkline[c] == 0x00);
@@ -783,8 +792,8 @@ public:
     if(c==NEUTRAL)return;
     const piece_bitboard_t dstbit = 1ULL << j;
     const COLOR ec = enemy_of(c);
-    const piece_bitboard_t friends = get_piece_positions(c),
-                           foes = get_piece_positions(ec);
+    const piece_bitboard_t friends = state_piece_positions[c],
+                           foes = state_piece_positions[ec];
     const piece_bitboard_t rook_xray = get_piece(ROOK,c).get_xray_attack(j,foes,friends)
                                        & (get_piece(ROOK,ec).mask | get_piece(QUEEN,ec).mask);
     if(rook_xray) {
@@ -817,7 +826,7 @@ public:
     // maybe do this as a loop for incremental updates
     {
       state_pins[c] = 0x00;
-      const piece_bitboard_t friends = get_piece_positions(c) & ~get_piece(KING,c).mask;
+      const piece_bitboard_t friends = state_piece_positions[c] & ~get_piece(KING,c).mask;
       iter_attacking_xrays(get_king_pos(c), [&](pos_t i, piece_bitboard_t r) mutable -> void {
         const pos_t attacker = i;
         r |= 1ULL << attacker;
@@ -825,7 +834,7 @@ public:
         const piece_bitboard_t pin = friends & r;
         if(pin) {
           assert(bitmask::is_exp2(pin));
-          pos_t pin_pos = bitmask::log2_of_exp2(pin);
+          const pos_t pin_pos = bitmask::log2_of_exp2(pin);
           state_pins[c] |= pin;
           state_pins_rays[pin_pos] = r;
           // update moves
@@ -867,7 +876,7 @@ public:
     }
   }
 
-  std::vector<decltype(state_pins)> state_hist_pins;
+  std::vector<piece_bitboard_t> state_hist_pins;
   std::vector<decltype(state_pins_rays)> state_hist_pins_rays;
 
   INLINE piece_bitboard_t get_moves_from(pos_t pos, COLOR c=NEUTRAL) const {

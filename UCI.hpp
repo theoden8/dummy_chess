@@ -115,6 +115,42 @@ struct UCI {
     }
   }
 
+  static move_t scan_move(const std::string &s) {
+    assert(s.length() == 4 || s.length() == 5);
+    const pos_t i_file = tolower(s[0]) - 'a';
+    const pos_t i_rank = s[1] - '0';
+    const pos_t i = board::_pos(A+i_file, i_rank);
+    const pos_t j_file = tolower(s[2]) - 'a';
+    const pos_t j_rank = s[3] - '0';
+    pos_t j = board::_pos(A+j_file, j_rank);
+    if(s.length() == 5) {
+      switch(tolower(s[4])) {
+        case 'k':j|=board::PROMOTE_KNIGHT;break;
+        case 'b':j|=board::PROMOTE_BISHOP;break;
+        case 'r':j|=board::PROMOTE_ROOK;break;
+        case 'q':j|=board::PROMOTE_QUEEN;break;
+        default:break;
+      }
+    }
+    return bitmask::_pos_pair(i, j);
+  }
+
+  typedef struct _go_command {
+    std::vector<move_t> searchmoves = {};
+    bool ponder = false;
+    double wtime = 0;
+    double btime = 0;
+    double winc = 0;
+    double binc = 0;
+    int movestogo = 0;
+    size_t depth = SIZE_MAX;
+    size_t nodes = SIZE_MAX;
+    size_t mate = SIZE_MAX;
+    double movetime = DBL_MAX;
+    bool infinite = false;
+  } go_command;
+
+
   void process_cmd(std::vector<std::string> cmd) {
     _printf("processing cmd {");
     for(size_t i=0;i<cmd.size();++i) {
@@ -165,23 +201,7 @@ struct UCI {
             std::vector<move_t> moves;
             ++ind;
             for(; ind < cmd.size(); ++ind) {
-              assert(cmd[ind].length() == 4 || cmd[ind].length() == 5);
-              const pos_t i_file = tolower(cmd[ind][0]) - 'a';
-              const pos_t i_rank = cmd[ind][1] - '0';
-              const pos_t i = board::_pos(A+i_file, i_rank);
-              const pos_t j_file = tolower(cmd[ind][2]) - 'a';
-              const pos_t j_rank = cmd[ind][3] - '0';
-              pos_t j = board::_pos(A+j_file, j_rank);
-              if(cmd[ind].length() == 5) {
-                switch(tolower(cmd[ind][4])) {
-                  case 'k':j|=board::PROMOTE_KNIGHT;break;
-                  case 'b':j|=board::PROMOTE_BISHOP;break;
-                  case 'r':j|=board::PROMOTE_ROOK;break;
-                  case 'q':j|=board::PROMOTE_QUEEN;break;
-                  default:break;
-                }
-              }
-              moves.emplace_back(bitmask::_pos_pair(i, j));
+              moves.emplace_back(scan_move(cmd[ind]));
             }
             for(const auto m : moves) {
               engine->make_move(m);
@@ -192,7 +212,42 @@ struct UCI {
       return;
       case CMD_GO:
         should_stop = false;
-        //TODO
+        {
+          go_command g;
+          size_t ind = 1;
+          while(ind < cmd.size()) {
+            if(cmd[ind] == "searchmoves"s) {
+              ++ind;
+              for(; ind < cmd.size(); ++ind) {
+                g.searchmoves.emplace_back(scan_move(cmd[ind]));
+              }
+            } else if(cmd[ind] == "ponder"s) {
+              g.ponder = true;
+            } else if(cmd[ind] == "wtime"s) {
+              g.wtime = double(atol(cmd[++ind].c_str()))*1e-6;
+            } else if(cmd[ind] == "btime"s) {
+              g.btime = double(atol(cmd[++ind].c_str()))*1e-6;
+            } else if(cmd[ind] == "winc"s) {
+              g.winc = double(atol(cmd[++ind].c_str()))*1e-6;
+            } else if(cmd[ind] == "binc"s) {
+              g.binc = double(atol(cmd[++ind].c_str()))*1e-6;
+            } else if(cmd[ind] == "movestogo"s) {
+              g.movestogo = atoi(cmd[++ind].c_str());
+            } else if(cmd[ind] == "depth"s) {
+              g.depth = atoi(cmd[++ind].c_str());
+            } else if(cmd[ind] == "nodes"s) {
+              g.nodes = atoll(cmd[++ind].c_str());
+            } else if(cmd[ind] == "mate"s) {
+              g.mate = atoi(cmd[++ind].c_str());
+            } else if(cmd[ind] == "movetime"s) {
+              g.movetime = double(atol(cmd[++ind].c_str()))*1e-6;
+            } else if(cmd[ind] == "infinite"s) {
+              g.infinite = true;
+            }
+            ++ind;
+          }
+          perform_go(g);
+        }
       return;
       case CMD_STOP:
         should_stop = true;
@@ -205,6 +260,27 @@ struct UCI {
       return;
       default:return;
     }
+  }
+
+  void perform_go(const go_command &args) {
+    _printf("GO COMMAND\n");
+    _printf("ponder: %d\n", args.ponder ? 1 : 0);
+    _printf("wtime: %.6f, btime: %.6f\n", args.wtime, args.btime);
+    _printf("winc: %.6f, binc: %.6f\n", args.winc, args.binc);
+    _printf("movestogo: %d\n", args.movestogo);
+    _printf("depth: %lu\n", args.depth);
+    _printf("nodes: %lu\n", args.nodes);
+    _printf("mate: %lu\n", args.mate);
+    _printf("movetime: %.6f\n", args.movetime);
+    _printf("infinite: %d\n", args.infinite ? 1 : 0);
+    std::string s;for(size_t i=0;i<args.searchmoves.size();++i) {
+      s += board::_move_str(args.searchmoves[i]);
+      if(i + 1 != args.searchmoves.size()) {
+        s += ", "s;
+      }
+    }
+    _printf("searchmoves: [%s]\n", s.c_str());
+    // TODO
   }
 
   void respond(RESPONSE resp, std::vector<std::string> args = {}) {
