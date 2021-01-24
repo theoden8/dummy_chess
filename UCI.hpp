@@ -12,7 +12,7 @@
 #ifndef NDEBUG
 #define _printf printf
 #else
-#define _printf(X)
+#define _printf(...)
 #endif
 
 
