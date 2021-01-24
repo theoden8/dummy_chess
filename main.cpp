@@ -22,12 +22,8 @@ int main() {
 //    });
 //  }
   b.print();
-  b.make_move(board::_pos(B, 2), board::_pos(B, 4));
-  b.make_move(board::_pos(B, 7), board::_pos(B, 5));
-  b.retract_move();
-  b.retract_move();
-  printf("best move: %s\n", board::_move_str(b.get_fixed_depth_move(7)).c_str());
+  printf("best move: %s\n", board::_move_str(b.get_fixed_depth_move(4)).c_str());
   printf("evaluation: %.5f\n", b.evaluation);
   printf("nodes searched: %lu\n", b.nodes_searched);
-  printf("hit rate: %.5f\n", double(b.zb_hit) / double(b.zb_hit + b.zb_miss));
+  printf("hit rate: %.5f\n", double(b.zb_hit) / double(1e-9+ b.zb_hit + b.zb_miss));
 }

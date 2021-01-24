@@ -11,7 +11,7 @@ int main() {
   printf("perft benchmarks\n");
   printf("\n");
   printf("starting position\n");
-  for(pos_t depth = 1; depth <= 6; ++depth) {
+  for(pos_t depth = 1; depth <= 7; ++depth) {
     Engine e(fen::starting_pos);
     auto start = system_clock::now();
     size_t nds = e.perft(depth);

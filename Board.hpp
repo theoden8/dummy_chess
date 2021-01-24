@@ -531,8 +531,10 @@ public:
     init_state_attacks();
     init_state_checkline();
     init_state_moves();
+    history.reserve(100);
     halfmoves.reserve(bitmask::count_bits(get_piece_positions(BOTH)) - 2);
     enpassants.reserve(16);
+    // memoization
     state_hist_attacks.reserve(100);
     state_hist_moves.reserve(100);
     state_hist_pins.reserve(100);

@@ -15,7 +15,7 @@ public:
   {}
 
   template <typename F>
-  inline void iter_moves_from(pos_t i, F &&func) const {
+  INLINE void iter_moves_from(pos_t i, F &&func) const {
     bitmask::foreach(get_moves_from(i), [&](pos_t j) mutable -> void {
       if(is_promotion_move(i, j)) {
         for(pos_t promotion : {board::PROMOTE_KNIGHT, board::PROMOTE_BISHOP,
@@ -45,15 +45,13 @@ public:
     return moves[rand() % moves.size()];
   }
 
-  // for testing
+  // for MC-style testing
   move_t get_random_move_from(pos_t i) const {
     std::vector<move_t> moves;
     iter_moves_from(i, [&](pos_t i, pos_t j) mutable -> void {
       moves.emplace_back(bitmask::_pos_pair(i, j));
     });
-    if(moves.empty()) {
-      return board::nomove;
-    }
+    if(moves.empty())return board::nomove;
     return moves[rand() % moves.size()];
   }
 
@@ -125,19 +123,21 @@ public:
     board_info info;
     pos_t depth;
     double eval;
+    bool ndtype;
     move_t m;
   };
-  std::pair<double, move_t> alpha_beta(double alpha, double beta, pos_t depth, std::array<ab_info, ZOBRIST_SIZE> &ab_store) {
+  std::pair<double, move_t> alpha_beta(double alpha, double beta, pos_t depth, std::array<ab_info, ZOBRIST_SIZE> &ab_store, bool ndtype) {
     if(depth == 0) {
       ++nodes_searched;
       return {evaluate(), board::nomove};
     }
     zobrist::key_t k = zb_hash();
     auto info = get_board_info();
-    if(ab_store[k].info == info && depth <= ab_store[k].depth) {
+    if(ab_store[k].info == info && depth <= ab_store[k].depth && ab_store[k].ndtype == ndtype) {
       ++zb_hit;
       return {ab_store[k].eval, ab_store[k].m};
     }
+    bool overwrite = (depth + 1 >= ab_store[k].depth);
     ++zb_miss;
     std::vector<move_t> moves;
     moves.reserve(16);
@@ -147,11 +147,13 @@ public:
     move_t m_best = board::nomove;
     for(move_t m : moves) {
       make_move(m);
-      double score = -alpha_beta(-beta, -alpha, depth - 1, ab_store).first;
+      double score = -alpha_beta(-beta, -alpha, depth - 1, ab_store, !ndtype).first;
       //printf("depth=%d, score=%.5f, %s\n", depth,score,board::_move_str(m).c_str());
       if(score >= beta) {
         retract_move();
-        ab_store[k] = { .info=info, .depth=depth, .eval=beta, .m=m };
+        if(overwrite) {
+          ab_store[k] = { .info=info, .depth=depth, .eval=beta, .ndtype=ndtype, .m=m };
+        }
         return {beta, m};
       } else if(score > alpha) {
         alpha = score;
@@ -159,7 +161,9 @@ public:
       }
       retract_move();
     };
-    ab_store[k] = { .info=info, .depth=depth, .eval=alpha, .m=m_best };
+    if(overwrite) {
+      ab_store[k] = { .info=info, .depth=depth, .eval=alpha, .ndtype=ndtype, .m=m_best };
+    }
     return {alpha, m_best};
   }
 
@@ -176,7 +180,7 @@ public:
       double alpha = -DBL_MAX;
       for(auto &[eval, m] : bestmoves) {
         make_move(m);
-        auto [score, bestmove] = alpha_beta(-DBL_MAX, -alpha, d, ab_store); score = -score;
+        auto [score, bestmove] = alpha_beta(-DBL_MAX, -alpha, d, ab_store, true); score = -score;
         eval = score;
         if(eval >= alpha) {
           alpha = eval;
@@ -202,7 +206,7 @@ public:
     for(size_t i = 0; i < ZOBRIST_SIZE; ++i) {
       ab_store->at(i).info.unset();
     }
-//    auto [_, m] = alpha_beta(-1e9, 1e9, depth, *ab_store);
+//    auto [_, m] = alpha_beta(-1e9, 1e9, depth, *ab_store, true);
     auto [_, m] = iterative_deepening_dfs(depth, *ab_store);
     evaluation = _;
     delete ab_store;
@@ -222,24 +226,26 @@ public:
       ++zb_hit;
       return perft_store[k].nodes;
     }
+    bool overwrite = true;
     ++zb_miss;
     size_t nodes = 0;
     iter_moves([&](pos_t i, pos_t j) mutable -> void {
-      const event_t ev = get_move_event(i, j);
-      act_event(ev);
       if(depth == 1 || depth == 0) {
         ++nodes;
-        ++nodes_searched;
       } else {
+        make_move(i, j);
+        ++nodes_searched;
         nodes += _perft(depth - 1, perft_store);
+        retract_move();
       }
-      unact_event();
     });
-    perft_store[k] = {
-      .info = info,
-      .depth = depth,
-      .nodes = nodes
-    };
+    if(overwrite) {
+      perft_store[k] = {
+        .info = info,
+        .depth = depth,
+        .nodes = nodes
+      };
+    }
     return nodes;
   }
 
