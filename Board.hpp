@@ -688,7 +688,7 @@ public:
 
   // fifty-halfmoves-draw
   INLINE bool is_draw_halfmoves() const {
-    return get_halfmoves() == 50 && !is_checkmate();
+    return get_halfmoves() == 100 && !is_checkmate();
   }
 
   INLINE bool is_checkmate() const {
