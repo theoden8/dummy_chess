@@ -150,11 +150,11 @@ namespace bitmask {
   }
 
   // print locations of each set bit
-  void print(uint64_t mask) {
+  NEVER_INLINE void print(uint64_t mask) {
     foreach(mask, [](pos_t p) mutable { printf("(%c, %c)\n", 'A' + (p%8), '1' + (p/8)); });
   }
 
-  void print_mask(uint64_t mask, pos_t markspot=0xff) {
+  NEVER_INLINE void print_mask(uint64_t mask, pos_t markspot=0xff) {
     printf("mask: %lx\n", mask);
     char s[256];
     pos_t j = 0;

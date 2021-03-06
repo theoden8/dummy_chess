@@ -3,13 +3,11 @@
 
 #include <cctype>
 #include <strings.h>
-#include <string>
 
 #include <Constants.hpp>
 #include <Event.hpp>
+#include <String.hpp>
 
-
-using namespace std::string_literals;
 
 class Board;
 

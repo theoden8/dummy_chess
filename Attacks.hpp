@@ -101,7 +101,7 @@ struct Moves<WPAWNM> {
     return (pushes | ((pushes & (bitmask::hline << (-1+3)*board::LEN)) << board::LEN)) & ~occupied;
   }
 
-  static constexpr inline bool is_enpassant_move(pos_t i, pos_t j) {
+  static constexpr inline bool is_double_push(pos_t i, pos_t j) {
     return (j - i) == 2*board::LEN;
   }
 
@@ -110,7 +110,7 @@ struct Moves<WPAWNM> {
   }
 
   static constexpr inline pos_t get_enpassant_trace(pos_t i, pos_t j) {
-    assert(is_enpassant_move(i, j));
+    assert(is_double_push(i, j));
     return j-board::LEN;
   }
 };
@@ -122,17 +122,17 @@ struct Moves<BPAWNM> {
     return (pushes | ((pushes & (bitmask::hline << (-1+6)*board::LEN)) >> board::LEN)) & ~occupied;
   }
 
-  static constexpr inline bool is_enpassant_move(pos_t i, pos_t j) {
+  static constexpr inline bool is_double_push(pos_t i, pos_t j) {
     return (i - j) == 2*board::LEN;
-  }
-
-  static constexpr inline pos_t get_enpassant_trace(pos_t i, pos_t j) {
-    assert(is_enpassant_move(i, j));
-    return j+board::LEN;
   }
 
   static constexpr inline bool is_promotion_move(pos_t i, pos_t j) {
     return board::_y(j) == -1+1;
+  }
+
+  static constexpr inline pos_t get_enpassant_trace(pos_t i, pos_t j) {
+    assert(is_double_push(i, j));
+    return j+board::LEN;
   }
 };
 

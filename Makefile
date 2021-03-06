@@ -1,7 +1,7 @@
 DBGFLAGS = -g3 -DZOBRIST_SIZE="(1<<12)"
 OPTFLAGS = -Ofast -DNDEBUG -flto -fwhole-program -march=native
 PROFFLAGS = $(OPTFLAGS) -pg
-CXXFLAGS = -std=c++17 -I. -Wall -Wextra -Wno-unused -Wno-parentheses -m64
+CXXFLAGS = -std=c++20 -I. -Wall -Wextra -Wno-unused -Wno-parentheses -m64
 # CXXFLAGS += -fopt-info
 LDFLAGS =
 HPPFILES = $(wildcard *.hpp)

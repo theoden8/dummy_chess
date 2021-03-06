@@ -1,7 +1,10 @@
-#include <Board.hpp>
 #include <Engine.hpp>
 
-int main() {
+int main(int argc, char *argv[]) {
+  int depth = 4;
+  if(argc >= 2) {
+    depth = atoi(argv[1]);
+  }
   Engine b(fen::starting_pos);
   // example, print piece position
 //  std::cout << "positions of black rook" << std::endl;
@@ -22,7 +25,7 @@ int main() {
 //    });
 //  }
   b.print();
-  printf("best move: %s\n", board::_move_str(b.get_fixed_depth_move(4)).c_str());
+  printf("best move: %s\n", board::_move_str(b.get_fixed_depth_move(depth)).c_str());
   printf("evaluation: %.5f\n", b.evaluation);
   printf("nodes searched: %lu\n", b.nodes_searched);
   printf("hit rate: %.5f\n", double(b.zb_hit) / double(1e-9+ b.zb_hit + b.zb_miss));

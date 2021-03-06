@@ -396,6 +396,10 @@ struct Interface {
           }
         }
       break;
+      case 'e':
+        board.play_as = WHITE;
+        board.evaluation = board.evaluate();
+        break;
       case 'f':
         {
           move_t m = board.get_fixed_depth_move(6);

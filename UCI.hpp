@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <chrono>
 
 #include <FEN.hpp>
 #include <Engine.hpp>
@@ -14,6 +15,9 @@
 #else
 #define _printf(...)
 #endif
+
+
+using namespace std::chrono;
 
 
 struct UCI {
@@ -167,7 +171,11 @@ struct UCI {
       }
     }
     switch(cmdmap.at(cmd.front())) {
-      case CMD_UCI:respond(RESP_UCIOK);return;
+      case CMD_UCI:
+        respond(RESP_UCIOK);
+        respond(RESP_ID, "name", "dummy_chess");
+        respond(RESP_ID, "author", "$USER");
+      return;
       case CMD_DEBUG:return;
       case CMD_ISREADY:
         init(fen::starting_pos);
@@ -273,20 +281,43 @@ struct UCI {
     _printf("mate: %lu\n", args.mate);
     _printf("movetime: %.6f\n", args.movetime);
     _printf("infinite: %d\n", args.infinite ? 1 : 0);
-    std::string s;for(size_t i=0;i<args.searchmoves.size();++i) {
-      s += board::_move_str(args.searchmoves[i]);
-      if(i + 1 != args.searchmoves.size()) {
-        s += ", "s;
-      }
-    }
+    std::vector<std::string> searchmoves_s;
+    for(auto&s:args.searchmoves)searchmoves_s.emplace_back(engine->_move_str(s));
+    std::string s = str::join(searchmoves_s, ", "s);
     _printf("searchmoves: [%s]\n", s.c_str());
-    // TODO
+    // TODO ponder, mate, movestogo
+    double movetime = engine->activePlayer() == WHITE ? std::min(10., args.wtime / 40. + args.winc)
+                                                      : std::min(10., args.btime / 40. + args.binc);
+    if(args.movetime!=DBL_MAX)movetime=args.movetime;
+    const auto start = system_clock::now();
+    MoveLine currline;
+    double time_spent = 0.;
+    size_t nodes_searched = 0;
+    const std::unordered_set<move_t> searchmoves(args.searchmoves.begin(), args.searchmoves.end());
+    const move_t bestmove = engine->get_fixed_depth_move(args.depth, [&](const move_t currmove, const auto &pline) mutable -> bool {
+      const double prev_time_spent = time_spent;
+      const size_t prev_nodes_searched = nodes_searched;
+      time_spent = 1e-9*duration_cast<nanoseconds>(system_clock::now()-start).count();
+      nodes_searched = engine->nodes_searched;
+      const double nps = double(nodes_searched - prev_nodes_searched) / (time_spent - prev_time_spent);
+      currline.replace_line(pline);
+      respond(RESP_INFO, "nodes", engine->nodes_searched,
+                         "nps", size_t(nps),
+                         "currmove", engine->_move_str(currmove),
+                         "currline", engine->_line_str(pline));
+      return !(should_stop || should_quit) && (args.ponder || args.infinite || (time_spent < movetime && engine->nodes_searched < args.nodes));
+    }, searchmoves);
+    should_stop = false;
+    respond(RESP_INFO, "depth", currline.size(),
+                       "time", time_spent,
+                       "score", "cp", engine->evaluation,
+                       "pv", engine->_line_str(currline, true),
+                       "bestmove", engine->_move_str(bestmove));
   }
 
-  void respond(RESPONSE resp, std::vector<std::string> args = {}) {
-    printf("%s", respmap.at(resp).c_str());
-    for(auto &a:args)printf(" %s", a.c_str());
-    printf("\n");
+  template <typename... Str>
+  void respond(RESPONSE resp, Str... args) {
+    str::print(respmap.at(resp), args...);
   }
 
   ~UCI() {

@@ -2,11 +2,15 @@
 
 
 #include <vector>
+#include <list>
 
 #include <Piece.hpp>
 #include <Event.hpp>
 #include <FEN.hpp>
 #include <Zobrist.hpp>
+
+#include <MoveGuard.hpp>
+#include <MoveLine.hpp>
 
 
 // board view of the game
@@ -86,16 +90,18 @@ public:
     return activePlayer_;
   }
 
-  INLINE Piece &operator[](pos_t i) {
-    return pieces[board_[i]];
+  INLINE Piece &operator[](pos_t ind) {
+    assert(!(ind & ~board::MOVEMASK));
+    return pieces[board_[ind]];
   }
 
   INLINE Piece &at_pos(pos_t i, pos_t j) {
     return pieces[board_[board::_pos(i,j)]];
   }
 
-  INLINE const Piece &operator[](pos_t i) const {
-    return pieces[board_[i]];
+  INLINE const Piece &operator[](pos_t ind) const {
+    assert(!(ind & ~board::MOVEMASK));
+    return pieces[board_[ind]];
   }
 
   INLINE const Piece &at_pos(pos_t i, pos_t j) const {
@@ -156,16 +162,21 @@ public:
     return false;
   }
 
-  INLINE bool is_enpassant_move(pos_t i, pos_t j) const {
-    assert(j <= board::MOVEMASK);
+  INLINE bool is_doublepush_move(pos_t i, pos_t j) const {
+    j &= board::MOVEMASK;
     if(self[i].value != PAWN)return false;
-    if(self[i].color == WHITE)return Moves<WPAWNM>::is_enpassant_move(i, j);
-    if(self[i].color == BLACK)return Moves<BPAWNM>::is_enpassant_move(i, j);
+    if(self[i].color == WHITE)return Moves<WPAWNM>::is_double_push(i, j);
+    if(self[i].color == BLACK)return Moves<BPAWNM>::is_double_push(i, j);
     return false;
   }
 
+  INLINE bool is_enpassant_take_move(pos_t i, pos_t j) const {
+    j &= board::MOVEMASK;
+    return self[i].value == PAWN && j == enpassant_trace() && j != event::enpassantnotrace;
+  }
+
   INLINE bool is_promotion_move(pos_t i, pos_t j) const {
-    assert(j <= board::MOVEMASK);
+    j &= board::MOVEMASK;
     if(self[i].value != PAWN)return false;
     if(self[i].color == WHITE)return Moves<WPAWNM>::is_promotion_move(i, j);
     if(self[i].color == BLACK)return Moves<BPAWNM>::is_promotion_move(i, j);
@@ -187,7 +198,7 @@ public:
     if(self[j].value != EMPTY) {
       killwhat = self[j].piece_index;
     }
-    if(is_enpassant_move(i, j)) {
+    if(is_doublepush_move(i, j)) {
       if(self[i].color==WHITE)enpassant_trace=Moves<WPAWNM>::get_enpassant_trace(i,j);
       if(self[i].color==BLACK)enpassant_trace=Moves<BPAWNM>::get_enpassant_trace(i,j);
     }
@@ -335,12 +346,19 @@ public:
     return history.size();
   }
 
+  INLINE bool check_valid_move(pos_t i, pos_t j) const {
+    return i == (i & board::MOVEMASK) &&
+           self[i].color == activePlayer() &&
+           self.get_moves_from(i) & (1ULL << (j & board::MOVEMASK));
+  }
+
   void act_event(event_t ev) {
     history.emplace_back(ev);
     const uint8_t marker = event::extract_marker(ev);
     assert(fen::decompress_castlings(fen::compress_castlings(get_castlings_mask())) == get_castlings_mask());
     backup_state_on_event();
     switch(marker) {
+      case event::NULLMOVE_MARKER:break;
       case event::BASIC_MARKER:
         {
           const move_t m = event::extract_move(ev);
@@ -349,7 +367,7 @@ public:
           const pos_t killwhat = event::extract_piece_ind(ev);
           const pos_t new_enpassant = event::extract_pos(ev);
           set_enpassant(new_enpassant);
-          if(killwhat != event::killnothing) {
+          if(killwhat != event::killnothing || self[i].value == PAWN) {
             update_halfmoves();
           }
           update_castlings(i, j);
@@ -421,6 +439,7 @@ public:
     event_t ev = history.back();
     const uint8_t marker = event::extract_marker(ev);
     switch(marker) {
+      case event::NULLMOVE_MARKER:break;
       case event::BASIC_MARKER:
         {
           const move_t m = event::extract_move(ev);
@@ -495,6 +514,9 @@ public:
   }
 
   INLINE event_t get_move_event(move_t m) const {
+    if(m == board::nomove) {
+      return event::noevent;
+    }
     return get_move_event(bitmask::first(m), bitmask::second(m));
   }
 
@@ -504,7 +526,7 @@ public:
     j &= board::MOVEMASK;
     if(is_castling_move(i, j)) {
       ev = ev_castle(i, j);
-    } else if(self[i].value == PAWN && j == enpassant_trace()) {
+    } else if(is_enpassant_take_move(i, j)) {
       ev = ev_take_enpassant(i, j);
     } else if(is_promotion_move(i, j)) {
       ev = ev_promotion(i, j | promote_as);
@@ -515,15 +537,40 @@ public:
   }
 
   INLINE void make_move(move_t m) {
-    make_move(bitmask::first(m), bitmask::second(m));
+    act_event(get_move_event(m));
   }
 
   INLINE void make_move(pos_t i, pos_t j) {
-    act_event(get_move_event(i, j));
+    assert(check_valid_move(i, j));
+    make_move(bitmask::_pos_pair(i, j));
   }
 
   INLINE void retract_move() {
     unact_event();
+  }
+
+  INLINE auto move_guard(move_t m) {
+    return make_move_guard(self, m);
+  }
+
+  INLINE auto recursive_move_guard() {
+    return make_recursive_move_guard(self);
+  }
+
+  INLINE bool check_valid_move(move_t m) const {
+    return check_valid_move(bitmask::first(m), bitmask::second(m));
+  }
+
+  template <typename C>
+  INLINE bool check_valid_sequence(const C &s) const {
+    auto rec = self.recursive_move_guard();
+    for(const move_t &m : s) {
+      if(!check_valid_move(m)) {
+        return false;
+      }
+      rec.guard(m);
+    }
+    return true;
   }
 
   void init_update_state() {
@@ -899,7 +946,22 @@ public:
   }
 
   std::string _move_str(move_t m) const {
+    if(m==board::nomove)return "0000"s;
     return board::_move_str(m, self[bitmask::first(m)].value == PAWN);
+  }
+
+  template <typename C>
+  std::vector<std::string> _line_str(const C &line, bool thorough=false) {
+    std::vector<std::string> s;
+    auto rec_guard = self.recursive_move_guard();
+    for(const auto m : line) {
+      if(m==board::nomove)break;
+      s.emplace_back(_move_str(m));
+      if(thorough) {
+        rec_guard.guard(m);
+      }
+    }
+    return s;
   }
 
   fen::FEN export_as_fen() const {

@@ -11,7 +11,7 @@ int main() {
   printf("perft benchmarks\n");
   printf("\n");
   printf("starting position\n");
-  for(pos_t depth = 1; depth <= 7; ++depth) {
+  for(int depth = 1; depth <= 7; ++depth) {
     Engine e(fen::starting_pos);
     auto start = system_clock::now();
     size_t nds = e.perft(depth);
@@ -20,7 +20,7 @@ int main() {
     double sec = 1e-9*dur;
     double kndssec = (double(nds)/sec)*1e-3;
     double kndssec_raw = (double(e.nodes_searched)/sec)*1e-3;
-    double hit_rate = double(e.zb_hit) / double(e.zb_hit + e.zb_miss);
+    double hit_rate = double(e.zb_hit) / double(1e-9 + e.zb_hit + e.zb_miss);
     printf("depth=%d, time=%.3f\t%.3f kN/sec\traw=%.3f kN/sec\tnodes=%lu\tshannon=%lu\thit_rate=%.3f\n",
             depth, sec, kndssec, kndssec_raw, nds, shannon_number[depth-1], hit_rate);
   }
@@ -30,7 +30,7 @@ int main() {
   printf("alpha-beta benchmarks\n");
   printf("\n");
   printf("starting position\n");
-  for(const pos_t depth : {1,2,3,4,5,6,7,8}) {
+  for(const int depth : {1,2,3,4,5,6,7,8}) {
     Engine e(fen::starting_pos);
     auto start = system_clock::now();
     move_t m = e.get_fixed_depth_move(depth);

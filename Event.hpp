@@ -8,6 +8,9 @@
 typedef uint_fast32_t event_t;
 
 namespace event {
+  constexpr event_t noevent = 0x00;
+  constexpr event_t NULLMOVE_MARKER = 0xFF;
+
   constexpr pos_t marker_bits = 2;
   constexpr pos_t piece_ind_bits = 4;
   constexpr pos_t pos_bits = 6;
@@ -51,6 +54,9 @@ namespace event {
   }
 
   inline uint8_t extract_marker(event_t &ev) {
+    if(ev == event::noevent) {
+      return NULLMOVE_MARKER;
+    }
     pos_t byte = ev & ((1 << marker_bits) - 1);
     ev >>= marker_bits;
     return byte;

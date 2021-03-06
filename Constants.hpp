@@ -3,6 +3,7 @@
 
 #include <string>
 
+#include <String.hpp>
 #include <Bitboard.hpp>
 
 
@@ -57,10 +58,10 @@ namespace board {
   }
 
   INLINE constexpr pos_t _castling_index(COLOR c, CASTLING_SIDE side) {
-    if (c==WHITE && side==KING_SIDE)return CASTLING_K_WHITE;
-    if (c==WHITE && side==QUEEN_SIDE)return CASTLING_Q_WHITE;
-    if (c==BLACK && side==KING_SIDE)return CASTLING_K_BLACK;
-    if (c==BLACK && side==QUEEN_SIDE)return CASTLING_Q_BLACK;
+    if(c==WHITE && side==KING_SIDE)return CASTLING_K_WHITE;
+    if(c==WHITE && side==QUEEN_SIDE)return CASTLING_Q_WHITE;
+    if(c==BLACK && side==KING_SIDE)return CASTLING_K_BLACK;
+    if(c==BLACK && side==QUEEN_SIDE)return CASTLING_Q_BLACK;
     return 0xff;
   }
 
@@ -85,6 +86,9 @@ namespace board {
   }
 
   std::string _move_str(move_t m, bool ispawn=false) {
+    if(m == board::nomove) {
+      return "0000"s;
+    }
     const pos_t i = bitmask::first(m) & board::MOVEMASK,
                 j = bitmask::second(m) & board::MOVEMASK;
     std::string sp;
