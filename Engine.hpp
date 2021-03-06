@@ -349,10 +349,8 @@ public:
       ab_store->at(i).info.unset();
     }
     MoveLine pline;
-    //auto [_, m] = alpha_beta(-1e9, 1e9, depth, pline, *ab_store);
+    auto [_, m] = alpha_beta(-1e9, 1e9, depth, pline, *ab_store);
     str::print("pvline:", _line_str(pline), "size:", pline.size());
-    auto [_, m] = iterative_deepening_dfs(depth, searchmoves, *ab_store, callback_f);
-    //auto [_, m] = iterative_deepening_astar(depth, searchmoves, *ab_store, callback_f);
     evaluation = _;
     delete ab_store;
     if(!check_valid_sequence(pline)) {
