@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <list>
 #include <map>
+#include <ranges>
 
 #include <FEN.hpp>
 #include <Board.hpp>
@@ -159,11 +160,13 @@ public:
     double h = 0;
     if(self.is_draw())return 0;
     // checkmate
-    if(!can_move())return -1e7;
+    if(!can_move()) {
+      return (c == activePlayer()) ? -1e7 : 1e7;
+    }
 
     h += h_material(c);
-    h += h_pins(c) * 1e-2;
-    h += count_moves(c) * 1e-3;
+    h += h_pins(c) * 1e-4;
+    h += count_moves(c) * 2e-4;
     h += h_attack_cells(c) * 1e-4;
     return h;
   }
@@ -197,15 +200,17 @@ public:
   double alpha_beta_quiscence(double alpha, double beta, int16_t depth, MoveLine &pline,
                               std::array<ab_info, ZOBRIST_SIZE> &ab_store)
   {
-//    str::print("abq: ", _line_str(pline.full()));
     double score = evaluate();
+    double bestscore = -DBL_MAX;
     if(state_checkline[activePlayer()] == ~0ULL) {
       if(score >= beta) {
-  //      str::print("score good", score, ">=", beta);
         ++nodes_searched;
-        return beta;
-      } else if(score > alpha) {
-        alpha = score;
+        return score;
+      } else if(score > bestscore) {
+        bestscore = score;
+        if(score > alpha) {
+          alpha = score;
+        }
       }
     }
 
@@ -235,24 +240,20 @@ public:
     }
     std::sort(capturemoves.begin(), capturemoves.end());
     assert(pline.empty());
-    double bestscore = -DBL_MAX;
     for(const auto [_, m] : capturemoves) {
       //assert(check_valid_move(m));
-      volatile auto guard = move_guard(m);
       MoveLine pline_alt = pline.branch_from_past();
-      pline_alt.premove(m);
-      score = -alpha_beta_quiscence(-beta, -alpha, depth - 1, pline_alt, ab_store);
-//      if(!check_valid_sequence(pline_alt)) {
-//        str::print("pline not playable", _line_str(pline_alt.full()));
-//        str::print("sequence not valid:", _line_str(pline_alt));
-//        str::print("FEN: ", fen::export_as_string(self.export_as_fen()));
-//      }
-      assert(check_valid_sequence(pline_alt));
-      pline_alt.recall();
+      {
+        volatile auto mscope = move_scope(m);
+        pline_alt.premove(m);
+        score = -alpha_beta_quiscence(-beta, -alpha, depth - 1, pline_alt, ab_store);
+        assert(check_valid_sequence(pline_alt));
+        pline_alt.recall();
+      }
       if(score >= beta) {
         pline.replace_line(pline_alt);
         if(overwrite) {
-          ab_store[k] = { .info=info, .depth=depth, .eval=score, .subpline=pline_alt };
+          ab_store[k] = { .info=info, .depth=depth, .eval=score, .subpline=pline_alt.get_future() };
         }
         return score;
       } else if(score > alpha) {
@@ -264,7 +265,7 @@ public:
       }
     }
     if(overwrite) {
-      ab_store[k] = { .info=info, .depth=depth, .eval=bestscore, .subpline=pline };
+      ab_store[k] = { .info=info, .depth=depth, .eval=bestscore, .subpline=pline.get_future() };
     }
     ++nodes_searched;
     return alpha;
@@ -295,9 +296,9 @@ public:
       const move_t m = bitmask::_pos_pair(i, j);
       // principal variation move ordering
       if(pline.front_in_mainline() == m) {
-        val += 100;
+        val += 100.;
       } else if(pline.find_in_mainline(m)) {
-        val += 10;
+        val += 10.;
       }
       moves.emplace_back(-val, bitmask::_pos_pair(i,j));
     });
@@ -309,31 +310,36 @@ public:
     move_t m_best = board::nomove;
     double bestscore = -DBL_MAX;
     for(const auto [_, m] : moves) {
-      volatile auto guard = move_guard(m);
       MoveLine pline_alt = pline.branch_from_past();
-      pline_alt.premove(m);
-      const double score = -alpha_beta(-beta, -alpha, depth - 1, pline_alt, ab_store);
-//      if(!check_valid_sequence(pline_alt)) {
-//        str::print("pline not playable", _line_str(pline_alt.full()));
-//        str::print("sequence not valid: [", _line_str(pline_alt), "]");
-//        str::print("FEN: ", fen::export_as_string(self.export_as_fen()));
-//      }
-      assert(check_valid_sequence(pline_alt));
-      pline_alt.recall();
+      double score;
+      {
+        volatile auto mscope = move_scope(m);
+        pline_alt.premove(m);
+        score = -alpha_beta(-beta, -alpha, depth - 1, pline_alt, ab_store);
+  //      if(!check_valid_sequence(pline_alt)) {
+  //        str::print("pline not playable", _line_str(pline_alt.full()));
+  //        str::print("sequence not valid: [", _line_str(pline_alt), "]");
+  //        str::print("FEN: ", fen::export_as_string(self.export_as_fen()));
+  //      }
+        assert(check_valid_sequence(pline_alt));
+        pline_alt.recall();
+      }
       //printf("depth=%d, score=%.5f, %s\n", depth,score,board::_move_str(m).c_str());
       if(score >= beta) {
-//        if(pline_alt.size() < size_t(depth) - 1) {
+        if(pline_alt.size() < size_t(depth)) {
 //          str::print("A: PLINE_ALT NOT ENOUGH LENGTH", _line_str(pline_alt), "depth", depth, "full", _line_str(pline_alt.full()));
-//        }
+          assert(check_line_terminates(pline_alt));
+        }
         pline.replace_line(pline_alt);
         if(overwrite) {
           ab_store[k] = { .info=info, .depth=depth, .eval=score, .m=m, .subpline=pline.get_future() };
         }
         return score;
       } else if(score > bestscore) {
-//        if(pline_alt.size() < size_t(depth) - 1) {
+        if(pline_alt.size() < size_t(depth)) {
 //          str::print("B: PLINE_ALT NOT ENOUGH LENGTH", _line_str(pline_alt), "depth", depth, "full", _line_str(pline_alt.full()));
-//        }
+          assert(check_line_terminates(pline_alt));
+        }
         m_best = m;
         pline.replace_line(pline_alt);
         bestscore = score;
@@ -346,6 +352,19 @@ public:
       ab_store[k] = { .info=info, .depth=depth, .eval=bestscore, .m=m_best, .subpline=pline.get_future() };
     }
     return bestscore;
+  }
+
+  std::pair<double, double> init_aspiration_window(double eval) {
+    return {eval - .75, eval + .75};
+  }
+
+  void set_aspiration_window_re_search(double &aw_alpha, double &aw_beta) {
+    if(aw_alpha < -3) {
+      aw_alpha = -DBL_MAX;
+      aw_beta = DBL_MAX;
+    }
+    aw_alpha -= 1.;
+    aw_beta += 1.;
   }
 
   template <typename F>
@@ -363,7 +382,6 @@ public:
     });
     std::sort(bestmoves.begin(), bestmoves.end());
     std::map<move_t, MoveLine> pline;
-    std::vector<std::string> depthbest;
     for(int d = 0; d < depth; ++d) {
       double alpha = -DBL_MAX;
       for(size_t i = 0; i < bestmoves.size(); ++i) {
@@ -373,18 +391,18 @@ public:
         }
         str::print("IDDFS:", d, "move:", _move_str(m), "pre-eval:", eval);
         {
-          volatile auto guard = move_guard(m);
-          double aw_alpha = alpha - .5, aw_beta = DBL_MAX;
+          volatile auto mscope = move_scope(m);
+          auto [aw_alpha, aw_beta] = init_aspiration_window(eval);
           while(1) {
             MoveLine mline = pline[m];
             eval = -alpha_beta(-aw_beta, -aw_alpha, d, mline, ab_store);
-            aw_alpha -= 1.;
-            if(mline.size() >= (size_t)d) {
+            if(mline.size() >= (size_t)d || check_line_terminates(mline)) {
               alpha = std::max(eval, alpha);
               pline[m].replace_line(mline);
               assert(pline[m].full()[0] == m);
               break;
             }
+            set_aspiration_window_re_search(aw_alpha, aw_beta);
             str::print("RE-SEARCH", aw_alpha);
           }
 //          str::print("line:", _line_str(mline), "depth:", d);
@@ -397,14 +415,77 @@ public:
       if(!callback_f(m_best, pline[m_best])) {
         break;
       }
-      str::print("depth:", d, "pline:", _line_str(pline[m_best].full()), "size:", pline[m_best].full().size());
-      depthbest.emplace_back(_move_str(m_best));
+      str::print("depth:", d, "pline:", _line_str(pline[m_best].full(), true), "size:", pline[m_best].full().size(), "eval", alpha);
     }
-//    str::print("depth-best:", depthbest);
     if(bestmoves.empty())return {DBL_MAX, board::nomove};
 //    const move_t m_best = bestmoves.front().second;
 //    str::print("principal variation:"s, _line_str(pline[m_best]), "size"s, pline.size());
     return bestmoves.front();
+  }
+
+  template <typename F>
+  std::pair<double, move_t> iterative_deepening_astar(int depth, const std::unordered_set<move_t> &searchmoves,
+                                                      std::array<ab_info, ZOBRIST_SIZE> &ab_store, F &callback_f)
+  {
+    if(depth == 0)return {DBL_MAX, board::nomove};
+    std::vector<std::tuple<double, int, move_t>> bestmoves;
+    iter_moves([&](pos_t i, pos_t j) mutable -> void {
+      double val = move_heuristic(i, j);
+      const move_t m = bitmask::_pos_pair(i, j);
+      if(searchmoves.empty() || searchmoves.find(m) != std::end(searchmoves)) {
+        bestmoves.emplace_back(-val, 0, m);
+      }
+    });
+    std::sort(bestmoves.begin(), bestmoves.end());
+    std::map<move_t, MoveLine> pline;
+    std::vector<double> alphas(depth, -DBL_MAX);
+    while(1) {
+      if(bestmoves.empty())break;
+      size_t max_ind = 0;
+      auto mx = bestmoves.front();
+      bool changed = false;
+      // find max
+      for(size_t i = 0; i < bestmoves.size(); ++i) {
+        const auto [eval, d, m] = bestmoves[i];
+        const auto [mxeval, mxd, mxm] = mx;
+        if(d == depth + 1)continue;
+        changed = true;
+        // encourage lower depth
+        if(eval > mxeval || mxd == depth + 1) {
+          max_ind = i, mx = bestmoves[i];
+        }
+      }
+      if(!changed)break;
+      // increase depth of max
+      auto [eval, d, m] = mx;
+      if(d == 0)pline[m].premove(m);
+      str::print("IDA*:", d, "move:", _move_str(m), "pre-eval:", eval, "pline", _line_str(pline[m].full()));
+      volatile auto mscope = move_scope(m);
+      auto [aw_alpha, aw_beta] = init_aspiration_window(eval);
+      while(1) {
+        MoveLine mline = pline[m];
+        eval = -alpha_beta(-aw_beta, -aw_alpha, d, mline, ab_store);
+        if(mline.size() >= (size_t)d || check_line_terminates(mline)) {
+          pline[m] = mline;
+          bestmoves[max_ind] = {eval, d + 1, m};
+          if(eval > alphas[d]) {
+            alphas[d] = eval;
+          }
+          break;
+        }
+        set_aspiration_window_re_search(aw_alpha, aw_beta);
+        str::print("RE-SEARCH", aw_alpha);
+      }
+      //printf("increase %.5f %d %s\n", score, d, _move_str(m).c_str());
+//      const move_t m_best = bestmoves.front().second;
+//      if(!callback_f(m_best, pline[m_best])) {
+//        break;
+//      }
+//      str::print("depth:", d, "pline:", _line_str(pline[m_best].full(), true), "size:", pline[m_best].full().size(), "eval", alpha);
+    }
+    if(bestmoves.empty())return {DBL_MAX, board::nomove};
+    auto [eval, d, m] = *std::max_element(bestmoves.begin(), bestmoves.end());
+    return {eval, m};
   }
 
   void reset_planning() {
@@ -431,6 +512,16 @@ public:
     return m;
   }
 
+  move_t get_fixed_depth_move_idastar(int depth, const std::unordered_set<move_t> &searchmoves={}) {
+    reset_planning();
+    auto *ab_store = new_ab_store();
+    auto callback_f = [&](const move_t m, const MoveLine &pline) mutable -> bool { return true; };
+    auto [_, m] = iterative_deepening_astar(depth, searchmoves, *ab_store, callback_f);
+    evaluation = _;
+    delete ab_store;
+    return m;
+  }
+
   bool play_as = WHITE;
   size_t nodes_searched = 0;
   double evaluation = DBL_MAX;
@@ -445,7 +536,7 @@ public:
     if(!pline.full().empty()) {
       m = pline.full().front();
     }
-    str::print("pvline:", _line_str(pline), "size:", pline.size());
+    str::print("pvline:", _line_str(pline, true), "size:", pline.size());
     delete ab_store;
     if(!check_valid_sequence(pline)) {
       str::print("pvline not playable");
@@ -477,7 +568,7 @@ public:
     ++zb_miss;
     size_t nodes = 0;
     iter_moves([&](pos_t i, pos_t j) mutable -> void {
-      volatile auto guard = move_guard(bitmask::_pos_pair(i, j));
+      volatile auto mscope = move_scope(bitmask::_pos_pair(i, j));
       ++nodes_searched;
       nodes += _perft(depth - 1, perft_store);
     });

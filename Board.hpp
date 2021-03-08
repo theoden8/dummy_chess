@@ -9,7 +9,7 @@
 #include <FEN.hpp>
 #include <Zobrist.hpp>
 
-#include <MoveGuard.hpp>
+#include <MoveScope.hpp>
 #include <MoveLine.hpp>
 
 
@@ -549,12 +549,12 @@ public:
     unact_event();
   }
 
-  INLINE auto move_guard(move_t m) {
-    return make_move_guard(self, m);
+  INLINE auto move_scope(move_t m) {
+    return make_move_scope(self, m);
   }
 
-  INLINE auto recursive_move_guard() {
-    return make_recursive_move_guard(self);
+  INLINE auto recursive_move_scope() {
+    return make_recursive_move_scope(self);
   }
 
   INLINE bool check_valid_move(move_t m) const {
@@ -563,14 +563,22 @@ public:
 
   template <typename C>
   INLINE bool check_valid_sequence(const C &s) const {
-    auto rec = self.recursive_move_guard();
+    auto rec = self.recursive_move_scope();
     for(const move_t &m : s) {
       if(!check_valid_move(m)) {
         return false;
       }
-      rec.guard(m);
+      rec.scope(m);
     }
     return true;
+  }
+
+  INLINE bool check_line_terminates(const MoveLine &mline) {
+    auto rec = self.recursive_move_scope();
+    for(const move_t &m : mline) {
+      rec.scope(m);
+    }
+    return is_draw() || !can_move();
   }
 
   void init_update_state() {
@@ -953,12 +961,13 @@ public:
   template <typename C>
   std::vector<std::string> _line_str(const C &line, bool thorough=false) {
     std::vector<std::string> s;
-    auto rec_guard = self.recursive_move_guard();
+    if(thorough)assert(check_valid_sequence(line));
+    auto rec_mscope = self.recursive_move_scope();
     for(const auto m : line) {
       if(m==board::nomove)break;
       s.emplace_back(_move_str(m));
       if(thorough) {
-        rec_guard.guard(m);
+        rec_mscope.scope(m);
       }
     }
     return s;

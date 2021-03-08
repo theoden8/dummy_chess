@@ -99,14 +99,14 @@ struct MoveLine {
   }
 
   INLINE bool find_in_mainline(move_t m) const {
-    if(get_mainline() == nullptr) {
+    if(full().empty() || get_mainline() == nullptr) {
       return false;
     }
     return std::find(get_mainline()->begin(), get_mainline()->end(), m) != get_mainline()->end();
   }
 
   INLINE move_t front_in_mainline() const {
-    if(get_mainline() == nullptr) {
+    if(full().empty() || get_mainline() == nullptr) {
       return board::nomove;
     }
     const auto &mline = get_mainline()->full();
