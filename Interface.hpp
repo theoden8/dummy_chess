@@ -96,6 +96,7 @@ struct Interface {
       //const piece_bitboard_t attacks = board.get_attacks_from(piece_pos);
       // single-moves
       const piece_bitboard_t attacks = board.get_moves_from(piece_pos);
+      //const piece_bitboard_t attacks = board.get_capture_moves_from(piece_pos);
       // multi-attacks
       //const auto &piece = board[piece_pos];
       //piece_bitboard_t attacks = piece.get_attacks(board.get_piece_positions(piece.color), board.get_piece_positions(enemy_of(piece.color)));

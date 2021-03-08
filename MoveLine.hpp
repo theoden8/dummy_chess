@@ -8,6 +8,7 @@
 struct MoveLine {
   std::vector<move_t> line;
   size_t start = 0;
+  const MoveLine *mainline = nullptr;
 
   INLINE MoveLine()
   {}
@@ -68,17 +69,51 @@ struct MoveLine {
     }
   }
 
+  INLINE void total_recall() {
+    while(start)recall();
+  }
+
+  INLINE MoveLine full() const {
+    MoveLine f = *this;
+    f.start = 0;
+    return f;
+  }
+
   void replace_line(const MoveLine &other) {
+    resize(other.size());
     for(size_t i = 0; i < other.size(); ++i) {
-      if(i == size()) {
-        put(other[i]);
-      } else {
-        operator[](i) = other[i];
-      }
+      (*this)[i] = other[i];
     }
-    if(other.size() < size()) {
-      resize(other.size());
+    assert(full().size() == start + other.size());
+  }
+
+  INLINE bool is_mainline() const {
+    return mainline == nullptr;
+  }
+
+  INLINE const MoveLine *get_mainline() const {
+    if(is_mainline()) {
+      return this;
     }
+    return mainline->get_mainline();
+  }
+
+  INLINE bool find_in_mainline(move_t m) const {
+    if(get_mainline() == nullptr) {
+      return false;
+    }
+    return std::find(get_mainline()->begin(), get_mainline()->end(), m) != get_mainline()->end();
+  }
+
+  INLINE move_t front_in_mainline() const {
+    if(get_mainline() == nullptr) {
+      return board::nomove;
+    }
+    const auto &mline = get_mainline()->full();
+    if(start >= mline.size()) {
+      return board::nomove;
+    }
+    return mline[start];
   }
 
   MoveLine branch_from_past() const {
@@ -86,11 +121,16 @@ struct MoveLine {
     while(!mline.empty()) {
       mline.pop_back();
     }
+    mline.mainline = get_mainline();
     return mline;
   }
 
-  decltype(auto) full() const {
-    return line;
+  MoveLine get_future() const {
+    MoveLine mline;
+    for(auto m : *this) {
+      mline.put(m);
+    }
+    return mline;
   }
 
   void clear() {
