@@ -77,6 +77,14 @@ namespace board {
     return i + (j - 1) * LEN;
   }
 
+  ALWAYS_INLINE constexpr pos_t file_mask(pos_t x) {
+    return bitmask::vline << x;
+  }
+
+  ALWAYS_INLINE constexpr pos_t rank_mask(pos_t y) {
+    return bitmask::hline << (y * board::LEN);
+  }
+
   std::string _pos_str(pos_t i) {
     std::string p;
     i &= board::MOVEMASK;

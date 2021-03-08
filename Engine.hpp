@@ -327,7 +327,7 @@ public:
       //printf("depth=%d, score=%.5f, %s\n", depth,score,board::_move_str(m).c_str());
       if(score >= beta) {
         if(pline_alt.size() < size_t(depth)) {
-//          str::print("A: PLINE_ALT NOT ENOUGH LENGTH", _line_str(pline_alt), "depth", depth, "full", _line_str(pline_alt.full()));
+          str::print("A: PLINE_ALT NOT ENOUGH LENGTH", _line_str(pline_alt), "depth", depth, "full", _line_str(pline_alt.full()));
           assert(check_line_terminates(pline_alt));
         }
         pline.replace_line(pline_alt);
@@ -368,7 +368,7 @@ public:
   }
 
   template <typename F>
-  std::pair<double, move_t> iterative_deepening_dfs(int depth, const std::unordered_set<move_t> &searchmoves,
+  std::pair<double, move_t> iterative_deepening_dfs(int16_t depth, const std::unordered_set<move_t> &searchmoves,
                                                     std::array<ab_info, ZOBRIST_SIZE> &ab_store, F &&callback_f)
   {
     if(depth == 0)return {DBL_MAX, board::nomove};
@@ -382,7 +382,7 @@ public:
     });
     std::sort(bestmoves.begin(), bestmoves.end());
     std::map<move_t, MoveLine> pline;
-    for(int d = 0; d < depth; ++d) {
+    for(int16_t d = 0; d < depth; ++d) {
       double alpha = -DBL_MAX;
       for(size_t i = 0; i < bestmoves.size(); ++i) {
         auto &[eval, m] = bestmoves[i];
@@ -424,7 +424,7 @@ public:
   }
 
   template <typename F>
-  std::pair<double, move_t> iterative_deepening_astar(int depth, const std::unordered_set<move_t> &searchmoves,
+  std::pair<double, move_t> iterative_deepening_astar(int16_t depth, const std::unordered_set<move_t> &searchmoves,
                                                       std::array<ab_info, ZOBRIST_SIZE> &ab_store, F &callback_f)
   {
     if(depth == 0)return {DBL_MAX, board::nomove};
@@ -502,7 +502,7 @@ public:
     return ab_store;
   }
 
-  move_t get_fixed_depth_move_iddfs(int depth, const std::unordered_set<move_t> &searchmoves={}) {
+  move_t get_fixed_depth_move_iddfs(int16_t depth, const std::unordered_set<move_t> &searchmoves={}) {
     reset_planning();
     auto *ab_store = new_ab_store();
     auto callback_f = [&](const move_t m, const MoveLine &pline) mutable -> bool { return true; };
@@ -512,7 +512,7 @@ public:
     return m;
   }
 
-  move_t get_fixed_depth_move_idastar(int depth, const std::unordered_set<move_t> &searchmoves={}) {
+  move_t get_fixed_depth_move_idastar(int16_t depth, const std::unordered_set<move_t> &searchmoves={}) {
     reset_planning();
     auto *ab_store = new_ab_store();
     auto callback_f = [&](const move_t m, const MoveLine &pline) mutable -> bool { return true; };
@@ -527,7 +527,7 @@ public:
   double evaluation = DBL_MAX;
   const double UNINITIALIZED = -1e9;
   template <typename F>
-  move_t get_fixed_depth_move(int depth, F &&callback_f, const std::unordered_set<move_t> &searchmoves) {
+  move_t get_fixed_depth_move(int16_t depth, F &&callback_f, const std::unordered_set<move_t> &searchmoves) {
     reset_planning();
     auto *ab_store = new_ab_store();
     MoveLine pline;
@@ -544,17 +544,17 @@ public:
     return m;
   }
 
-  decltype(auto) get_fixed_depth_move(int depth, const std::unordered_set<move_t> &searchmoves={}) {
+  decltype(auto) get_fixed_depth_move(int16_t depth, const std::unordered_set<move_t> &searchmoves={}) {
     return get_fixed_depth_move(depth, [](const move_t m, const MoveLine &pline) mutable -> bool {return true;}, searchmoves);
   }
 //
   struct perft_info {
     board_info info;
-    int depth;
+    int16_t depth;
     size_t nodes;
   };
   size_t zb_hit = 0, zb_miss = 0;
-  size_t _perft(int depth, std::array<perft_info, ZOBRIST_SIZE> &perft_store) {
+  size_t _perft(int16_t depth, std::array<perft_info, ZOBRIST_SIZE> &perft_store) {
     if(depth == 1 || depth == 0) {
       return count_moves();
     }
@@ -582,7 +582,7 @@ public:
     return nodes;
   }
 
-  inline size_t perft(int depth=1) {
+  inline size_t perft(int16_t depth=1) {
     auto *perft_store = new std::array<perft_info, ZOBRIST_SIZE>{};
     zb_hit = 0, zb_miss = 0;
     for(zobrist::key_t i = 0; i < perft_store->size(); ++i) {

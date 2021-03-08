@@ -24,6 +24,49 @@ struct PGN {
     return cur_ply;
   }
 
+  char name_of_file(pos_t i) const {
+    return 'a' + board::_x(i);
+  }
+
+  char name_of_rank(pos_t i) const {
+    return '0' + board::_y(i);
+  }
+
+  std::string piece_name(Piece p) {
+    std::string s = ""s;
+    if(p.value == PAWN)return s;
+    s += toupper(p.str());
+    return s;
+  }
+
+  std::string resolve_ambiguity(pos_t i, pos_t j, bool enpassant=false) const {
+    std::string resolve = ""s;
+    piece_bitboard_t imask = ~0uLL,
+                     jmask = 1ULL << j;
+    if(board[i].value == PAWN && (board[i].value == PAWN || board[i].value == EMPTY)) {
+      if(board[j].value != EMPTY || enpassant) {
+        resolve += name_of_file(i);
+      }
+      imask = board::file_mask(board::_x(i));
+      jmask = board::file_mask(board::_x(j));
+    }
+    bool file_resolved = false, rank_resolved = false;
+    board[i].foreach([&](pos_t k) mutable -> void {
+      if(rank_resolved && file_resolved)return;
+      if(!(imask & (1ULL << k)))return;
+      if(board.get_moves_from(k) & jmask) {
+        if(!file_resolved && board::_x(k) != board::_x(i)) {
+          resolve += name_of_file(i);
+          file_resolved = true;
+        } else if(!rank_resolved && board::_y(k) != board::_y(i)) {
+          resolve += name_of_rank(i);
+          rank_resolved = true;
+        }
+      }
+    });
+    return resolve;
+  }
+
   void write_event(event_t ev) {
     std::string p;
     const uint8_t marker = event::extract_marker(ev);
@@ -35,12 +78,13 @@ struct PGN {
                       j = bitmask::second(m);
           const pos_t killwhat = event::extract_piece_ind(ev);
           p = "";
+          // pawn takes pawn (not en-passant)
           if(board[i].value==PAWN && board[j].value==PAWN && killwhat!=event::killnothing) {
-            p += 'a' + board::_x(i);
-            p += 'a' + board::_x(j);
+            p += resolve_ambiguity(i, j);
+            p += name_of_file(j);
           } else {
-            if(board[i].value!=PAWN)p+=toupper(board[i].str());
-            else if(killwhat!=event::killnothing) p+='a'+board::_x(i);
+            p += piece_name(board[i]);
+            p += resolve_ambiguity(i, j);
             if(killwhat!=event::killnothing)p+='x';
             p += board::_pos_str(j);
           }
@@ -52,9 +96,9 @@ struct PGN {
           const pos_t i = bitmask::first(m),
                       j = bitmask::second(m);
           if(board::_x(j) == C) {
-            p = "O-O-O";
+            p = "O-O-O"s;
           } else {
-            p = "O-O";
+            p = "O-O"s;
           }
         }
       break;
@@ -63,9 +107,8 @@ struct PGN {
           const move_t m = event::extract_move(ev);
           const pos_t i = bitmask::first(m),
                       j = bitmask::second(m);
-          p += 'a' + board::_x(i);
-          p += 'x';
-          p += board::_pos_str(j);
+          p += resolve_ambiguity(i, j, true);
+          p += name_of_file(j);
         }
       break;
       case event::PROMOTION_MARKER:
@@ -77,7 +120,7 @@ struct PGN {
             const PIECE becomewhat = board::get_promotion_as(to_byte);
           const pos_t killwhat = event::extract_piece_ind(ev);
           if(killwhat != event::killnothing) {
-            p += 'a' + board::_x(i);
+            p += resolve_ambiguity(i, j);
             p += 'x';
           }
           p += board::_pos_str(j);
@@ -111,12 +154,27 @@ struct PGN {
     }
   }
 
+  void write_move(move_t m) {
+    write_event(board.get_move_event(m));
+  }
+
   void retract_event() {
     if(cur_ply != 0) {
       --cur_ply;
       ply.pop_back();
       ending = ""s;
     }
+  }
+
+  std::string str() {
+    std::string s;
+    for(size_t i = 0; i < cur_ply; ++i) {
+      if(!(i & 1)) {
+        s += " "s + std::to_string(i / 2 + 1) + "."s;
+      }
+      s += " "s + ply[i];
+    }
+    return s;
   }
 };
 
