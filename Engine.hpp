@@ -192,6 +192,7 @@ public:
 
   struct ab_info {
     board_info info;
+    bool play_as;
     int16_t depth;
     double eval;
     move_t m;
@@ -220,7 +221,7 @@ public:
       ++zb_hit;
       ++nodes_searched;
       pline.replace_line(ab_store[k].subpline);
-      return ab_store[k].eval;
+      return (ab_store[k].play_as == play_as) ? ab_store[k].eval : -ab_store[k].eval;
     }
     bool overwrite = (depth + 1 >= ab_store[k].depth);
 
@@ -253,7 +254,7 @@ public:
       if(score >= beta) {
         pline.replace_line(pline_alt);
         if(overwrite) {
-          ab_store[k] = { .info=info, .depth=depth, .eval=score, .subpline=pline_alt.get_future() };
+          ab_store[k] = { .info=info, .play_as = play_as, .depth=depth, .eval=score, .subpline=pline_alt.get_future() };
         }
         return score;
       } else if(score > alpha) {
@@ -265,7 +266,7 @@ public:
       }
     }
     if(overwrite) {
-      ab_store[k] = { .info=info, .depth=depth, .eval=bestscore, .subpline=pline.get_future() };
+      ab_store[k] = { .info=info, .play_as = play_as, .depth=depth, .eval=bestscore, .subpline=pline.get_future() };
     }
     ++nodes_searched;
     return alpha;
@@ -285,7 +286,7 @@ public:
       ++zb_hit;
       ++nodes_searched;
       pline.replace_line(ab_store[k].subpline);
-      return ab_store[k].eval;
+      return (ab_store[k].play_as == play_as) ? ab_store[k].eval : -ab_store[k].eval;
     }
     bool overwrite = (depth + 1 >= ab_store[k].depth);
     ++zb_miss;
@@ -327,17 +328,21 @@ public:
       //printf("depth=%d, score=%.5f, %s\n", depth,score,board::_move_str(m).c_str());
       if(score >= beta) {
         if(pline_alt.size() < size_t(depth)) {
-          str::print("A: PLINE_ALT NOT ENOUGH LENGTH", _line_str(pline_alt), "depth", depth, "full", _line_str(pline_alt.full()));
+//          if(!check_line_terminates(pline_alt)) {
+//            str::print("A: PLINE_ALT NOT ENOUGH LENGTH", _line_str(pline_alt), "depth", depth, "full", _line_str(pline_alt.full()));
+//          }
           assert(check_line_terminates(pline_alt));
         }
         pline.replace_line(pline_alt);
         if(overwrite) {
-          ab_store[k] = { .info=info, .depth=depth, .eval=score, .m=m, .subpline=pline.get_future() };
+          ab_store[k] = { .info=info, .play_as = play_as, .depth=depth, .eval=score, .m=m, .subpline=pline.get_future() };
         }
         return score;
       } else if(score > bestscore) {
         if(pline_alt.size() < size_t(depth)) {
-//          str::print("B: PLINE_ALT NOT ENOUGH LENGTH", _line_str(pline_alt), "depth", depth, "full", _line_str(pline_alt.full()));
+//          if(!check_line_terminates(pline_alt)) {
+//            str::print("B: PLINE_ALT NOT ENOUGH LENGTH", _line_str(pline_alt), "depth", depth, "full", _line_str(pline_alt.full()));
+//          }
           assert(check_line_terminates(pline_alt));
         }
         m_best = m;
@@ -349,7 +354,7 @@ public:
       }
     };
     if(overwrite) {
-      ab_store[k] = { .info=info, .depth=depth, .eval=bestscore, .m=m_best, .subpline=pline.get_future() };
+      ab_store[k] = { .info=info, .play_as = play_as, .depth=depth, .eval=bestscore, .m=m_best, .subpline=pline.get_future() };
     }
     return bestscore;
   }

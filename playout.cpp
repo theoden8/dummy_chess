@@ -10,12 +10,13 @@ int main(int argc, char *argv[]) {
 
   MoveLine mline;
   pgn::PGN pgnwriter(e);
+  int no_moves = 0;
   while(e.can_move()) {
     move_t bestmove = e.get_fixed_depth_move(depth);
     mline.put(bestmove);
-    pgnwriter.write_move(bestmove);
-    e.make_move(bestmove);
+    pgnwriter.handle_move(bestmove);
     str::print(pgnwriter.str());
+    if(++no_moves == 400)break;
   }
   str::print(pgnwriter.str());
 }

@@ -806,7 +806,11 @@ public:
         if(doublecheck && p!=KING)continue;
         get_piece((PIECE)p,c).foreach([&](pos_t pos) mutable noexcept -> void {
           if(p==PAWN) {
-            state_moves[pos] = get_attacks_from(pos) & (foes|(1ULL << enpassant_trace()));
+            piece_bitboard_t foes_pawn = foes;
+            if(enpassant_trace() != event::enpassantnotrace) {
+              foes_pawn |= (1ULL << enpassant_trace());
+            }
+            state_moves[pos] = get_attacks_from(pos) & foes_pawn;
             state_moves[pos] |= get_push_moves(c, pos, friends|foes);
             state_moves[pos] &= state_checkline[c];
           } else if(p==KING) {

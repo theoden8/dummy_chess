@@ -23,7 +23,7 @@ dummy_chess_abwalk: abwalk.cpp $(SOURCES) $(HPPFILES) Makefile
 	$(CXX) $(DBGFLAGS) $(CXXFLAGS) abwalk.cpp $(SOURCES) $(LDFLAGS) -o $@
 
 dummy_chess_playout: playout.cpp $(SOURCES) $(HPPFILES) Makefile
-	$(CXX) $(DBGFLAGS) $(CXXFLAGS) playout.cpp $(SOURCES) $(LDFLAGS) -o $@
+	$(CXX) $(OPTFLAGS) $(CXXFLAGS) playout.cpp $(SOURCES) $(LDFLAGS) -o $@
 
 dummy_chess_curses: ui.cpp $(SOURCES) $(HPPFILES) Makefile
 	$(CXX) $(DBGFLAGS) $(CXXFLAGS) $(NC_CFLAGS) ui.cpp $(SOURCES) $(LDFLAGS) $(NC_LDFLAGS) $(LDFLAGS) -o $@

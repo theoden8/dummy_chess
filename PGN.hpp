@@ -10,6 +10,8 @@
 
 namespace pgn {
 
+constexpr bool LICHESS_COMPATIBILITY = 1;
+
 struct PGN {
   Board &board;
   size_t cur_ply = 0;
@@ -29,7 +31,7 @@ struct PGN {
   }
 
   char name_of_rank(pos_t i) const {
-    return '0' + board::_y(i);
+    return '1' + board::_y(i);
   }
 
   std::string piece_name(Piece p) {
@@ -48,7 +50,9 @@ struct PGN {
         resolve += name_of_file(i);
       }
       imask = board::file_mask(board::_x(i));
-      jmask = board::file_mask(board::_x(j));
+      if(!LICHESS_COMPATIBILITY) {
+        jmask = board::file_mask(board::_x(j));
+      }
     }
     bool file_resolved = false, rank_resolved = false;
     board[i].foreach([&](pos_t k) mutable -> void {
@@ -79,7 +83,7 @@ struct PGN {
           const pos_t killwhat = event::extract_piece_ind(ev);
           p = "";
           // pawn takes pawn (not en-passant)
-          if(board[i].value==PAWN && board[j].value==PAWN && killwhat!=event::killnothing) {
+          if(board[i].value==PAWN && board[j].value==PAWN && killwhat!=event::killnothing && !LICHESS_COMPATIBILITY) {
             p += resolve_ambiguity(i, j);
             p += name_of_file(j);
           } else {
@@ -108,7 +112,12 @@ struct PGN {
           const pos_t i = bitmask::first(m),
                       j = bitmask::second(m);
           p += resolve_ambiguity(i, j, true);
-          p += name_of_file(j);
+          if(LICHESS_COMPATIBILITY) {
+            p += 'x';
+            p += board::_pos_str(j);
+          } else {
+            p += name_of_file(j);
+          }
         }
       break;
       case event::PROMOTION_MARKER:
@@ -145,7 +154,7 @@ struct PGN {
       ending = "1/2 - 1/2 (50 moves)";
     } else if(board.is_draw_material()) {
       ending = "1/2 - 1/2 (material)";
-    } else if(board.is_checkmate()) {
+    } else if(board.is_checkmate() && !board.can_move()) {
       ply.back() += '#';
       ending = (c == WHITE) ? "1-0"s : "0-1"s;
     } else if(no_checks > 0) {
@@ -154,8 +163,8 @@ struct PGN {
     }
   }
 
-  void write_move(move_t m) {
-    write_event(board.get_move_event(m));
+  void handle_move(move_t m) {
+    handle_event(board.get_move_event(m));
   }
 
   void retract_event() {
