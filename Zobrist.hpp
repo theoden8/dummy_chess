@@ -57,4 +57,46 @@ void init() {
   }
 }
 
+
+template <typename T> using hash_table = std::array<T, ZOBRIST_SIZE>;
+template <typename T> using hash_table_ptr = hash_table<T> *;
+
+template<typename InnerObject>
+struct StoreScope {
+  hash_table_ptr<InnerObject> &zb_store;
+  bool is_outer_scope;
+
+  StoreScope(hash_table_ptr<InnerObject> &scope_ptr):
+    zb_store(scope_ptr),
+    is_outer_scope(scope_ptr == nullptr)
+  {
+    if(zb_store == nullptr) {
+      zb_store = new hash_table<InnerObject>{};
+      for(size_t i = 0; i < ZOBRIST_SIZE; ++i) {
+        zb_store->at(i).info.unset();
+      }
+    }
+  }
+
+  hash_table<InnerObject> &get_object() {
+    return *zb_store;
+  }
+
+  void end_scope() {
+    if(is_outer_scope) {
+      delete zb_store;
+      is_outer_scope = false;
+    }
+  }
+
+  inline ~StoreScope() {
+    end_scope();
+  }
+};
+
+template <typename InnerObject>
+decltype(auto) make_store_object_scope(hash_table_ptr<InnerObject> &zb_store) {
+  return StoreScope<InnerObject>(zb_store);
+}
+
 } // zobrist

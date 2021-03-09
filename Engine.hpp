@@ -430,7 +430,7 @@ public:
 
   template <typename F>
   std::pair<double, move_t> iterative_deepening_astar(int16_t depth, const std::unordered_set<move_t> &searchmoves,
-                                                      std::array<ab_info, ZOBRIST_SIZE> &ab_store, F &callback_f)
+                                                      std::array<ab_info, ZOBRIST_SIZE> &ab_store, F &&callback_f)
   {
     if(depth == 0)return {DBL_MAX, board::nomove};
     std::vector<std::tuple<double, int, move_t>> bestmoves;
@@ -499,31 +499,26 @@ public:
     zb_hit = 0, zb_miss = 0;
   }
 
-  auto *new_ab_store() {
-    std::array<ab_info, ZOBRIST_SIZE> *ab_store = new std::array<ab_info, ZOBRIST_SIZE>{};
-    for(size_t i = 0; i < ZOBRIST_SIZE; ++i) {
-      ab_store->at(i).info.unset();
-    }
-    return ab_store;
+  decltype(auto) get_zobrist_alphabeta_scope() {
+    return zobrist::make_store_object_scope<ab_info>(ab_store);
   }
 
+  zobrist::hash_table_ptr<ab_info> ab_store = nullptr;
   move_t get_fixed_depth_move_iddfs(int16_t depth, const std::unordered_set<move_t> &searchmoves={}) {
     reset_planning();
-    auto *ab_store = new_ab_store();
-    auto callback_f = [&](const move_t m, const MoveLine &pline) mutable -> bool { return true; };
-    auto [_, m] = iterative_deepening_dfs(depth, searchmoves, *ab_store, callback_f);
+    decltype(auto) store_scope = get_zobrist_alphabeta_scope();
+    auto [_, m] = iterative_deepening_dfs(depth, searchmoves, store_scope.get_object(),
+                                          [&](const move_t m, const MoveLine &pline) mutable -> bool { return true; });
     evaluation = _;
-    delete ab_store;
     return m;
   }
 
   move_t get_fixed_depth_move_idastar(int16_t depth, const std::unordered_set<move_t> &searchmoves={}) {
     reset_planning();
-    auto *ab_store = new_ab_store();
-    auto callback_f = [&](const move_t m, const MoveLine &pline) mutable -> bool { return true; };
-    auto [_, m] = iterative_deepening_astar(depth, searchmoves, *ab_store, callback_f);
+    decltype(auto) store_scope = get_zobrist_alphabeta_scope();
+    auto [_, m] = iterative_deepening_astar(depth, searchmoves, store_scope.get_object(),
+                                            [&](const move_t m, const MoveLine &pline) mutable -> bool { return true; });
     evaluation = _;
-    delete ab_store;
     return m;
   }
 
@@ -534,15 +529,14 @@ public:
   template <typename F>
   move_t get_fixed_depth_move(int16_t depth, F &&callback_f, const std::unordered_set<move_t> &searchmoves) {
     reset_planning();
-    auto *ab_store = new_ab_store();
+    decltype(auto) store_scope = get_zobrist_alphabeta_scope();
     MoveLine pline;
-    evaluation = alpha_beta(-1e9, 1e9, depth, pline, *ab_store);
+    evaluation = alpha_beta(-1e9, 1e9, depth, pline, store_scope.get_object());
     move_t m = get_random_move();
     if(!pline.full().empty()) {
       m = pline.full().front();
     }
     str::print("pvline:", _line_str(pline, true), "size:", pline.size());
-    delete ab_store;
     if(!check_valid_sequence(pline)) {
       str::print("pvline not playable");
     }
@@ -587,14 +581,10 @@ public:
     return nodes;
   }
 
+  zobrist::hash_table_ptr<perft_info> perft_store = nullptr;
   inline size_t perft(int16_t depth=1) {
-    auto *perft_store = new std::array<perft_info, ZOBRIST_SIZE>{};
+    decltype(auto) store_scope = zobrist::make_store_object_scope<perft_info>(perft_store);
     zb_hit = 0, zb_miss = 0;
-    for(zobrist::key_t i = 0; i < perft_store->size(); ++i) {
-      perft_store->at(i).info.active_player = NEUTRAL;
-    }
-    size_t nds = _perft(depth, *perft_store);
-    delete perft_store;
-    return nds;
+    return _perft(depth, store_scope.get_object());
   }
 };
