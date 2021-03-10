@@ -5,7 +5,6 @@
 #include <algorithm>
 #include <list>
 #include <map>
-#include <ranges>
 
 #include <FEN.hpp>
 #include <Board.hpp>
@@ -157,13 +156,7 @@ public:
   }
 
   double heuristic_of(COLOR c) const {
-    double h = 0;
-    if(self.is_draw())return 0;
-    // checkmate
-    if(!can_move()) {
-      return (c == activePlayer()) ? -1e7 : 1e7;
-    }
-
+    double h = .0;
     h += h_material(c);
     h += h_pins(c) * 1e-4;
     h += count_moves(c) * 2e-4;
@@ -172,8 +165,12 @@ public:
   }
 
   double evaluate() const {
+    if(self.is_draw())return 0;
+    else if(!can_move()) {
+      return (play_as==activePlayer()) ? 1e7 : -1e7;
+    }
     double score = heuristic_of(WHITE) - heuristic_of(BLACK);
-    return play_as==WHITE ? score : -score;
+    return (play_as==WHITE) ? score : -score;
   }
 
   double move_heuristic(pos_t i, pos_t j) const {
@@ -198,8 +195,16 @@ public:
     move_t m;
     MoveLine subpline;
   };
+
+  double score_decay(double score) {
+    if(std::abs(score) > 1e6) {
+      score -= 1.;
+    }
+    return score;
+  }
+
   double alpha_beta_quiscence(double alpha, double beta, int16_t depth, MoveLine &pline,
-                              std::array<ab_info, ZOBRIST_SIZE> &ab_store)
+                              zobrist::hash_table<ab_info> &ab_store)
   {
     double score = evaluate();
     double bestscore = -DBL_MAX;
@@ -247,7 +252,7 @@ public:
       {
         volatile auto mscope = move_scope(m);
         pline_alt.premove(m);
-        score = -alpha_beta_quiscence(-beta, -alpha, depth - 1, pline_alt, ab_store);
+        score = -score_decay(alpha_beta_quiscence(-beta, -alpha, depth - 1, pline_alt, ab_store));
         assert(check_valid_sequence(pline_alt));
         pline_alt.recall();
       }
@@ -273,10 +278,11 @@ public:
   }
 
   double alpha_beta(double alpha, double beta, int16_t depth, MoveLine &pline,
-                                       std::array<ab_info, ZOBRIST_SIZE> &ab_store)
+                                  zobrist::hash_table<ab_info> &ab_store)
   {
     if(depth == 0) {
       const double score = alpha_beta_quiscence(alpha, beta, depth, pline, ab_store);
+//      ++nodes_searched;
 //      const double score = evaluate();
       return score;
     }
@@ -316,7 +322,7 @@ public:
       {
         volatile auto mscope = move_scope(m);
         pline_alt.premove(m);
-        score = -alpha_beta(-beta, -alpha, depth - 1, pline_alt, ab_store);
+        score = -score_decay(alpha_beta(-beta, -alpha, depth - 1, pline_alt, ab_store));
   //      if(!check_valid_sequence(pline_alt)) {
   //        str::print("pline not playable", _line_str(pline_alt.full()));
   //        str::print("sequence not valid: [", _line_str(pline_alt), "]");
@@ -374,7 +380,7 @@ public:
 
   template <typename F>
   std::pair<double, move_t> iterative_deepening_dfs(int16_t depth, const std::unordered_set<move_t> &searchmoves,
-                                                    std::array<ab_info, ZOBRIST_SIZE> &ab_store, F &&callback_f)
+                                                    zobrist::hash_table<ab_info> &ab_store, F &&callback_f)
   {
     if(depth == 0)return {DBL_MAX, board::nomove};
     std::vector<std::pair<double, move_t>> bestmoves;
@@ -536,7 +542,7 @@ public:
     if(!pline.full().empty()) {
       m = pline.full().front();
     }
-    str::print("pvline:", _line_str(pline, true), "size:", pline.size());
+    str::print("pvline:", _line_str(pline, true), "size:", pline.size(), "eval:", evaluation);
     if(!check_valid_sequence(pline)) {
       str::print("pvline not playable");
     }
