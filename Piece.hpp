@@ -8,107 +8,152 @@
 #include <Attacks.hpp>
 
 
+namespace piece {
+  inline constexpr bool is_set(piece_bitboard_t mask, pos_t b) {
+    return mask & (1LLU << b);
+  }
+
+  inline void set_pos(piece_bitboard_t &mask, pos_t b) {
+    assert(!is_set(mask, b));
+    mask |= 1LLU << b;
+  }
+
+  inline void unset_pos(piece_bitboard_t &mask, pos_t b) {
+    assert(is_set(mask, b));
+    mask &= ~(1LLU << b);
+  }
+
+  inline void move(piece_bitboard_t &mask, pos_t i, pos_t j) {
+    unset_pos(mask, i);
+    set_pos(mask, j);
+  }
+
+  inline constexpr size_t size(piece_bitboard_t mask) {
+    return bitmask::count_bits(mask);
+  }
+
+  inline void set_king_pos_white(pos_pair_t &kings, pos_t i) {
+    kings = bitmask::_pos_pair(i, bitmask::second(kings));
+  }
+
+  inline void set_king_pos_black(pos_pair_t &kings, pos_t i) {
+    kings = bitmask::_pos_pair(bitmask::first(kings), i);
+  }
+
+  constexpr pos_t uninitialized_king = 0xff;
+  constexpr pos_pair_t uninitialized_kings = bitmask::_pos_pair(uninitialized_king, uninitialized_king);
+  inline void unset_king_pos_white(pos_pair_t &kings) {
+    set_king_pos_white(kings, uninitialized_king);
+  }
+
+  inline void unset_king_pos_black(pos_pair_t &kings) {
+    set_king_pos_black(kings, uninitialized_king);
+  }
+
+  inline piece_bitboard_t pos_mask(pos_t k) {
+    return 1ULL << k;
+  }
+
+  inline constexpr piece_bitboard_t get_pawn_attack(pos_t pos, piece_bitboard_t occupied, COLOR c) {
+    if(c==WHITE) return Attacks<WPAWNM>::get_attacks(pos);
+    if(c==BLACK) return Attacks<BPAWNM>::get_attacks(pos);
+    return 0x00ULL;
+  }
+
+  inline piece_bitboard_t get_pawn_attacks(piece_bitboard_t mask, COLOR c) {
+    if(c == WHITE) {
+      return MultiAttacks<WPAWNM>::get_attacks(mask);
+    } else {
+      return MultiAttacks<BPAWNM>::get_attacks(mask);
+    }
+  }
+
+  inline piece_bitboard_t get_sliding_diag_attack(pos_t pos, piece_bitboard_t occupied) {
+    return Attacks<BISHOPM>::get_attacks(pos,occupied);
+  }
+
+  inline piece_bitboard_t get_sliding_diag_xray_attack(pos_t pos, piece_bitboard_t friends, piece_bitboard_t foes) {
+    const piece_bitboard_t blockers = get_sliding_diag_attack(pos, friends|foes) & foes;
+    return get_sliding_diag_attack(pos, friends | (foes ^ blockers));
+  }
+
+  inline piece_bitboard_t get_sliding_diag_attacking_ray(pos_t i, pos_t j, piece_bitboard_t occupied) {
+    return Attacks<BISHOPM>::get_attacking_ray(i,j,occupied);
+  }
+
+  inline piece_bitboard_t get_sliding_diag_attacking_xray(pos_t i, pos_t j, piece_bitboard_t friends, piece_bitboard_t foes) {
+    const piece_bitboard_t blockers = get_sliding_diag_attack(i, friends|foes) & foes;
+    return get_sliding_diag_attacking_ray(i, j, friends | (foes ^ blockers));
+  }
+
+  inline piece_bitboard_t get_sliding_diag_attacks(piece_bitboard_t mask, piece_bitboard_t occupied) {
+    return MultiAttacks<BISHOPM>::get_attacks(mask,occupied);
+  }
+
+
+  inline piece_bitboard_t get_sliding_orth_attack(pos_t pos, piece_bitboard_t occupied) {
+    return Attacks<ROOKM>::get_attacks(pos,occupied);
+  }
+
+  inline piece_bitboard_t get_sliding_orth_xray_attack(pos_t pos, piece_bitboard_t friends, piece_bitboard_t foes) {
+    const piece_bitboard_t blockers = get_sliding_orth_attack(pos, friends|foes) & foes;
+    return get_sliding_orth_attack(pos, friends | (foes ^ blockers));
+  }
+
+  inline piece_bitboard_t get_sliding_orth_attacking_ray(pos_t i, pos_t j, piece_bitboard_t occupied) {
+    return Attacks<ROOKM>::get_attacking_ray(i,j,occupied);
+  }
+
+  inline piece_bitboard_t get_sliding_orth_attacking_xray(pos_t i, pos_t j, piece_bitboard_t friends, piece_bitboard_t foes) {
+    const piece_bitboard_t blockers = get_sliding_orth_attack(i, friends|foes) & foes;
+    return get_sliding_orth_attacking_ray(i, j, friends | (foes ^ blockers));
+  }
+
+  inline piece_bitboard_t get_sliding_orth_attacks(piece_bitboard_t mask, piece_bitboard_t occupied) {
+    return MultiAttacks<ROOKM>::get_attacks(mask,occupied);
+  }
+
+
+  inline piece_bitboard_t get_knight_attack(pos_t pos) {
+    return Attacks<KNIGHTM>::get_attacks(pos);
+  }
+
+  inline piece_bitboard_t get_knight_attacks(piece_bitboard_t mask) {
+    return MultiAttacks<KNIGHTM>::get_attacks(mask);
+  }
+
+  inline piece_bitboard_t get_king_attack(pos_t pos, piece_bitboard_t occupied) {
+    return Attacks<KINGM>::get_attacks(pos,occupied);
+  }
+
+//  inline piece_bitboard_t get_king_attacks(piece_bitboard_t mask, piece_bitboard_t occupied) {
+//    return MultiAttacks<KINGM>::get_attacks(mask, occupied);
+//  }
+
+  void print(piece_bitboard_t mask) {
+    std::cout << piece::size(mask) << std::endl;
+    bitmask::print(mask);
+  }
+} // namespace piece
+
+
 // interface to piece bitboard
 struct Piece {
   PIECE value;
   COLOR color;
   pos_t piece_index;
-  piece_bitboard_t mask;
 
   static inline constexpr pos_t get_piece_index(PIECE p, COLOR c) {
     return (p==EMPTY) ? int(NO_PIECES)*int(NO_COLORS) : int(p)*(int)NO_COLORS+c;
   }
 
-  constexpr Piece(PIECE p, COLOR c, piece_bitboard_t loc=0x00):
+  constexpr Piece(PIECE p, COLOR c):
     value(p), color(c),
-    piece_index(get_piece_index(p, c)),
-    mask(loc)
+    piece_index(get_piece_index(p, c))
   {}
-
-  inline constexpr bool is_set(pos_t i) const {
-    return mask & (1LLU << i);
-  }
 
   inline constexpr bool is_empty() const {
     return value == EMPTY;
-  }
-
-  inline constexpr void set_pos(pos_t i) {
-    assert(!is_set(i));
-    mask |= 1LLU << i;
-  }
-
-  inline constexpr void unset_pos(pos_t i) {
-    assert(is_set(i));
-    mask &= ~(1LLU << i);
-  }
-
-  inline constexpr void move(pos_t i, pos_t j) {
-    unset_pos(i);
-    set_pos(j);
-  }
-
-  inline constexpr pos_t size() const {
-    return bitmask::count_bits(mask);
-  }
-
-  // attack from specific position by this type of piece
-  inline constexpr piece_bitboard_t get_attack(pos_t pos, piece_bitboard_t occupied) const {
-    const MPIECE mp = get_mpiece_value(value, color);
-    if(mp==WPAWNM) return Attacks<WPAWNM>::get_attacks(pos);
-    if(mp==BPAWNM) return Attacks<BPAWNM>::get_attacks(pos);
-    if(mp==KNIGHTM)return Attacks<KNIGHTM>::get_attacks(pos);
-    if(mp==BISHOPM)return Attacks<BISHOPM>::get_attacks(pos,occupied);
-    if(mp==ROOKM)  return Attacks<ROOKM>::get_attacks(pos,occupied);
-    if(mp==QUEENM) return Attacks<QUEENM>::get_attacks(pos,occupied);
-    if(mp==KINGM)  return Attacks<KINGM>::get_attacks(pos,occupied);
-    return 0x00ULL;
-  }
-
-  inline constexpr piece_bitboard_t get_xray_attack(pos_t pos, piece_bitboard_t friends, piece_bitboard_t foes) const {
-    const piece_bitboard_t blockers = get_attack(pos, friends|foes) & foes;
-    return get_attack(pos, friends | (foes ^ blockers));
-  }
-
-  inline constexpr piece_bitboard_t get_attacking_ray(pos_t i, pos_t j, piece_bitboard_t occupied) const {
-    const MPIECE mp = get_mpiece_value(value, color);
-    if(mp==BISHOPM)return Attacks<BISHOPM>::get_attacking_ray(i,j,occupied);
-    if(mp==ROOKM)  return Attacks<ROOKM>::get_attacking_ray(i,j,occupied);
-    if(mp==QUEENM) return Attacks<QUEENM>::get_attacking_ray(i,j,occupied);
-    return 0x00ULL;
-  }
-
-  inline constexpr piece_bitboard_t get_attacking_xray(pos_t i, pos_t j, piece_bitboard_t friends, piece_bitboard_t foes) const {
-    const piece_bitboard_t blockers = get_attack(i, friends|foes) & foes;
-    return get_attacking_ray(i, j, friends | (foes ^ blockers));
-  }
-
-  // multi-attacks
-  inline constexpr piece_bitboard_t get_attacks(piece_bitboard_t occupied) const {
-    const MPIECE mp = get_mpiece_value(value, color);
-    if(mp==WPAWNM) return MultiAttacks<WPAWNM>::get_attacks(mask);
-    if(mp==BPAWNM) return MultiAttacks<BPAWNM>::get_attacks(mask);
-    if(mp==KNIGHTM)return MultiAttacks<KNIGHTM>::get_attacks(mask);
-    if(mp==BISHOPM)return MultiAttacks<BISHOPM>::get_attacks(mask,occupied);
-    if(mp==ROOKM)  return MultiAttacks<ROOKM>::get_attacks(mask,occupied);
-    if(mp==QUEENM) return MultiAttacks<QUEENM>::get_attacks(mask,occupied);
-    if(mp==KINGM)  return MultiAttacks<KINGM>::get_attacks(mask,occupied);
-    return 0x00ULL;
-  }
-
-  template <typename F>
-  INLINE void foreach(F &&func) {
-    bitmask::foreach(mask, func);
-  }
-
-  template <typename F>
-  INLINE void foreach(F &&func) const {
-    bitmask::foreach(mask, func);
-  }
-
-  void print() {
-    std::cout << int(size()) << std::endl;
-    bitmask::print(mask);
   }
 
   inline constexpr char str() const {

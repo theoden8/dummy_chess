@@ -9,6 +9,7 @@ dummy_chess_perft
 dummy_chess_uci
 *.o
 *.out
+*.dSYM
 m42.*
 
 !/scripts/m42_download
@@ -16,3 +17,4 @@ m42.*
 scripts/
 
 tempfile
+/sync

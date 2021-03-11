@@ -55,7 +55,22 @@ struct PGN {
       }
     }
     bool file_resolved = false, rank_resolved = false;
-    board[i].foreach([&](pos_t k) mutable -> void {
+
+    piece_bitboard_t mask = ~0x00ULL;
+    const COLOR c = board[i].color;
+    if(board.bits_pawns & piece::pos_mask(i)) {
+      mask = board.bits_pawns & board.bits[c];
+    } else if(board.bits_slid_diag & piece::pos_mask(i)) {
+      mask = board.bits_slid_diag & board.bits[c];
+    } else if(board.bits_slid_orth & piece::pos_mask(i)) {
+      mask &= board.bits_slid_orth & board.bits[c];
+    } else if(i == board.pos_king[c]) {
+      mask = piece::pos_mask(i);
+    } else {
+      mask =  board.get_knight_bits() & board.bits[c];
+    }
+
+    bitmask::foreach(mask, [&](pos_t k) mutable -> void {
       if(rank_resolved && file_resolved)return;
       if(!(imask & (1ULL << k)))return;
       if(board.get_moves_from(k) & jmask) {
@@ -146,7 +161,7 @@ struct PGN {
     write_event(ev);
     board.act_event(ev);
     const COLOR c = board.activePlayer();
-    const pos_t no_checks = board.get_attack_counts_to(board.get_king_pos(c), enemy_of(c));
+    const pos_t no_checks = board.get_attack_counts_to(board.pos_king[c], enemy_of(c));
     ending = "";
     if(board.is_draw_stalemate()) {
       ending = "1/2 - 1/2 (stalemate)";

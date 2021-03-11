@@ -37,7 +37,7 @@ public:
   template <typename F>
   INLINE void iter_capture_moves_from(pos_t i, F &&func) const {
     const COLOR c = self[i].color;
-    const piece_bitboard_t foes = state_piece_positions[enemy_of(c)];
+    const piece_bitboard_t foes = bits[enemy_of(c)];
     iter_moves_from(i, [&](pos_t i, pos_t j) mutable -> void {
       if(is_promotion_move(i, j)
           || is_enpassant_take_move(i, j)
@@ -58,14 +58,14 @@ public:
 
   template <typename F>
   ALWAYS_UNROLL INLINE void iter_moves(F &&func) const {
-    bitmask::foreach(state_piece_positions[activePlayer()], [&](pos_t i) mutable -> void {
+    bitmask::foreach(bits[activePlayer()], [&](pos_t i) mutable -> void {
       iter_moves_from(i, func);
     });
   }
 
   template <typename F>
   ALWAYS_UNROLL INLINE void iter_capture_moves(F &&func) const {
-    bitmask::foreach(state_piece_positions[activePlayer()], [&](pos_t i) mutable -> void {
+    bitmask::foreach(bits[activePlayer()], [&](pos_t i) mutable -> void {
       iter_capture_moves_from(i, func);
     });
   }
@@ -75,7 +75,7 @@ public:
     if(c==NEUTRAL) {
       c=activePlayer();
     }
-    bitmask::foreach(state_piece_positions[c], [&](pos_t i) mutable -> void {
+    bitmask::foreach(bits[c], [&](pos_t i) mutable -> void {
       pos_t moves_from = bitmask::count_bits(get_moves_from(i));
       if(self[i].value == PAWN && (board::_y(i) == 2-1 || board::_y(i) == 7-1)
           && (
@@ -132,7 +132,23 @@ public:
   inline double h_material(COLOR c) const {
     double m = 0;
     for(PIECE p : {PAWN,KNIGHT,BISHOP,ROOK,QUEEN}) {
-      m += get_piece(p,c).size() * material_of(p);
+      piece_bitboard_t mask = 0x00;
+      if(p == PAWN) {
+        mask = bits_pawns;
+      } else if(p == BISHOP) {
+        mask = bits_slid_diag & ~bits_slid_orth;
+      } else if(p == ROOK) {
+        mask = bits_slid_orth & ~bits_slid_diag;
+      } else if(p == QUEEN) {
+        mask = bits_slid_orth & bits_slid_diag;
+      } else if(p == KNIGHT) {
+        mask = (bits[WHITE]|bits[BLACK]) & ~(
+          bits_pawns | bits_slid_orth | bits_slid_diag
+          | piece::pos_mask(pos_king[WHITE])
+          | piece::pos_mask(pos_king[BLACK])
+        );
+      }
+      m += piece::size(mask) * material_of(p);
     }
     return m;
   }
@@ -146,9 +162,9 @@ public:
   }
 
   double h_attack_cells(COLOR c) const {
-    const piece_bitboard_t occupied = get_piece_positions(BOTH);
+    const piece_bitboard_t occupied = bits[WHITE] | bits[BLACK];
     double attacks = 0;
-    bitmask::foreach(state_piece_positions[c], [&](pos_t i) mutable -> void {
+    bitmask::foreach(bits[c], [&](pos_t i) mutable -> void {
       auto a = self.get_attacks_from(i);
       attacks += bitmask::count_bits(a & occupied) + bitmask::count_bits(a);
     });

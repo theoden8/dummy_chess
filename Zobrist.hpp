@@ -72,9 +72,13 @@ struct StoreScope {
   {
     if(zb_store == nullptr) {
       zb_store = new hash_table<InnerObject>{};
-      for(size_t i = 0; i < ZOBRIST_SIZE; ++i) {
-        zb_store->at(i).info.unset();
-      }
+      reset();
+    }
+  }
+
+  void reset() {
+    for(size_t i = 0; i < ZOBRIST_SIZE; ++i) {
+      zb_store->at(i).info.unset();
     }
   }
 

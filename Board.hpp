@@ -22,12 +22,18 @@ protected:
   std::vector<event_t> history;
 
   struct board_info {
-    std::array<piece_bitboard_t, 12> piecemasks;
     COLOR active_player;
     pos_t enpassant_castlings;
+    pos_pair_t kings;
+    piece_bitboard_t whites, blacks, diagonal_sliding, orthogonal_sliding, pawns;
 
     INLINE bool operator==(board_info other) const noexcept {
-      return active_player == other.active_player && enpassant_castlings == other.enpassant_castlings && piecemasks == other.piecemasks;
+      return active_player == other.active_player &&
+             enpassant_castlings == other.enpassant_castlings && (
+               whites == other.whites && blacks == other.blacks &&
+               diagonal_sliding == other.diagonal_sliding && orthogonal_sliding == other.orthogonal_sliding &&
+               pawns == other.pawns && kings == other.kings
+          );
     }
 
     INLINE void unset() {
@@ -39,7 +45,14 @@ public:
   std::vector<std::pair<move_index_t, pos_t>> enpassants;
   std::array<move_index_t, 4> castlings = {board::nocastlings, board::nocastlings, board::nocastlings, board::nocastlings};
   std::vector<move_index_t> halfmoves;
-  std::array<Piece, 2*6+1>  pieces = {
+
+  std::array<piece_bitboard_t, 2> bits = {0x00, 0x00};
+  piece_bitboard_t
+    bits_slid_diag=0x00, bits_slid_orth=0x00,
+    bits_pawns=0x00;
+  std::array<pos_t, 2> pos_king = {piece::uninitialized_king, piece::uninitialized_king};
+
+  const std::array<Piece, 2*6+1>  pieces = {
     Piece(PAWN, WHITE), Piece(PAWN, BLACK),
     Piece(KNIGHT, WHITE), Piece(KNIGHT, BLACK),
     Piece(BISHOP, WHITE), Piece(BISHOP, BLACK),
@@ -58,7 +71,7 @@ public:
       initialized = true;
     }
     for(pos_t i = 0; i < board::SIZE; ++i) {
-      set_pos(i, get_piece(EMPTY, NEUTRAL));
+      set_pos(i, get_piece(EMPTY));
     }
     for(pos_t i = 0; i < f.board.length(); ++i) {
       if(f.board[i]==' ')continue;
@@ -90,37 +103,20 @@ public:
     return activePlayer_;
   }
 
-  INLINE Piece &operator[](pos_t ind) {
+  INLINE const Piece operator[](pos_t ind) const {
     assert(!(ind & ~board::MOVEMASK));
     return pieces[board_[ind]];
   }
 
-  INLINE Piece &at_pos(pos_t i, pos_t j) {
+  INLINE const Piece at_pos(pos_t i, pos_t j) const {
     return pieces[board_[board::_pos(i,j)]];
   }
 
-  INLINE const Piece &operator[](pos_t ind) const {
-    assert(!(ind & ~board::MOVEMASK));
-    return pieces[board_[ind]];
-  }
-
-  INLINE const Piece &at_pos(pos_t i, pos_t j) const {
-    return pieces[board_[board::_pos(i,j)]];
-  }
-
-  INLINE const Piece &get_piece(PIECE p=EMPTY, COLOR c=NEUTRAL) const {
+  INLINE const Piece get_piece(PIECE p=EMPTY, COLOR c=NEUTRAL) const {
     return pieces[Piece::get_piece_index(p, c)];
   }
 
-  INLINE constexpr Piece &get_piece(PIECE p=EMPTY, COLOR c=NEUTRAL) {
-    return pieces[Piece::get_piece_index(p, c)];
-  }
-
-  INLINE const Piece get_piece(const Piece &p) const {
-    return get_piece(p.value, p.color);
-  }
-
-  INLINE constexpr Piece get_piece(Piece &p) {
+  INLINE constexpr Piece get_piece(const Piece p) {
     return get_piece(p.value, p.color);
   }
 
@@ -128,29 +124,71 @@ public:
     pos_t enpassant_castlings = (((enpassant_trace() == event::enpassantnotrace) ? 0x0f : board::_x(enpassant_trace())) << 4);
     enpassant_castlings |= get_castlings_compressed();
     return (board_info){
-      .piecemasks = {
-        get_piece(PAWN,WHITE).mask, get_piece(KNIGHT,WHITE).mask, get_piece(BISHOP,WHITE).mask,
-        get_piece(ROOK,WHITE).mask, get_piece(QUEEN,WHITE).mask, get_piece(KING,WHITE).mask,
-        get_piece(PAWN,BLACK).mask, get_piece(KNIGHT,BLACK).mask, get_piece(BISHOP,BLACK).mask,
-        get_piece(ROOK,BLACK).mask, get_piece(QUEEN,BLACK).mask, get_piece(KING,BLACK).mask
-      },
       .active_player = activePlayer(),
-      .enpassant_castlings = enpassant_castlings
+      .enpassant_castlings = enpassant_castlings,
+      .kings = bitmask::_pos_pair(pos_king[WHITE], pos_king[BLACK]),
+      .whites = bits[WHITE],
+      .blacks = bits[BLACK],
+      .diagonal_sliding = bits_slid_diag,
+      .orthogonal_sliding = bits_slid_orth,
+      .pawns = bits_pawns,
     };
   }
 
-  INLINE void unset_pos(pos_t i) {
-    self[i].unset_pos(i);
-    set_pos(i, self.get_piece(EMPTY));
+  INLINE piece_bitboard_t get_knight_bits() const {
+    const piece_bitboard_t not_knights = bits_slid_diag | bits_slid_orth | bits_pawns
+      | piece::pos_mask(pos_king[WHITE]) | piece::pos_mask(pos_king[BLACK]);
+    return (bits[WHITE] | bits[BLACK]) ^ not_knights;
   }
 
-  INLINE void set_pos(pos_t i, Piece &p) {
-    p.set_pos(i);
+  INLINE void unset_pos(pos_t i) {
+    if(self[i].color == WHITE) {
+      piece::unset_pos(bits[WHITE], i);
+      if(self[i].value == KING && pos_king[WHITE] == i) {
+        pos_king[WHITE] = piece::uninitialized_king;
+      }
+    } else if(self[i].color == BLACK) {
+      piece::unset_pos(bits[BLACK], i);
+      if(self[i].value == KING && pos_king[BLACK] == i) {
+        pos_king[BLACK] = piece::uninitialized_king;
+      }
+    }
+    switch(self[i].value) {
+      case PAWN:piece::unset_pos(bits_pawns, i);break;
+      case BISHOP:piece::unset_pos(bits_slid_diag, i);break;
+      case ROOK:piece::unset_pos(bits_slid_orth, i);break;
+      case QUEEN:piece::unset_pos(bits_slid_orth, i);
+                 piece::unset_pos(bits_slid_diag, i);break;
+      default:break;
+    }
+    self.board_[i] = self.get_piece(EMPTY).piece_index;
+  }
+
+  INLINE void set_pos(pos_t i, const Piece p) {
+    if(p.color == WHITE) {
+      piece::set_pos(bits[WHITE], i);
+      if(p.value == KING) {
+        pos_king[WHITE] = i;
+      }
+    } else if(p.color == BLACK) {
+      piece::set_pos(bits[BLACK], i);
+      if(p.value == KING) {
+        pos_king[BLACK] = i;
+      }
+    }
+    switch(p.value) {
+      case BISHOP:piece::set_pos(bits_slid_diag, i);break;
+      case ROOK:piece::set_pos(bits_slid_orth, i);break;
+      case QUEEN:piece::set_pos(bits_slid_orth, i);
+                 piece::set_pos(bits_slid_diag, i);break;
+      case PAWN:piece::set_pos(bits_pawns, i);break;
+      default:break;
+    }
     self.board_[i] = p.piece_index;
   }
 
-  INLINE void put_pos(pos_t i, Piece &p) {
-    self[i].unset_pos(i);
+  INLINE void put_pos(pos_t i, const Piece p) {
+    unset_pos(i);
     set_pos(i, p);
   }
 
@@ -322,10 +360,31 @@ public:
     }
   }
 
+  piece_bitboard_t get_mask(const Piece p) const {
+    const COLOR c = p.color;
+    if(p.value == PAWN) {
+      return bits_pawns & bits[c];
+    } else if(p.value == KING) {
+      return piece::pos_mask(pos_king[c]);
+    }
+    piece_bitboard_t mask = 0x00;
+    if(p.value == BISHOP || p.value == QUEEN) {
+      mask |= bits_slid_diag;
+    }
+    if(p.value == ROOK || p.value == QUEEN) {
+      mask |= bits_slid_orth;
+    }
+    if(p.value == KNIGHT) {
+      mask = get_knight_bits();
+    }
+    return mask & bits[c];
+  }
+
   zobrist::key_t zb_hash() const {
     zobrist::key_t zb = 0x00;
     for(pos_t i = 0; i < board::NO_PIECE_INDICES - 1; ++i) {
-      bitmask::foreach(pieces[i].mask, [&](pos_t pos) mutable -> void {
+      const Piece p = self.pieces[i];
+      bitmask::foreach(get_mask(p), [&](pos_t pos) mutable -> void {
         zb ^= zobrist::rnd_hashes[zobrist::rnd_start_piecepos + board::SIZE * i + pos];
       });
     }
@@ -582,12 +641,11 @@ public:
   }
 
   void init_update_state() {
-    init_state_piece_positions();
     init_state_attacks();
     init_state_checkline();
     init_state_moves();
     history.reserve(100);
-    halfmoves.reserve(bitmask::count_bits(get_piece_positions(BOTH)) - 2);
+    halfmoves.reserve(piece::size(bits[WHITE] | bits[BLACK]) - 2);
     enpassants.reserve(16);
     // memoization
     state_hist_attacks.reserve(100);
@@ -612,14 +670,12 @@ public:
   std::vector<board_mailbox_t> state_hist_attacks;
   std::vector<board_mailbox_t> state_hist_moves;
   void update_state_on_event() {
-    init_state_piece_positions();
     update_state_checkline();
     init_state_moves();
   }
 
   void restore_state_on_event() {
     const COLOR c = activePlayer();
-    init_state_piece_positions();
     state_attacks = state_hist_attacks.back();
     state_hist_attacks.pop_back();
     update_state_checkline();
@@ -631,32 +687,26 @@ public:
     state_hist_pins_rays.pop_back();
   }
 
-  std::array<piece_bitboard_t, NO_COLORS> state_piece_positions = {0x00, 0x00};
-  ALWAYS_UNROLL INLINE piece_bitboard_t get_piece_positions(COLOR c) const {
-    assert(c != NEUTRAL);
-    if(c==BOTH)return ~get_piece(EMPTY).mask;
-    piece_bitboard_t mask = 0ULL;
-    for(PIECE p : {PAWN,KNIGHT,BISHOP,ROOK,QUEEN,KING}) {
-      mask|=self.get_piece(p, c).mask;
-    }
-    return mask;
-  }
-
-  void init_state_piece_positions() {
-    state_piece_positions[WHITE] = get_piece_positions(WHITE);
-    state_piece_positions[BLACK] = get_piece_positions(BLACK);
-  }
-
   std::array <piece_bitboard_t, board::SIZE> state_attacks = {0x00};
   ALWAYS_UNROLL void init_state_attacks() {
     for(auto&a:state_attacks)a=0ULL;
+    std::array<piece_bitboard_t, 2> kingmask = {piece::pos_mask(pos_king[WHITE]), piece::pos_mask(pos_king[BLACK])};
     for(COLOR c : {WHITE, BLACK}) {
-      const piece_bitboard_t occupied = get_piece_positions(BOTH) & ~get_piece(KING, enemy_of(c)).mask;
-      for(PIECE p : {PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING}) {
-        get_piece(p,c).foreach([&](pos_t pos) mutable noexcept -> void {
-          state_attacks[pos] |= get_piece(p,c).get_attack(pos,occupied);
-        });
-      }
+      const piece_bitboard_t occupied = (bits[WHITE] | bits[BLACK]) & ~kingmask[enemy_of(c)];
+
+      bitmask::foreach(bits_pawns & bits[c], [&](pos_t pos) mutable noexcept -> void {
+        state_attacks[pos] |= piece::get_pawn_attack(pos,occupied,c);
+      });
+      bitmask::foreach(bits_slid_diag & bits[c], [&](pos_t pos) mutable noexcept -> void {
+        state_attacks[pos] |= piece::get_sliding_diag_attack(pos,occupied);
+      });
+      bitmask::foreach(bits_slid_orth & bits[c], [&](pos_t pos) mutable noexcept -> void {
+        state_attacks[pos] |= piece::get_sliding_orth_attack(pos,occupied);
+      });
+      bitmask::foreach(get_knight_bits() & bits[c], [&](pos_t pos) mutable noexcept -> void {
+        state_attacks[pos] |= piece::get_knight_attack(pos);
+      });
+      state_attacks[pos_king[c]] |= piece::get_king_attack(pos_king[c], occupied);
     }
   }
 
@@ -665,25 +715,25 @@ public:
   INLINE piece_bitboard_t get_sliding_attacks_to(pos_t j, COLOR c=NEUTRAL) const {
     if(c==NEUTRAL)c=activePlayer();
     if(c==BOTH)return get_attacks_to(j,WHITE)|get_attacks_to(j,BLACK);
-    const piece_bitboard_t occupied = get_piece_positions(BOTH);
-    return (Attacks<BISHOPM>::get_attacks(j,occupied) & (get_piece(BISHOP,c).mask|get_piece(QUEEN,c).mask))
-        | (Attacks<ROOKM>::get_attacks(j,occupied) & (get_piece(ROOK,c).mask|get_piece(QUEEN,c).mask));
+    const piece_bitboard_t occupied = bits[WHITE] | bits[BLACK];
+    return (Attacks<BISHOPM>::get_attacks(j,occupied) & bits_slid_diag & bits[c])
+        | (Attacks<ROOKM>::get_attacks(j,occupied) & bits_slid_orth & bits[c]);
   }
 
   INLINE piece_bitboard_t get_pawn_attacks_to(pos_t j, COLOR c=NEUTRAL) const {
     if(c==NEUTRAL)c=activePlayer();
-    if(c==BOTH)return get_attacks_to(j,WHITE)|get_attacks_to(j,BLACK);
-    const piece_bitboard_t occupied = get_piece_positions(BOTH);
-    return get_piece(PAWN,enemy_of(c)).get_attack(j,occupied) & get_piece(PAWN,c).mask;
+    assert(c != BOTH);
+    const piece_bitboard_t occupied = bits[WHITE] | bits[BLACK];
+    return piece::get_pawn_attack(j,occupied,enemy_of(c)) & (bits_pawns & bits[c]);
   }
 
   INLINE piece_bitboard_t get_attacks_to(pos_t j, COLOR c=NEUTRAL) const {
     if(c==NEUTRAL)c=activePlayer();
-    if(c==BOTH)return get_attacks_to(j,WHITE)|get_attacks_to(j,BLACK);
-    const piece_bitboard_t occupied = get_piece_positions(BOTH);
+    assert(c != BOTH);
+    const piece_bitboard_t occupied = bits[WHITE] | bits[BLACK];
     return get_sliding_attacks_to(j, c)
-        | (Attacks<KNIGHTM>::get_attacks(j) & get_piece(KNIGHT,c).mask)
-        | (Attacks<KINGM>::get_attacks(j,occupied) & get_piece(KING,c).mask)
+        | (Attacks<KNIGHTM>::get_attacks(j) & get_knight_bits() & bits[c])
+        | (Attacks<KINGM>::get_attacks(j,occupied) & piece::pos_mask(pos_king[c]))
         | get_pawn_attacks_to(j, c);
   }
 
@@ -692,50 +742,73 @@ public:
   }
 
   void update_state_attacks_pos(pos_t pos) {
-    const piece_bitboard_t affected = (1ULL << pos) | get_sliding_attacks_to(pos, BOTH);
-    const piece_bitboard_t occupied = get_piece_positions(BOTH);
-    bitmask::foreach(affected, [&](pos_t i) mutable -> void {
-      state_attacks[i] = self[i].get_attack(i, occupied & ~get_piece(KING,enemy_of(self[i].color)).mask);
+    const piece_bitboard_t affected = piece::pos_mask(pos) | get_sliding_attacks_to(pos, BOTH);
+    const piece_bitboard_t occupied = bits[WHITE] | bits[BLACK];
+
+    bitmask::foreach(affected, [&](pos_t pos) mutable noexcept -> void {
+      const piece_bitboard_t posmask = piece::pos_mask(pos);
+      const piece_bitboard_t occ_c = occupied & ~piece::pos_mask(pos_king[enemy_of(self[pos].color)]);
+      if(!(occupied & posmask)) {
+        state_attacks[pos] = 0x00;
+        return;
+      } else if(bits_pawns & posmask) {
+        state_attacks[pos] = piece::get_pawn_attack(pos, occ_c, self[pos].color);
+      } else if(pos == pos_king[WHITE] || pos == pos_king[BLACK]) {
+        state_attacks[pos] = piece::get_king_attack(pos,occ_c);
+      } else if(posmask & (bits_slid_diag | bits_slid_orth)) {
+        state_attacks[pos] = 0x00;
+        if(posmask & bits_slid_diag) {
+          state_attacks[pos] |= piece::get_sliding_diag_attack(pos,occ_c);
+        }
+        if(posmask & bits_slid_orth) {
+          state_attacks[pos] |= piece::get_sliding_orth_attack(pos,occ_c);
+        }
+      } else {
+        state_attacks[pos] = piece::get_knight_attack(pos);
+      }
     });
   }
 
   ALWAYS_UNROLL INLINE piece_bitboard_t get_attack_mask(COLOR c=NEUTRAL) const {
     if(c==NEUTRAL)c=activePlayer();
     if(c==BOTH)return get_attack_mask(WHITE)|get_attack_mask(BLACK);
-    const piece_bitboard_t occupied = get_piece_positions(BOTH) & ~get_piece(KING, enemy_of(c)).mask;
+    const piece_bitboard_t occupied = (bits[WHITE] | bits[BLACK]) & ~piece::pos_mask(pos_king[enemy_of(c)]);
     piece_bitboard_t mask = 0x00;
-    for(int p = 0; p < NO_PIECES; ++p) {
-      mask |= get_piece((PIECE)p, c).get_attacks(occupied);
-    }
+    mask |= piece::get_pawn_attacks(bits_pawns & bits[c], c);
+    mask |= piece::get_sliding_diag_attacks(bits_slid_diag & bits[c], occupied);
+    mask |= piece::get_sliding_orth_attacks(bits_slid_orth & bits[c], occupied);
+    mask |= piece::get_knight_attacks(get_knight_bits() & bits[c]);
+    mask |= piece::get_king_attack(pos_king[c], occupied);
     return mask;
-  }
-
-  inline pos_t get_king_pos(COLOR c) const {
-    return bitmask::log2_of_exp2(get_piece(KING, c).mask);
   }
 
   std::array<piece_bitboard_t, NO_COLORS> state_checkline = {0x00,0x00};
   void init_state_checkline(COLOR c=NEUTRAL) {
     if(c==NEUTRAL)c=activePlayer();
-    const piece_bitboard_t occupied = get_piece_positions(BOTH);
-    const pos_t kingpos = get_king_pos(c);
-    const piece_bitboard_t attackers = get_attacks_to(kingpos, enemy_of(c));
+    const piece_bitboard_t occupied = bits[WHITE] | bits[BLACK];
+    const piece_bitboard_t attackers = get_attacks_to(pos_king[c], enemy_of(c));
     if(!attackers) {
       state_checkline[c] = ~0x00ULL;
       return;
     } else if(!bitmask::is_exp2(attackers)) {
-      state_checkline[c] = 0x00;
+      state_checkline[c] = 0x00ULL;
       return;
     }
     const pos_t attacker = bitmask::log2_of_exp2(attackers);
-    state_checkline[c] = self[attacker].get_attacking_ray(kingpos,attacker,occupied&~get_piece(KING,c).mask);
-    state_checkline[c] |= (1ULL << attacker);
+    state_checkline[c] = 0x00;
+    if(bits_slid_diag & attackers) {
+      state_checkline[c] |= piece::get_sliding_diag_attacking_ray(pos_king[c], attacker, occupied&~piece::pos_mask(pos_king[c]));
+    }
+    if(bits_slid_orth & attackers) {
+      state_checkline[c] |= piece::get_sliding_orth_attacking_ray(pos_king[c], attacker, occupied&~piece::pos_mask(pos_king[c]));
+    }
+    state_checkline[c] |= attackers;
   }
 
   piece_bitboard_t state_update_checkline_kingattacks[NO_COLORS] = {~0ULL,~0ULL};
   inline void update_state_checkline() {
     const COLOR c = activePlayer();
-    const piece_bitboard_t attackers = get_attacks_to(get_king_pos(c), enemy_of(c));
+    const piece_bitboard_t attackers = get_attacks_to(pos_king[c], enemy_of(c));
     if(attackers == state_update_checkline_kingattacks[c])return;
     state_update_checkline_kingattacks[c]=attackers;
     init_state_checkline(c);
@@ -748,42 +821,36 @@ public:
 
   INLINE bool is_checkmate() const {
     const COLOR c = activePlayer();
-    return (state_checkline[c] != ~0ULL) && (get_attacks_from(get_king_pos(c)) & ~get_attack_mask(enemy_of(c)));
+    return (state_checkline[c] != ~0ULL) && (get_attacks_from(pos_king[c]) & ~get_attack_mask(enemy_of(c)));
   }
 
   INLINE bool can_move(COLOR c=NEUTRAL) const {
     if(c==NEUTRAL)c=activePlayer();
     bool canmove = false;
-    for(PIECE p : {PAWN,KNIGHT,BISHOP,ROOK,QUEEN,KING}) {
-      get_piece(p,c).foreach([&](pos_t i) mutable -> void {
-          if(get_moves_from(i,c)) {
-            canmove = true;
-          }
-      });
-      if(canmove)break;
-    }
+    bitmask::foreach(bits[c], [&](pos_t pos) mutable -> void {
+      if(get_moves_from(pos, c))canmove=true;
+    });
     return canmove;
   }
 
   INLINE bool is_draw_stalemate() const {
     const COLOR c = activePlayer();
-    return !get_attacks_to(get_king_pos(c), enemy_of(c)) && !can_move(c);
+    return !get_attacks_to(pos_king[c], enemy_of(c)) && !can_move(c);
   }
 
   inline bool is_draw_material() const {
-    if(get_piece(QUEEN,BLACK).mask || get_piece(QUEEN,WHITE).mask
-        || get_piece(ROOK,BLACK).mask || get_piece(ROOK,WHITE).mask)
-    {
+    if(bits_slid_orth) {
       return false;
     }
-    const piece_bitboard_t occupied = get_piece_positions(BOTH);
-    return (bitmask::count_bits(occupied) == 2) // two kings
-        || (bitmask::count_bits(occupied) == 3 // material draw, kings and a bishop/knight
-            && get_piece(KNIGHT,WHITE).size() + get_piece(BISHOP,WHITE).size()
-               + get_piece(KNIGHT,BLACK).size() + get_piece(BISHOP,BLACK).size() == 1)
-        || (bitmask::count_bits(occupied) == 4 // material draw, kings and a bishop/knight each
-            && get_piece(KNIGHT,WHITE).size() + get_piece(BISHOP,WHITE).size() == 1
-            && get_piece(KNIGHT,BLACK).size() + get_piece(BISHOP,BLACK).size() == 1);
+    const piece_bitboard_t occupied = bits[WHITE] | bits[BLACK];
+    const size_t no_pieces = piece::size(occupied);
+    const piece_bitboard_t bishops = bits_slid_diag;
+    const piece_bitboard_t knights = occupied ^ (bits_pawns | bishops | piece::pos_mask(pos_king[WHITE] | piece::pos_mask(pos_king[BLACK])));
+    return (no_pieces == 2)
+        || (no_pieces == 3 && piece::size(knights | bishops) == 1)
+        || (no_pieces == 4
+            && piece::size(knights | bishops | bits[WHITE]) == 1
+            && piece::size(knights | bishops | bits[BLACK]) == 1);
   }
 
   inline bool is_draw() const {
@@ -797,31 +864,28 @@ public:
     const COLOR c = activePlayer();
     // maybe do this as a loop for incremental updates
     {
-      const piece_bitboard_t friends = state_piece_positions[c],
-                             foes  = state_piece_positions[enemy_of(c)],
-                             attack_mask = get_attack_mask(enemy_of(c)),
+      const COLOR ec = enemy_of(c);
+      const piece_bitboard_t friends = bits[c], foes  = bits[ec],
+                             attack_mask = get_attack_mask(ec),
                              pins = get_pins(c);
       const bool doublecheck = (state_checkline[c] == 0x00);
-      for(pos_t p = 0; p < NO_PIECES; ++p) {
-        if(doublecheck && p!=KING)continue;
-        get_piece((PIECE)p,c).foreach([&](pos_t pos) mutable noexcept -> void {
-          if(p==PAWN) {
-            piece_bitboard_t foes_pawn = foes;
-            if(enpassant_trace() != event::enpassantnotrace) {
-              foes_pawn |= (1ULL << enpassant_trace());
-            }
-            state_moves[pos] = get_attacks_from(pos) & foes_pawn;
-            state_moves[pos] |= get_push_moves(c, pos, friends|foes);
-            state_moves[pos] &= state_checkline[c];
-          } else if(p==KING) {
-            state_moves[pos] = get_attacks_from(pos) & ~friends & ~attack_mask;
-            state_moves[pos] |= Moves<KINGM>::get_castling_moves(pos, friends|foes, attack_mask, get_castlings_mask(), c);
-          } else {
-            state_moves[pos] = get_attacks_from(pos) & ~friends;
-            state_moves[pos] &= state_checkline[c];
+      if(!doublecheck) {
+        bitmask::foreach(bits_pawns & bits[c], [&](pos_t pos) mutable noexcept -> void {
+          piece_bitboard_t foes_pawn = foes;
+          if(enpassant_trace() != event::enpassantnotrace) {
+            foes_pawn |= piece::pos_mask(enpassant_trace());
           }
+          state_moves[pos] = get_attacks_from(pos) & foes_pawn;
+          state_moves[pos] |= get_push_moves(c, pos, friends|foes);
+          state_moves[pos] &= state_checkline[c];
+        });
+        bitmask::foreach(bits[c] & ~bits_pawns, [&](pos_t pos) mutable noexcept -> void {
+          state_moves[pos] = get_attacks_from(pos) & ~friends;
+          state_moves[pos] &= state_checkline[c];
         });
       }
+      state_moves[pos_king[c]] = get_attacks_from(pos_king[c]) & ~friends & ~attack_mask;
+      state_moves[pos_king[c]] |= Moves<KINGM>::get_castling_moves(pos_king[c], friends|foes, attack_mask, get_castlings_mask(), c);
       init_state_moves_checkline_enpassant_takes(c);
       init_state_pins();
     }
@@ -853,26 +917,24 @@ public:
     if(c==NEUTRAL)return;
     const piece_bitboard_t dstbit = 1ULL << j;
     const COLOR ec = enemy_of(c);
-    const piece_bitboard_t friends = state_piece_positions[c],
-                           foes = state_piece_positions[ec];
-    const piece_bitboard_t rook_xray = get_piece(ROOK,c).get_xray_attack(j,foes,friends)
-                                       & (get_piece(ROOK,ec).mask | get_piece(QUEEN,ec).mask);
+    const piece_bitboard_t friends = bits[c],
+                           foes = bits[ec];
+    const piece_bitboard_t rook_xray = piece::get_sliding_orth_xray_attack(j, foes, friends) & bits[ec] & bits_slid_orth;
     if(rook_xray) {
       bitmask::foreach(rook_xray, [&](pos_t i) mutable -> void {
-        if(self[i].value == ROOK || self[i].value == QUEEN) {
-          const piece_bitboard_t srcbit = 1ULL << i;
-          const piece_bitboard_t r = get_piece(ROOK,c).get_attacking_xray(i,j,foes|dstbit,friends) & ~srcbit;
+        if(bits_slid_orth & piece::pos_mask(i)) {
+          const piece_bitboard_t srcbit = piece::pos_mask(j);
+          const piece_bitboard_t r = piece::get_sliding_orth_attacking_xray(i,j,foes|dstbit,friends) & ~srcbit;
           func(i, r | dstbit);
         }
       });
     }
-    const piece_bitboard_t bishop_xray = get_piece(BISHOP,c).get_xray_attack(j,foes,friends)
-                                         & (get_piece(BISHOP,ec).mask | get_piece(QUEEN,ec).mask);
+    const piece_bitboard_t bishop_xray = piece::get_sliding_diag_xray_attack(j, foes, friends) & bits[ec] & bits_slid_diag;
     if(bishop_xray) {
       bitmask::foreach(bishop_xray, [&](pos_t i) mutable -> void {
-        if(self[i].value == BISHOP || self[i].value == QUEEN) {
-          const piece_bitboard_t srcbit = 1ULL << i;
-          const piece_bitboard_t r = get_piece(BISHOP,c).get_attacking_xray(i,j,foes|dstbit,friends) & ~srcbit;
+        if(bits_slid_diag & piece::pos_mask(i)) {
+          const piece_bitboard_t srcbit = piece::pos_mask(j);
+          const piece_bitboard_t r = piece::get_sliding_diag_attacking_xray(i,j,foes|dstbit,friends) & ~srcbit;
           func(i, r | dstbit);
         }
       });
@@ -887,11 +949,12 @@ public:
     // maybe do this as a loop for incremental updates
     {
       state_pins[c] = 0x00;
-      const piece_bitboard_t friends = state_piece_positions[c] & ~get_piece(KING,c).mask;
-      iter_attacking_xrays(get_king_pos(c), [&](pos_t i, piece_bitboard_t r) mutable -> void {
+      const piece_bitboard_t kingmask = piece::pos_mask(pos_king[c]);
+      const piece_bitboard_t friends = bits[c] & ~kingmask;
+      iter_attacking_xrays(pos_king[c], [&](pos_t i, piece_bitboard_t r) mutable -> void {
         const pos_t attacker = i;
-        r |= 1ULL << attacker;
-        r &= ~get_piece(KING,c).mask;
+        r |= piece::pos_mask(attacker);
+        r &= ~kingmask;
         const piece_bitboard_t pin = friends & r;
         if(pin) {
           assert(bitmask::is_exp2(pin));
@@ -914,17 +977,16 @@ public:
       if(state_checkline[c] != ~0ULL)return;
       const pos_t etrace = enpassant_trace();
       const pos_t epawn = enpassant_pawn();
-      const pos_t kingpos = get_king_pos(c);
-      const piece_bitboard_t h = bitmask::hline << (board::_y(kingpos) * board::LEN);
-      if(!((h & get_piece(ROOK,enemy_of(c)).mask) || (h & get_piece(QUEEN, enemy_of(c)).mask)))return;
-      if(!(h & (1ULL << epawn)))return;
+      const piece_bitboard_t h = bitmask::hline << (board::_y(pos_king[c]) * board::LEN);
+      if(!(h & bits_slid_orth & bits[c]))return;
+      if(!(h & piece::pos_mask(epawn)))return;
       const piece_bitboard_t apawns = get_pawn_attacks_to(etrace,c);
       if(!apawns)return;
       bitmask::foreach(apawns, [&](pos_t apawn) mutable -> void {
         put_pos(apawn, get_piece(EMPTY));
         put_pos(epawn, get_piece(EMPTY));
         //printf("consider horizontal pin %hhu -> %hhu\n", apawn, etrace);
-        if(get_sliding_attacks_to(kingpos,enemy_of(c))) {
+        if(get_sliding_attacks_to(pos_king[c],enemy_of(c))) {
           //printf("horizontal pin disable %hhu -> %hhu\n", apawn, etrace);
           state_pins[self[apawn].color] |= (1ULL << apawn);
           const piece_bitboard_t forbid = ~(1ULL << etrace);
@@ -950,7 +1012,7 @@ public:
   void print() const {
     for(pos_t i = board::LEN; i > 0; --i) {
       for(pos_t j = 0; j < board::LEN; ++j) {
-        const Piece &p = self[(i-1) * board::LEN + j];
+        const Piece p = self[(i-1) * board::LEN + j];
         std::cout << p.str() << " ";
       }
       std::cout << std::endl;
