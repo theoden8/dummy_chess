@@ -181,8 +181,9 @@ public:
   }
 
   double evaluate() const {
-    if(self.is_draw())return 0;
-    else if(!can_move()) {
+    if(self.is_draw()){
+      return 0;
+    } else if(is_checkmate()) {
       return (play_as==activePlayer()) ? 1e7 : -1e7;
     }
     double score = heuristic_of(WHITE) - heuristic_of(BLACK);
@@ -547,7 +548,7 @@ public:
   bool play_as = WHITE;
   size_t nodes_searched = 0;
   double evaluation = DBL_MAX;
-  const double UNINITIALIZED = -1e9;
+  size_t zb_hit = 0, zb_miss = 0;
   template <typename F>
   move_t get_fixed_depth_move(int16_t depth, F &&callback_f, const std::unordered_set<move_t> &searchmoves) {
     reset_planning();
@@ -574,7 +575,11 @@ public:
     int16_t depth;
     size_t nodes;
   };
-  size_t zb_hit = 0, zb_miss = 0;
+
+  zobrist::hash_table_ptr<perft_info> perft_store = nullptr;
+  decltype(auto) get_zobrist_perft_scope() {
+    return zobrist::make_store_object_scope<perft_info>(perft_store);
+  }
   size_t _perft(int16_t depth, std::array<perft_info, ZOBRIST_SIZE> &perft_store) {
     if(depth == 1 || depth == 0) {
       return count_moves();
@@ -603,9 +608,8 @@ public:
     return nodes;
   }
 
-  zobrist::hash_table_ptr<perft_info> perft_store = nullptr;
   inline size_t perft(int16_t depth=1) {
-    decltype(auto) store_scope = zobrist::make_store_object_scope<perft_info>(perft_store);
+    decltype(auto) store_scope = get_zobrist_perft_scope();
     zb_hit = 0, zb_miss = 0;
     return _perft(depth, store_scope.get_object());
   }

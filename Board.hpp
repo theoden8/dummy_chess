@@ -116,7 +116,7 @@ public:
     return pieces[Piece::get_piece_index(p, c)];
   }
 
-  INLINE constexpr Piece get_piece(const Piece p) {
+  INLINE const Piece get_piece(const Piece p) {
     return get_piece(p.value, p.color);
   }
 
@@ -769,9 +769,8 @@ public:
     });
   }
 
-  ALWAYS_UNROLL INLINE piece_bitboard_t get_attack_mask(COLOR c=NEUTRAL) const {
-    if(c==NEUTRAL)c=activePlayer();
-    if(c==BOTH)return get_attack_mask(WHITE)|get_attack_mask(BLACK);
+  INLINE piece_bitboard_t get_attack_mask(COLOR c=NEUTRAL) const {
+    assert(c != BOTH && c != NEUTRAL);
     const piece_bitboard_t occupied = (bits[WHITE] | bits[BLACK]) & ~piece::pos_mask(pos_king[enemy_of(c)]);
     piece_bitboard_t mask = 0x00;
     mask |= piece::get_pawn_attacks(bits_pawns & bits[c], c);
@@ -821,7 +820,10 @@ public:
 
   INLINE bool is_checkmate() const {
     const COLOR c = activePlayer();
-    return (state_checkline[c] != ~0ULL) && (get_attacks_from(pos_king[c]) & ~get_attack_mask(enemy_of(c)));
+    if(state_checkline[c] == ~0ULL || (get_attacks_from(pos_king[c]) & ~bits[c] & ~get_attack_mask(enemy_of(c)))) {
+      return false;
+    }
+    return !is_draw() && !can_move();
   }
 
   INLINE bool can_move(COLOR c=NEUTRAL) const {
@@ -866,8 +868,7 @@ public:
     {
       const COLOR ec = enemy_of(c);
       const piece_bitboard_t friends = bits[c], foes  = bits[ec],
-                             attack_mask = get_attack_mask(ec),
-                             pins = get_pins(c);
+                             attack_mask = get_attack_mask(ec);
       const bool doublecheck = (state_checkline[c] == 0x00);
       if(!doublecheck) {
         bitmask::foreach(bits_pawns & bits[c], [&](pos_t pos) mutable noexcept -> void {

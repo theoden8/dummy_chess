@@ -169,7 +169,7 @@ struct PGN {
       ending = "1/2 - 1/2 (50 moves)";
     } else if(board.is_draw_material()) {
       ending = "1/2 - 1/2 (material)";
-    } else if(!board.can_move()) {
+    } else if(board.is_checkmate()) {
       ply.back() += '#';
       ending = (c == WHITE) ? "1-0"s : "0-1"s;
     } else if(no_checks > 0) {
