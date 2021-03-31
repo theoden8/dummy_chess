@@ -89,6 +89,7 @@ struct StoreScope {
   void end_scope() {
     if(is_outer_scope) {
       delete zb_store;
+      zb_store = nullptr;
       is_outer_scope = false;
     }
   }

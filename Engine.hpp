@@ -215,7 +215,7 @@ public:
 
   double score_decay(double score) {
     if(std::abs(score) > 1e6) {
-      score -= 1.;
+      score *= .999;
     }
     return score;
   }
@@ -263,6 +263,7 @@ public:
     }
     std::sort(capturemoves.begin(), capturemoves.end());
     assert(pline.empty());
+    move_t bestmove = board::nomove;
     for(const auto [_, m] : capturemoves) {
       //assert(check_valid_move(m));
       MoveLine pline_alt = pline.branch_from_past();
@@ -276,19 +277,20 @@ public:
       if(score >= beta) {
         pline.replace_line(pline_alt);
         if(overwrite) {
-          ab_store[k] = { .info=info, .play_as = play_as, .depth=depth, .eval=score, .subpline=pline_alt.get_future() };
+          ab_store[k] = { .info=info, .play_as = play_as, .depth=depth, .eval=score, .m=m, .subpline=pline_alt.get_future() };
         }
         return score;
       } else if(score > alpha) {
         pline.replace_line(pline_alt);
         bestscore = alpha;
+        bestmove = m;
         if(score > alpha) {
           alpha = score;
         }
       }
     }
     if(overwrite) {
-      ab_store[k] = { .info=info, .play_as = play_as, .depth=depth, .eval=bestscore, .subpline=pline.get_future() };
+      ab_store[k] = { .info=info, .play_as = play_as, .depth=depth, .eval=bestscore, .m=bestmove, .subpline=pline.get_future() };
     }
     ++nodes_searched;
     return alpha;
@@ -340,11 +342,11 @@ public:
         volatile auto mscope = move_scope(m);
         pline_alt.premove(m);
         score = -score_decay(alpha_beta(-beta, -alpha, depth - 1, pline_alt, ab_store));
-  //      if(!check_valid_sequence(pline_alt)) {
-  //        str::print("pline not playable", _line_str(pline_alt.full()));
-  //        str::print("sequence not valid: [", _line_str(pline_alt), "]");
-  //        str::print("FEN: ", fen::export_as_string(self.export_as_fen()));
-  //      }
+//        if(!check_valid_sequence(pline_alt)) {
+//          str::print("pline not playable", _line_str(pline_alt.full()));
+//          str::print("sequence not valid: [", _line_str(pline_alt), "]");
+//          str::print("FEN: ", fen::export_as_string(self.export_as_fen()));
+//        }
         assert(check_valid_sequence(pline_alt));
         pline_alt.recall();
       }

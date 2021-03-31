@@ -3,7 +3,7 @@ OPTFLAGS = -Ofast -DNDEBUG -flto -fwhole-program -march=native
 PROFFLAGS = $(OPTFLAGS) -pg
 CXXFLAGS = -std=c++20 -I. -Wall -Wextra -Wno-unused -Wno-parentheses -m64
 # clang:
-#CXX = clang++-12
+#CXX = clang++-13
 #CXXFLAGS += -Wno-unused-parameter -Wno-range-loop-construct -Wno-unknown-attributes -Wno-ignored-optimization-argument
 # CXXFLAGS += -fopt-info
 LDFLAGS =
