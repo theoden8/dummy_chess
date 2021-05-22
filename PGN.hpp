@@ -59,16 +59,19 @@ struct PGN {
     piece_bitboard_t mask = ~0x00ULL;
     const COLOR c = board[i].color;
     if(board.bits_pawns & piece::pos_mask(i)) {
-      mask = board.bits_pawns & board.bits[c];
+      mask = board.bits_pawns;
+    } else if(board.bits_slid_diag & board.bits_slid_orth & piece::pos_mask(i)) {
+      mask = board.bits_slid_diag & board.bits_slid_orth;
     } else if(board.bits_slid_diag & piece::pos_mask(i)) {
-      mask = board.bits_slid_diag & board.bits[c];
+      mask = board.bits_slid_diag;
     } else if(board.bits_slid_orth & piece::pos_mask(i)) {
-      mask &= board.bits_slid_orth & board.bits[c];
+      mask = board.bits_slid_orth;
     } else if(i == board.pos_king[c]) {
       mask = piece::pos_mask(i);
     } else {
-      mask =  board.get_knight_bits() & board.bits[c];
+      mask = board.get_knight_bits();
     }
+    mask &= board.bits[c];
 
     bitmask::foreach(mask, [&](pos_t k) mutable -> void {
       if(rank_resolved && file_resolved)return;
