@@ -66,7 +66,7 @@ struct StoreScope {
   hash_table_ptr<InnerObject> &zb_store;
   bool is_outer_scope;
 
-  StoreScope(hash_table_ptr<InnerObject> &scope_ptr):
+  explicit inline StoreScope(hash_table_ptr<InnerObject> &scope_ptr):
     zb_store(scope_ptr),
     is_outer_scope(scope_ptr == nullptr)
   {

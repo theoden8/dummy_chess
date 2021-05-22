@@ -10,6 +10,7 @@
 #include <climits>
 
 #include <array>
+#include <vector>
 
 #include <Optimizations.hpp>
 
@@ -147,6 +148,14 @@ namespace bitmask {
       assert(x & 1ULL << r);
       x &= ~(1LLU << r);
     }
+  }
+
+  std::vector<pos_t> as_vector(uint64_t mask) {
+    std::vector<pos_t> v(0, count_bits(mask));
+    foreach(mask, [&](pos_t i) mutable -> void {
+        v.push_back(i);
+    });
+    return v;
   }
 
   // print locations of each set bit

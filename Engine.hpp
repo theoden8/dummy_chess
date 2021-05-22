@@ -51,7 +51,7 @@ public:
   piece_bitboard_t get_capture_moves_from(pos_t i) const {
     piece_bitboard_t pb = 0x00;
     iter_capture_moves_from(i, [&](pos_t i, pos_t j) mutable -> void {
-      pb |= 1ULL << (j & board::MOVEMASK);
+      pb |= piece::pos_mask(j & board::MOVEMASK);
     });
     return pb;
   }
@@ -129,44 +129,40 @@ public:
     return 0;
   }
 
-  inline double h_material(COLOR c) const {
-    double m = 0;
+  INLINE double h_material(COLOR c) const {
+    double m = .0;
     for(PIECE p : {PAWN,KNIGHT,BISHOP,ROOK,QUEEN}) {
-      piece_bitboard_t mask = 0x00;
+      piece_bitboard_t mask = bits[c];
       if(p == PAWN) {
-        mask = bits_pawns;
+        mask &= bits_pawns;
       } else if(p == BISHOP) {
-        mask = bits_slid_diag & ~bits_slid_orth;
+        mask &= bits_slid_diag & ~bits_slid_orth;
       } else if(p == ROOK) {
-        mask = bits_slid_orth & ~bits_slid_diag;
+        mask &= bits_slid_orth & ~bits_slid_diag;
       } else if(p == QUEEN) {
-        mask = bits_slid_orth & bits_slid_diag;
+        mask &= bits_slid_orth & bits_slid_diag;
       } else if(p == KNIGHT) {
-        mask = (bits[WHITE]|bits[BLACK]) & ~(
-          bits_pawns | bits_slid_orth | bits_slid_diag
-          | piece::pos_mask(pos_king[WHITE])
-          | piece::pos_mask(pos_king[BLACK])
-        );
+        mask &= get_knight_bits();
       }
       m += piece::size(mask) * material_of(p);
     }
     return m;
   }
 
-  inline double h_pins(COLOR c) const {
-    double h = 0;
+  INLINE double h_pins(COLOR c) const {
+    double h = .0;
     bitmask::foreach(state_pins[enemy_of(c)], [&](pos_t i) mutable -> void {
       h += material_of(self[i].value);
     });
     return h;
   }
 
-  double h_attack_cells(COLOR c) const {
+  INLINE double h_attack_cells(COLOR c) const {
     const piece_bitboard_t occupied = bits[WHITE] | bits[BLACK];
-    double attacks = 0;
+    double attacks = .0;
     bitmask::foreach(bits[c], [&](pos_t i) mutable -> void {
       auto a = self.get_attacks_from(i);
-      attacks += bitmask::count_bits(a & occupied) + bitmask::count_bits(a);
+      attacks += piece::size(a & occupied) + piece::size(a);
     });
     return attacks;
   }
@@ -176,18 +172,20 @@ public:
     h += h_material(c);
     h += h_pins(c) * 1e-4;
     h += count_moves(c) * 2e-4;
-    h += h_attack_cells(c) * 1e-4;
+//    h += h_attack_cells(c) * 1e-4;
     return h;
   }
 
   double evaluate() const {
+    double score;
     if(self.is_draw()){
       return 0;
     } else if(is_checkmate()) {
-      return (play_as==activePlayer()) ? 1e7 : -1e7;
+      score = (play_as != WHITE) ? 1e7 : -1e7;
+    } else {
+      score = heuristic_of(play_as) - heuristic_of(enemy_of(play_as));
     }
-    double score = heuristic_of(WHITE) - heuristic_of(BLACK);
-    return (play_as==WHITE) ? score : -score;
+    return (play_as == activePlayer()) ? score : -score;
   }
 
   double move_heuristic(pos_t i, pos_t j) const {
@@ -206,21 +204,93 @@ public:
 
   struct ab_info {
     board_info info;
-    bool play_as;
+    COLOR play_as;
     int16_t depth;
     double eval;
     move_t m;
     MoveLine subpline;
   };
 
-  double score_decay(double score) {
+  double score_decay(double score) const {
     if(std::abs(score) > 1e6) {
       score *= .999;
     }
     return score;
   }
 
-  double alpha_beta_quiscence(double alpha, double beta, int16_t depth, MoveLine &pline,
+  piece_bitboard_t get_least_valuable_piece(piece_bitboard_t mask) const {
+    // find material heuristic ordering
+    const std::vector<PIECE> piece_types = {PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING};
+    std::vector<std::pair<double, PIECE>> pieces;
+    for(PIECE p : piece_types) {
+      pieces.emplace_back(material_of(p), p);
+    }
+    std::sort(pieces.begin(), pieces.end());
+    // short-hands for bits
+    const piece_bitboard_t diag = self.bits_slid_diag, orth = self.bits_slid_orth;
+    const piece_bitboard_t kings = piece::pos_mask(pos_king[WHITE]) | piece::pos_mask(pos_king[BLACK]);
+    // get some piece that is minimal
+    piece_bitboard_t found = 0x00ULL;
+    for(const auto &[_, p] : pieces) {
+      switch(p) {
+        case PAWN: if(mask & self.bits_pawns) found = mask & self.bits_pawns; break;
+        case KNIGHT: if(mask & self.get_knight_bits()) found = mask & self.get_knight_bits(); break;
+        case BISHOP: if(mask & diag & ~orth) found = mask & diag & ~orth; break;
+        case ROOK: if(mask & ~diag & orth) found = mask & ~diag & orth; break;
+        case QUEEN: if(mask & diag & orth) found = mask & diag & orth; break;
+        case KING: if(mask & kings) found = mask & kings; break;
+        default: break;
+      }
+    }
+    return found ? bitmask::highest_bit(found) : found;
+  }
+
+  //TODO consider xrays
+  //currently does not
+  piece_bitboard_t static_consider_xrays(const piece_bitboard_t attadef) const {
+    return attadef;
+  }
+
+  double static_exchange_evaluation(pos_t i, pos_t j) const {
+//    str::print("move", _move_str(bitmask::_pos_pair(i, j)));
+//    str::print(fen::export_as_string(export_as_fen()));
+    std::array<double, 64> gain = {0.};
+    int depth = 0;
+    const piece_bitboard_t may_xray = bits_slid_diag | bits_slid_orth | bits_pawns;
+    piece_bitboard_t from_set = piece::pos_mask(i);
+    piece_bitboard_t occupied = bits[WHITE] | bits[BLACK];
+    piece_bitboard_t attadef = get_attacks_to(j, BOTH);
+    gain[depth] = material_of(self[j].value);
+    do {
+      if(from_set) {
+        const pos_t from = bitmask::log2_of_exp2(from_set);
+//        str::print("SEE: depth=", depth, "piece=", ""s + self[from].str());
+      }
+      ++depth;
+      gain[depth] = material_of(self[i].value) - gain[depth - 1];
+      if(std::max(-gain[depth - 1], gain[depth]) < 0) {
+//        str::print("SEE BREAK: max(", -gain[depth-1], ",", gain[depth], ") < 0");
+        break;
+      }
+      attadef ^= from_set;
+      occupied ^= from_set;
+      if(from_set & may_xray) {
+        attadef |= static_consider_xrays(attadef);
+      }
+      const COLOR c = self[(depth & 1) ? j : i].color;
+      from_set = get_least_valuable_piece(attadef & bits[c]);
+    } while(from_set);
+    int maxdepth = depth;
+    while(--depth) {
+      gain[depth - 1] = -std::max(-gain[depth - 1], gain[depth]);
+    }
+    for(int i = 0; i < maxdepth; ++i) {
+//      str::print("gain[", i, "] = ", gain[i]);
+    }
+    return gain[0];
+  }
+
+  double alpha_beta_quiescence(double alpha, double beta, int16_t depth, MoveLine &pline,
                               zobrist::hash_table<ab_info> &ab_store)
   {
     double score = evaluate();
@@ -249,8 +319,16 @@ public:
 
     std::vector<std::pair<double, move_t>> capturemoves;
     capturemoves.reserve(8);
+    // TODO allow check moves with e.g. delta pruning
     iter_capture_moves([&](pos_t i, pos_t j) mutable -> void {
       double val = move_heuristic(i, j);
+      if(is_promotion_move(i, j) || is_enpassant_take_move(i, j) || material_of(self[i].value) <= material_of(self[j].value)) {
+        ;
+      } else {
+        double see = static_exchange_evaluation(i, j);
+        if(see < 0)return;
+        val += see;
+      }
       const move_t m = bitmask::_pos_pair(i, j);
       if(pline.find_in_mainline(m)) {
         val += 10.;
@@ -270,7 +348,7 @@ public:
       {
         volatile auto mscope = move_scope(m);
         pline_alt.premove(m);
-        score = -score_decay(alpha_beta_quiscence(-beta, -alpha, depth - 1, pline_alt, ab_store));
+        score = -score_decay(alpha_beta_quiescence(-beta, -alpha, depth - 1, pline_alt, ab_store));
         assert(check_valid_sequence(pline_alt));
         pline_alt.recall();
       }
@@ -288,6 +366,7 @@ public:
           alpha = score;
         }
       }
+//      str::print(TAB, "score", score);
     }
     if(overwrite) {
       ab_store[k] = { .info=info, .play_as = play_as, .depth=depth, .eval=bestscore, .m=bestmove, .subpline=pline.get_future() };
@@ -300,7 +379,8 @@ public:
                                   zobrist::hash_table<ab_info> &ab_store)
   {
     if(depth == 0) {
-      const double score = alpha_beta_quiscence(alpha, beta, depth, pline, ab_store);
+      const double score = alpha_beta_quiescence(alpha, beta, depth, pline, ab_store);
+//      str::print("alpha-beta quiesc", score);
 //      ++nodes_searched;
 //      const double score = evaluate();
       return score;
@@ -547,7 +627,7 @@ public:
     return m;
   }
 
-  bool play_as = WHITE;
+  COLOR play_as = WHITE;
   size_t nodes_searched = 0;
   double evaluation = DBL_MAX;
   size_t zb_hit = 0, zb_miss = 0;

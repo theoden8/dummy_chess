@@ -408,7 +408,7 @@ public:
   INLINE bool check_valid_move(pos_t i, pos_t j) const {
     return i == (i & board::MOVEMASK) &&
            self[i].color == activePlayer() &&
-           self.get_moves_from(i) & (1ULL << (j & board::MOVEMASK));
+           self.get_moves_from(i) & piece::pos_mask(j & board::MOVEMASK);
   }
 
   void act_event(event_t ev) {
@@ -714,27 +714,35 @@ public:
 
   INLINE piece_bitboard_t get_sliding_attacks_to(pos_t j, COLOR c=NEUTRAL) const {
     if(c==NEUTRAL)c=activePlayer();
-    if(c==BOTH)return get_attacks_to(j,WHITE)|get_attacks_to(j,BLACK);
     const piece_bitboard_t occupied = bits[WHITE] | bits[BLACK];
-    return (Attacks<BISHOPM>::get_attacks(j,occupied) & bits_slid_diag & bits[c])
-        | (Attacks<ROOKM>::get_attacks(j,occupied) & bits_slid_orth & bits[c]);
+    const piece_bitboard_t colormask = (c == BOTH) ? occupied : bits[c];
+    return (Attacks<BISHOPM>::get_attacks(j,occupied) & bits_slid_diag & colormask)
+        | (Attacks<ROOKM>::get_attacks(j,occupied) & bits_slid_orth & colormask);
   }
 
   INLINE piece_bitboard_t get_pawn_attacks_to(pos_t j, COLOR c=NEUTRAL) const {
     if(c==NEUTRAL)c=activePlayer();
-    assert(c != BOTH);
+    if(c==BOTH)return get_pawn_attacks_to(j, WHITE) | get_pawn_attacks_to(j, BLACK);
     const piece_bitboard_t occupied = bits[WHITE] | bits[BLACK];
     return piece::get_pawn_attack(j,occupied,enemy_of(c)) & (bits_pawns & bits[c]);
   }
 
+  INLINE piece_bitboard_t get_king_attacks_to(pos_t j, COLOR c=NEUTRAL) const {
+    if(c==NEUTRAL)c=activePlayer();
+    const piece_bitboard_t occupied = bits[WHITE] | bits[BLACK];
+    const piece_bitboard_t kingmask = (c == BOTH) ? (piece::pos_mask(pos_king[WHITE]) | piece::pos_mask(pos_king[BLACK]))
+                                                  : piece::pos_mask(pos_king[c]);
+    return Attacks<KINGM>::get_attacks(j,occupied) & kingmask;
+  }
+
   INLINE piece_bitboard_t get_attacks_to(pos_t j, COLOR c=NEUTRAL) const {
     if(c==NEUTRAL)c=activePlayer();
-    assert(c != BOTH);
     const piece_bitboard_t occupied = bits[WHITE] | bits[BLACK];
+    const piece_bitboard_t colormask = (c == BOTH) ? occupied : bits[c];
     return get_sliding_attacks_to(j, c)
-        | (Attacks<KNIGHTM>::get_attacks(j) & get_knight_bits() & bits[c])
-        | (Attacks<KINGM>::get_attacks(j,occupied) & piece::pos_mask(pos_king[c]))
-        | get_pawn_attacks_to(j, c);
+      | (Attacks<KNIGHTM>::get_attacks(j) & get_knight_bits() & colormask)
+      | get_king_attacks_to(j, c)
+      | get_pawn_attacks_to(j, c);
   }
 
   INLINE piece_bitboard_t get_attack_counts_to(pos_t j, COLOR c=NEUTRAL) const {
@@ -903,7 +911,7 @@ public:
     const piece_bitboard_t apawns = get_pawn_attacks_to(etrace,c);
     if(!apawns)return;
     bitmask::foreach(apawns, [&](pos_t apawn) mutable -> void {
-      state_moves[apawn] |= (1ULL << etrace);
+      state_moves[apawn] |= piece::pos_mask(etrace);
     });
   }
 
@@ -915,8 +923,8 @@ public:
 
   template <typename F>
   inline void iter_attacking_xrays(pos_t j, F &&func, COLOR c=NEUTRAL) const {
-    if(c==NEUTRAL)return;
-    const piece_bitboard_t dstbit = 1ULL << j;
+    assert(c != NEUTRAL);
+    const piece_bitboard_t dstbit = piece::pos_mask(j);
     const COLOR ec = enemy_of(c);
     const piece_bitboard_t friends = bits[c],
                            foes = bits[ec];
@@ -989,8 +997,8 @@ public:
         //printf("consider horizontal pin %hhu -> %hhu\n", apawn, etrace);
         if(get_sliding_attacks_to(pos_king[c],enemy_of(c))) {
           //printf("horizontal pin disable %hhu -> %hhu\n", apawn, etrace);
-          state_pins[self[apawn].color] |= (1ULL << apawn);
-          const piece_bitboard_t forbid = ~(1ULL << etrace);
+          state_pins[self[apawn].color] |= piece::pos_mask(apawn);
+          const piece_bitboard_t forbid = ~piece::pos_mask(etrace);
           state_pins_rays[apawn] &= forbid;
           state_moves[apawn] &= forbid;
         }
