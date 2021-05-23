@@ -16,8 +16,8 @@ CORES = $(shell getconf _NPROCESSORS_ONLN)
 all :; @$(MAKE) _all -j$(CORES)
 _all : dummy_chess dummy_chess_abwalk dummy_chess_playout dummy_chess_curses dummy_chess_curses_rel dummy_chess_bench dummy_chess_perft dummy_chess_uci
 
-dummy_chess: main.cpp $(SOURCES) $(HPPFILES) Makefile
-	$(CXX) $(DBGFLAGS) $(CXXFLAGS) main.cpp $(SOURCES) $(LDFLAGS) -o $@
+dummy_chess: simple.cpp $(SOURCES) $(HPPFILES) Makefile
+	$(CXX) $(DBGFLAGS) $(CXXFLAGS) simple.cpp $(SOURCES) $(LDFLAGS) -o $@
 
 dummy_chess_abwalk: abwalk.cpp $(SOURCES) $(HPPFILES) Makefile
 	$(CXX) $(DBGFLAGS) $(CXXFLAGS) abwalk.cpp $(SOURCES) $(LDFLAGS) -o $@
