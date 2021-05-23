@@ -192,14 +192,13 @@ public:
   }
 
   double evaluate() const {
-    double score;
     if(self.is_draw()){
       return 0;
     } else if(is_checkmate()) {
-      score = (play_as != WHITE) ? 1e7 : -1e7;
-    } else {
-      score = heuristic_of(play_as) - heuristic_of(enemy_of(play_as));
+      return -1e7;
     }
+    double score;
+    score = heuristic_of(play_as) - heuristic_of(enemy_of(play_as));
     return (play_as == activePlayer()) ? score : -score;
   }
 
@@ -302,7 +301,7 @@ public:
     std::optional<double> maybe_score;
     const auto info = get_board_info();
     const zobrist::key_t k = zb_hash();
-    if(ab_store[k].info == info && depth <= ab_store[k].depth) {
+    if(ab_store[k].info == info && depth <= ab_store[k].depth && ab_store[k].play_as == play_as) {
       ++zb_hit;
       ++nodes_searched;
       pline.replace_line(ab_store[k].subpline);
@@ -385,6 +384,8 @@ public:
         assert(check_valid_sequence(pline_alt));
         pline_alt.recall();
       }
+      //for(int i=0;i>depth;--i)printf(" ");
+      //printf("depth=%d, score=%.5f, %s\n", depth,score,board::_move_str(m).c_str());
       if(score >= beta) {
         pline.replace_line(pline_alt);
         if(overwrite) {
@@ -404,7 +405,6 @@ public:
     if(overwrite) {
       ab_store[k] = { .info=info, .play_as = play_as, .depth=depth, .eval=bestscore, .m=bestmove, .subpline=pline.get_future() };
     }
-    ++nodes_searched;
     return alpha;
   }
 
@@ -414,9 +414,6 @@ public:
     if(depth == 0) {
       const int delta = 5;
       const double score = alpha_beta_quiescence(alpha, beta, depth, pline, ab_store, delta);
-//      str::print("alpha-beta quiesc", score);
-//      ++nodes_searched;
-//      const double score = evaluate();
       return score;
     }
 
@@ -712,11 +709,7 @@ public:
       nodes += _perft(depth - 1, perft_store);
     });
     if(overwrite) {
-      perft_store[k] = {
-        .info = info,
-        .depth = depth,
-        .nodes = nodes
-      };
+      perft_store[k] = { .info=info, .depth=depth, .nodes=nodes };
     }
     return nodes;
   }

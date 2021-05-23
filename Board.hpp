@@ -144,14 +144,14 @@ public:
   INLINE void unset_pos(pos_t i) {
     if(self[i].color == WHITE) {
       piece::unset_pos(bits[WHITE], i);
-      if(self[i].value == KING && pos_king[WHITE] == i) {
-        pos_king[WHITE] = piece::uninitialized_king;
-      }
+//      if(self[i].value == KING && pos_king[WHITE] == i) {
+//        pos_king[WHITE] = piece::uninitialized_king;
+//      }
     } else if(self[i].color == BLACK) {
       piece::unset_pos(bits[BLACK], i);
-      if(self[i].value == KING && pos_king[BLACK] == i) {
-        pos_king[BLACK] = piece::uninitialized_king;
-      }
+//      if(self[i].value == KING && pos_king[BLACK] == i) {
+//        pos_king[BLACK] = piece::uninitialized_king;
+//      }
     }
     switch(self[i].value) {
       case PAWN:piece::unset_pos(bits_pawns, i);break;
@@ -848,18 +848,15 @@ public:
   }
 
   inline bool is_draw_material() const {
-    if(bits_slid_orth) {
-      return false;
-    }
-    const piece_bitboard_t occupied = bits[WHITE] | bits[BLACK];
-    const size_t no_pieces = piece::size(occupied);
-    const piece_bitboard_t bishops = bits_slid_diag;
-    const piece_bitboard_t knights = occupied ^ (bits_pawns | bishops | piece::pos_mask(pos_king[WHITE] | piece::pos_mask(pos_king[BLACK])));
+    if(bits_slid_orth)return false;
+    const size_t no_pieces = piece::size(bits[WHITE] | bits[BLACK]);
+    const piece_bitboard_t bishops = bits_slid_diag,
+                           knights = get_knight_bits();
     return (no_pieces == 2)
         || (no_pieces == 3 && piece::size(knights | bishops) == 1)
         || (no_pieces == 4
-            && piece::size(knights | bishops | bits[WHITE]) == 1
-            && piece::size(knights | bishops | bits[BLACK]) == 1);
+            && piece::size((knights | bishops) & bits[WHITE]) == 1
+            && piece::size((knights | bishops) & bits[BLACK]) == 1);
   }
 
   inline bool is_draw() const {
