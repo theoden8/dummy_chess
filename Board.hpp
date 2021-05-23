@@ -712,12 +712,11 @@ public:
 
   INLINE piece_bitboard_t get_attacks_from(pos_t pos) const { return state_attacks[pos]; }
 
-  INLINE piece_bitboard_t get_sliding_attacks_to(pos_t j, COLOR c=NEUTRAL) const {
+  INLINE piece_bitboard_t get_sliding_attacks_to(pos_t j, piece_bitboard_t occupied, COLOR c=NEUTRAL) const {
     if(c==NEUTRAL)c=activePlayer();
-    const piece_bitboard_t occupied = bits[WHITE] | bits[BLACK];
-    const piece_bitboard_t colormask = (c == BOTH) ? occupied : bits[c];
-    return (Attacks<BISHOPM>::get_attacks(j,occupied) & bits_slid_diag & colormask)
-        | (Attacks<ROOKM>::get_attacks(j,occupied) & bits_slid_orth & colormask);
+    const piece_bitboard_t colormask = (c == BOTH) ? occupied : occupied & bits[c];
+    return (piece::get_sliding_diag_attack(j,occupied) & bits_slid_diag & colormask)
+        | (piece::get_sliding_orth_attack(j,occupied) & bits_slid_orth & colormask);
   }
 
   INLINE piece_bitboard_t get_pawn_attacks_to(pos_t j, COLOR c=NEUTRAL) const {
@@ -732,15 +731,15 @@ public:
     const piece_bitboard_t occupied = bits[WHITE] | bits[BLACK];
     const piece_bitboard_t kingmask = (c == BOTH) ? (piece::pos_mask(pos_king[WHITE]) | piece::pos_mask(pos_king[BLACK]))
                                                   : piece::pos_mask(pos_king[c]);
-    return Attacks<KINGM>::get_attacks(j,occupied) & kingmask;
+    return piece::get_king_attack(j,occupied) & kingmask;
   }
 
-  INLINE piece_bitboard_t get_attacks_to(pos_t j, COLOR c=NEUTRAL) const {
+  INLINE piece_bitboard_t get_attacks_to(pos_t j, COLOR c=NEUTRAL, piece_bitboard_t occ_mask=~0ULL) const {
     if(c==NEUTRAL)c=activePlayer();
-    const piece_bitboard_t occupied = bits[WHITE] | bits[BLACK];
+    const piece_bitboard_t occupied = (bits[WHITE] | bits[BLACK]) & occ_mask;
     const piece_bitboard_t colormask = (c == BOTH) ? occupied : bits[c];
-    return get_sliding_attacks_to(j, c)
-      | (Attacks<KNIGHTM>::get_attacks(j) & get_knight_bits() & colormask)
+    return get_sliding_attacks_to(j, occupied, c)
+      | (piece::get_knight_attack(j) & get_knight_bits() & colormask)
       | get_king_attacks_to(j, c)
       | get_pawn_attacks_to(j, c);
   }
@@ -750,8 +749,8 @@ public:
   }
 
   void update_state_attacks_pos(pos_t pos) {
-    const piece_bitboard_t affected = piece::pos_mask(pos) | get_sliding_attacks_to(pos, BOTH);
     const piece_bitboard_t occupied = bits[WHITE] | bits[BLACK];
+    const piece_bitboard_t affected = piece::pos_mask(pos) | get_sliding_attacks_to(pos, occupied, BOTH);
 
     bitmask::foreach(affected, [&](pos_t pos) mutable noexcept -> void {
       const piece_bitboard_t posmask = piece::pos_mask(pos);

@@ -1,12 +1,5 @@
 /gui
-dummy_chess
-dummy_chess_abwalk
-dummy_chess_playout
-dummy_chess_curses
-dummy_chess_curses_rel
-dummy_chess_bench
-dummy_chess_perft
-dummy_chess_uci
+dummy_chess*
 *.o
 *.out
 *.dSYM
