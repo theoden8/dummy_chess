@@ -295,7 +295,8 @@ public:
   {
     double score = evaluate();
     double bestscore = -DBL_MAX;
-    if(state_checkline[activePlayer()] == ~0ULL) {
+    const bool king_in_check = state_checkline[activePlayer()] == ~0ULL;
+    if(king_in_check) {
       if(score >= beta) {
         ++nodes_searched;
         return score;
@@ -326,7 +327,7 @@ public:
         ;
       } else {
         double see = static_exchange_evaluation(i, j);
-        if(see < 0)return;
+        if(see < 0 && !king_in_check)return;
         val += see;
       }
       const move_t m = bitmask::_pos_pair(i, j);
