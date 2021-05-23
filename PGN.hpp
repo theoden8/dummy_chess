@@ -13,6 +13,7 @@ namespace pgn {
 constexpr bool LICHESS_COMPATIBILITY = 1;
 
 struct PGN {
+  fen::FEN startfen;
   Board &board;
   size_t cur_ply = 0;
   std::vector<std::string> ply;
@@ -20,7 +21,9 @@ struct PGN {
 
   PGN(Board &board):
     board(board)
-  {}
+  {
+    startfen = board.export_as_fen();
+  }
 
   size_t size() const {
     return cur_ply;
@@ -193,8 +196,12 @@ struct PGN {
     }
   }
 
-  std::string str() {
+  std::string str() const {
     std::string s;
+    if(startfen != fen::starting_pos) {
+      s += "[FEN] \""s + fen::export_as_string(startfen) + "\"]\n\n";
+      s += "[FEN] \""s + fen::export_as_string(fen::starting_pos) + "\"]\n\n";
+    }
     for(size_t i = 0; i < cur_ply; ++i) {
       if(!(i & 1)) {
         s += " "s + std::to_string(i / 2 + 1) + "."s;

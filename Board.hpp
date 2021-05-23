@@ -852,11 +852,12 @@ public:
     const size_t no_pieces = piece::size(bits[WHITE] | bits[BLACK]);
     const piece_bitboard_t bishops = bits_slid_diag,
                            knights = get_knight_bits();
+    const piece_bitboard_t light_pieces = knights | bishops;
     return (no_pieces == 2)
-        || (no_pieces == 3 && piece::size(knights | bishops) == 1)
+        || (no_pieces == 3 && piece::size(light_pieces) == 1)
         || (no_pieces == 4
-            && piece::size((knights | bishops) & bits[WHITE]) == 1
-            && piece::size((knights | bishops) & bits[BLACK]) == 1);
+            && piece::size(light_pieces & bits[WHITE]) == 1
+            && piece::size(light_pieces & bits[BLACK]) == 1);
   }
 
   inline bool is_draw() const {
@@ -1051,28 +1052,18 @@ public:
       .castling_compressed = fen::compress_castlings(get_castlings_mask()),
       .enpassant = enpassant_trace(),
       .halfmove_clock = get_halfmoves(),
-      .fullmove = uint16_t(history.size() / 2),
+      .fullmove = uint16_t((history.size() / 2) + 1),
     };
     for(pos_t y_ = 0; y_ < board::LEN; ++y_) {
       const pos_t y = board::LEN - y_ - 1;
-      pos_t emptycount = 0;
       for(pos_t x = 0; x < board::LEN; ++x) {
         const pos_t ind = board::_pos(A+x, 1+y);
         if(self[ind].value == EMPTY) {
-          ++emptycount;
-          continue;
+          f.board += ' ';
+        } else {
+          f.board += self[ind].str();
         }
-        if(emptycount > 0) {
-          f.board += std::to_string(emptycount);
-          emptycount = 0;
-        }
-        f.board += self[ind].str();
       }
-      if(emptycount > 0) {
-        f.board += std::to_string(emptycount);
-        emptycount = 0;
-      }
-      if(y != 0)f.board+="/";
     }
     return f;
   }

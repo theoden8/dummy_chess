@@ -19,6 +19,17 @@ namespace fen {
     pos_t enpassant;
     pos_t halfmove_clock;
     uint16_t fullmove;
+
+    inline bool operator==(const struct _FEN &other) const {
+      return board == other.board && active_player == other.active_player &&
+             castling_compressed == other.castling_compressed &&
+             enpassant == other.enpassant && halfmove_clock == other.halfmove_clock;
+             //&& fullmove == other.fullmove;
+    }
+
+    inline bool operator!=(const struct _FEN &other) const {
+      return !operator==(other);
+    }
   } FEN;
 
   constexpr inline pos_t compress_castlings(piece_bitboard_t castlings) {
@@ -109,7 +120,8 @@ namespace fen {
     // skip space
     while(isspace(s[i]))++i;
     // fullmoves
-    sc = sscanf(&s[i], "%hhu", &f.halfmove_clock);
+    // TODO fix
+    sc = sscanf(&s[i], "%hu", &f.fullmove);
     assert(sc != -1);
     i += sc;
     // done
@@ -119,8 +131,7 @@ namespace fen {
   FEN load_from_file(std::string fname) {
     FILE *fp = fopen(fname.c_str(), "r");
     assert(fp != nullptr);
-    std::string s;
-    char c;
+    std::string s; char c;
     while((c=fgetc(fp))!=EOF)s+=c;
     fclose(fp);
     return load_from_string(s);;
@@ -136,7 +147,28 @@ namespace fen {
   FEN export_from_board(const Board &board);
 
   std::string export_as_string(const fen::FEN &f) {
-    std::string s = f.board;
+    std::string s = ""s;
+    for(pos_t y_ = 0; y_ < board::LEN; ++y_) {
+      const pos_t y = board::LEN - y_ - 1;
+      pos_t emptycount = 0;
+      for(pos_t x = 0; x < board::LEN; ++x) {
+        const pos_t ind = board::_pos(A+x, 1+y);
+        if(f.board[ind] == ' ') {
+          ++emptycount;
+          continue;
+        }
+        if(emptycount > 0) {
+          s += std::to_string(emptycount);
+          emptycount = 0;
+        }
+        s += f.board[ind];
+      }
+      if(emptycount > 0) {
+        s += std::to_string(emptycount);
+        emptycount = 0;
+      }
+      if(y != 0)s+="/";
+    }
     s += ' ';
     s += (f.active_player == WHITE) ? 'w' : 'b';
     s += ' ';
