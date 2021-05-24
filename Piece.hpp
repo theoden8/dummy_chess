@@ -123,7 +123,7 @@ namespace piece {
   }
 
   inline piece_bitboard_t get_king_attack(pos_t pos) {
-    return Attacks<KINGM>::get_attacks(pos,0x00);
+    return Attacks<KINGM>::get_attacks(pos);
   }
 
 //  inline piece_bitboard_t get_king_attacks(piece_bitboard_t mask, piece_bitboard_t occupied) {

@@ -272,7 +272,7 @@ template <> struct MultiAttacks<QUEENM> {
 
 // king attacks
 template <> struct Attacks<KINGM> {
-  static inline piece_bitboard_t get_attacks(pos_t i, piece_bitboard_t occupied) {
+  static inline piece_bitboard_t get_attacks(pos_t i, piece_bitboard_t occupied=0x00) {
     return M42::king_attacks(i);
   }
 };

@@ -29,11 +29,10 @@ protected:
 
     INLINE bool operator==(board_info other) const noexcept {
       return active_player == other.active_player &&
-             enpassant_castlings == other.enpassant_castlings && (
-               whites == other.whites && blacks == other.blacks &&
-               diagonal_sliding == other.diagonal_sliding && orthogonal_sliding == other.orthogonal_sliding &&
-               pawns == other.pawns && kings == other.kings
-          );
+             whites == other.whites && blacks == other.blacks &&
+             diagonal_sliding == other.diagonal_sliding && orthogonal_sliding == other.orthogonal_sliding &&
+             pawns == other.pawns && kings == other.kings &&
+             enpassant_castlings == other.enpassant_castlings;
     }
 
     INLINE void unset() noexcept {
@@ -51,6 +50,8 @@ public:
     bits_slid_diag=0x00, bits_slid_orth=0x00,
     bits_pawns=0x00;
   std::array<pos_t, 2> pos_king = {piece::uninitialized_king, piece::uninitialized_king};
+  move_index_t state_hist_draw_repetitions = ~move_index_t(0);
+  std::vector<board_info> state_hist_board_info;
 
   const std::array<Piece, 2*6+1>  pieces = {
     Piece(PAWN, WHITE), Piece(PAWN, BLACK),
@@ -120,7 +121,7 @@ public:
     return get_piece(p.value, p.color);
   }
 
-  INLINE board_info get_board_info() const {
+  INLINE board_info get_board_info_() const {
     pos_t enpassant_castlings = ((enpassant_trace() == event::enpassantnotrace) ? 0xf0 : board::_x(enpassant_trace())) << 4;
     enpassant_castlings |= get_castlings_compressed();
     return (board_info){
@@ -133,6 +134,10 @@ public:
       .orthogonal_sliding=bits_slid_orth,
       .pawns=bits_pawns,
     };
+  }
+
+  INLINE board_info get_board_info() const {
+    return state_hist_board_info.back();
   }
 
   INLINE piece_bitboard_t get_knight_bits() const {
@@ -652,6 +657,8 @@ public:
     state_hist_moves.reserve(100);
     state_hist_pins.reserve(100);
     state_hist_pins_rays.reserve(100);
+    state_hist_board_info.reserve(50);
+    state_hist_board_info.emplace_back(get_board_info_());
   }
 
   INLINE void update_state_pos(pos_t pos) {
@@ -672,6 +679,10 @@ public:
   void update_state_on_event() {
     update_state_checkline();
     init_state_moves();
+    state_hist_board_info.emplace_back(get_board_info_());
+    if(state_hist_draw_repetitions > self.get_current_ply() && can_draw_repetition(3)) {
+      state_hist_draw_repetitions = self.get_current_ply();
+    }
   }
 
   void restore_state_on_event() {
@@ -685,9 +696,13 @@ public:
     state_hist_pins.pop_back();
     state_pins_rays = state_hist_pins_rays.back();
     state_hist_pins_rays.pop_back();
+    state_hist_board_info.pop_back();
+    if(self.get_current_ply() < state_hist_draw_repetitions) {
+      state_hist_draw_repetitions = ~move_index_t(0);
+    }
   }
 
-  std::array <piece_bitboard_t, board::SIZE> state_attacks = {0x00};
+  std::array <piece_bitboard_t, board::SIZE> state_attacks = {0x00ULL};
   ALWAYS_UNROLL void init_state_attacks() {
     for(auto&a:state_attacks)a=0ULL;
     std::array<piece_bitboard_t, 2> kingmask = {piece::pos_mask(pos_king[WHITE]), piece::pos_mask(pos_king[BLACK])};
@@ -810,7 +825,7 @@ public:
   }
 
   piece_bitboard_t state_update_checkline_kingattacks[NO_COLORS] = {~0ULL,~0ULL};
-  inline void update_state_checkline() {
+  INLINE void update_state_checkline() {
     const COLOR c = activePlayer();
     const piece_bitboard_t attackers = get_attacks_to(pos_king[c], enemy_of(c));
     if(attackers == state_update_checkline_kingattacks[c])return;
@@ -845,7 +860,7 @@ public:
     return !get_attacks_to(pos_king[c], enemy_of(c)) && !can_move(c);
   }
 
-  inline bool is_draw_material() const {
+  INLINE bool is_draw_material() const {
     if(bits_slid_orth)return false;
     const size_t no_pieces = piece::size(bits[WHITE] | bits[BLACK]);
     const piece_bitboard_t bishops = bits_slid_diag,
@@ -858,8 +873,26 @@ public:
             && piece::size(light_pieces & bits[BLACK]) == 1);
   }
 
-  inline bool is_draw() const {
+  INLINE bool is_draw() const {
     return is_draw_halfmoves() || is_draw_material() || is_draw_stalemate();
+  }
+
+  INLINE bool can_draw_repetition(int no_times=3) const {
+    if(state_hist_draw_repetitions < self.get_current_ply()) {
+      return true;
+    }
+    const board_info info = state_hist_board_info.back();
+    const size_t N = state_hist_board_info.size();
+    int repetitions = 0;
+    for(move_index_t i = 0; i < halfmoves.back(); ++i) {
+      if(info == state_hist_board_info[N - i]) {
+        ++repetitions;
+        if(repetitions >= no_times) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   std::array <piece_bitboard_t, board::SIZE> state_moves = {0x00};
@@ -917,7 +950,7 @@ public:
   }
 
   template <typename F>
-  inline void iter_attacking_xrays(pos_t j, F &&func, COLOR c=NEUTRAL) const {
+  INLINE void iter_attacking_xrays(pos_t j, F &&func, COLOR c=NEUTRAL) const {
     assert(c != NEUTRAL);
     const piece_bitboard_t dstbit = piece::pos_mask(j);
     const COLOR ec = enemy_of(c);

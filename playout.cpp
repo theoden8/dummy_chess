@@ -19,6 +19,10 @@ int main(int argc, char *argv[]) {
       pgnwriter.handle_move(bestmove);
       str::print(pgnwriter.str());
       if(++no_moves == 400)break;
+      if(e.can_draw_repetition()) {
+        str::print("draw by repetition");
+        break;
+      }
     }
   }
   str::print(pgnwriter.str());

@@ -165,6 +165,7 @@ struct UCI {
     }
     _printf("}\n");
     while(cmdmap.find(cmd.front()) == std::end(cmdmap)) {
+      str::perror("error: unknown command", cmd.front());
       cmd.erase(cmd.begin());
       if(cmd.empty()) {
         return;
@@ -251,6 +252,9 @@ struct UCI {
               g.movetime = double(atol(cmd[++ind].c_str()))*1e-6;
             } else if(cmd[ind] == "infinite"s) {
               g.infinite = true;
+            } else {
+              str::perror("error: unknown subcommand", cmd[ind]);
+              return;
             }
             ++ind;
           }
@@ -266,7 +270,9 @@ struct UCI {
       case CMD_QUIT:
         should_quit = true;
       return;
-      default:return;
+      default:
+        str::perror("error: unknown command");
+      return;
     }
   }
 
@@ -294,7 +300,8 @@ struct UCI {
     double time_spent = 0.;
     size_t nodes_searched = 0;
     const std::unordered_set<move_t> searchmoves(args.searchmoves.begin(), args.searchmoves.end());
-    const move_t bestmove = engine->get_fixed_depth_move(args.depth, [&](const move_t currmove, const auto &pline) mutable -> bool {
+    const move_t bestmove = engine->get_fixed_depth_move(args.depth, [&](move_t currmove, double curreval, const auto &pline) mutable -> bool
+    {
       const double prev_time_spent = time_spent;
       const size_t prev_nodes_searched = nodes_searched;
       time_spent = 1e-9*duration_cast<nanoseconds>(system_clock::now()-start).count();
@@ -308,6 +315,9 @@ struct UCI {
       return !(should_stop || should_quit) && (args.ponder || args.infinite || (time_spent < movetime && engine->nodes_searched < args.nodes));
     }, searchmoves);
     should_stop = false;
+    if(bestmove == board::nomove) {
+      return;
+    }
     respond(RESP_INFO, "depth", currline.size(),
                        "time", time_spent,
                        "score", "cp", engine->evaluation,

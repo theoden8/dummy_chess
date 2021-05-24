@@ -192,9 +192,9 @@ public:
   }
 
   INLINE double evaluate() const {
-    if(self.is_draw()){
+    if(self.is_draw() || self.can_draw_repetition()){
       return 0;
-    } else if(is_checkmate()) {
+    } else if(self.is_checkmate()) {
       return -MATERIAL_KING;
     }
     const COLOR c = activePlayer();
@@ -217,7 +217,6 @@ public:
 
   struct ab_info {
     board_info info;
-    COLOR play_as;
     int16_t depth;
     double eval;
     move_t m;
@@ -299,13 +298,13 @@ public:
   INLINE decltype(auto) get_ab_store_zobrist(int16_t depth, MoveLine &pline, zobrist::hash_table<ab_info> &ab_store) {
     std::optional<double> maybe_score;
     const auto info = get_board_info();
-    const zobrist::key_t k = zb_hash();
-    //TODO fix zobrist evaluation caching
-    if(ab_store[k].info == info && depth <= ab_store[k].depth && ab_store[k].play_as == activePlayer() && false) {
+    const zobrist::key_t k = self.zb_hash();
+    //TODO fix evaluation caching
+    if(ab_store[k].info == info && depth <= ab_store[k].depth) {
       ++zb_hit;
       ++nodes_searched;
       pline.replace_line(ab_store[k].subpline);
-      double score = (ab_store[k].play_as == activePlayer()) ? ab_store[k].eval : -ab_store[k].eval;
+      double score = ab_store[k].eval;
       maybe_score.emplace(score);
     } else {
       ++zb_miss;
@@ -315,6 +314,16 @@ public:
 
   int debug_depth = 4;
   const MoveLine debug_moveline = MoveLine(std::vector<move_t>{
+//    3 'r3k3/pQp5/3bp1pn/7q/8/P1N1P3/1PPP1P2/R1B1K3 b q - 0 21'
+//    bitmask::_pos_pair(board::_pos(E, 8), board::_pos(E, 7)),
+//    bitmask::_pos_pair(board::_pos(B, 7), board::_pos(A, 8)),
+//    5 'rnq1kbnr/p1p4p/1p2pp2/3p2p1/2PP3N/4P3/PP1B1PQP/RN2K2R w KQkq - 0 11'
+//    bitmask::_pos_pair(board::_pos(G, 2), board::_pos(F, 3)),
+//    bitmask::_pos_pair(board::_pos(G, 5), board::_pos(H, 4)),
+//    3 '8/8/8/3p1k1p/3P1P2/8/2K5/8 b - - 2 46'
+//    bitmask::_pos_pair(board::_pos(F, 5), board::_pos(F, 4)),
+//    3 '8/8/8/3p3p/3PkP2/8/8/3K4 b - - 4 47'
+//    bitmask::_pos_pair(board::_pos(E, 4), board::_pos(D, 4)),
   });
 
   double alpha_beta_quiescence(double alpha, double beta, int16_t depth, MoveLine &pline,
@@ -341,7 +350,7 @@ public:
 
     // zobrist
     auto info = get_board_info();
-    auto k = zb_hash();
+    auto k = self.zb_hash();
 //    const auto [zbscore, k, info] = get_ab_store_zobrist(depth, pline, ab_store);
 //    if(zbscore.has_value()) {
 //      return zbscore.value();
@@ -392,12 +401,17 @@ public:
         assert(pline_alt.empty());
         score = -score_decay(alpha_beta_quiescence(-beta, -alpha, depth - 1, pline_alt, ab_store, delta));
         assert(check_valid_sequence(pline_alt));
+        if(!debug_moveline.empty() && pline_alt.startswith(debug_moveline)) {
+          printf("%s", TAB.c_str());
+          printf("depth=%d, %s, score=%.5f (%.4f, %.4f) %s\n", depth,board::_move_str(m).c_str(),score, beta, alpha,
+            ("["s + str::join(_line_str(pline_alt.full())) + "]"s).c_str());
+        }
         pline_alt.recall();
       }
       if(score >= beta) {
         pline.replace_line(pline_alt);
         if(overwrite) {
-          ab_store[k] = { .info=info, .play_as=activePlayer(), .depth=depth, .eval=score, .m=m, .subpline=pline_alt.get_future() };
+          ab_store[k] = { .info=info, .depth=depth, .eval=score, .m=m, .subpline=pline_alt.get_future() };
         }
         return score;
       } else if(score > alpha) {
@@ -410,7 +424,7 @@ public:
       }
     }
     if(overwrite) {
-      ab_store[k] = { .info=info, .play_as=activePlayer(), .depth=depth, .eval=bestscore, .m=bestmove, .subpline=pline.get_future() };
+      ab_store[k] = { .info=info, .depth=depth, .eval=bestscore, .m=bestmove, .subpline=pline.get_future() };
     }
     return alpha;
   }
@@ -429,10 +443,12 @@ public:
     }
 
     // zobrist
-    const auto [zbscore, k, info] = get_ab_store_zobrist(depth, pline, ab_store);
-    if(zbscore.has_value()) {
-      return zbscore.value();
-    }
+    auto info = get_board_info();
+    auto k = self.zb_hash();
+//    const auto [zbscore, k, info] = get_ab_store_zobrist(depth, pline, ab_store);
+//    if(zbscore.has_value()) {
+//      return zbscore.value();
+//    }
     bool overwrite = (depth + 1 >= ab_store[k].depth);
     std::vector<std::pair<double, move_t>> moves;
     moves.reserve(16);
@@ -462,20 +478,42 @@ public:
         pline_alt.premove(m);
         assert(pline_alt.empty());
         score = -score_decay(alpha_beta(-beta, -alpha, depth - 1, pline_alt, ab_store));
+//        if(!check_valid_sequence(pline_alt)) {
+//          str::print("pline not playable", _line_str(pline_alt.full()));
+//          str::print("sequence not valid: [", _line_str(pline_alt), "]");
+//          str::print("FEN: ", fen::export_as_string(self.export_as_fen()));
+//        }
         assert(check_valid_sequence(pline_alt));
+        if(!debug_moveline.empty() && pline_alt.startswith(debug_moveline)) {
+          std::string actinfo = ""s;
+          if(score >= beta) {
+            actinfo = "beta-curoff"s;
+          } else if(score > bestscore) {
+            actinfo = "new best";
+          }
+          printf("%s", TAB.c_str());
+          printf("depth=%d, %s, score=%.5f (%.4f, %.4f) %s %s\n", depth,board::_move_str(m).c_str(),score, beta, alpha, actinfo.c_str(),
+            ("["s + str::join(_line_str(pline_alt.full())) + "]"s).c_str());
+        }
         pline_alt.recall();
       }
       if(score >= beta) {
         if(pline_alt.size() < size_t(depth)) {
+//          if(!check_line_terminates(pline_alt)) {
+//            str::print("A: PLINE_ALT NOT ENOUGH LENGTH", _line_str(pline_alt), "depth", depth, "full", _line_str(pline_alt.full()));
+//          }
           assert(check_line_terminates(pline_alt));
         }
         pline.replace_line(pline_alt);
         if(overwrite) {
-          ab_store[k] = { .info=info, .play_as=activePlayer(), .depth=depth, .eval=score, .m=m, .subpline=pline.get_future() };
+          ab_store[k] = { .info=info, .depth=depth, .eval=score, .m=m, .subpline=pline.get_future() };
         }
         return score;
       } else if(score > bestscore) {
         if(pline_alt.size() < size_t(depth)) {
+//          if(!check_line_terminates(pline_alt)) {
+//            str::print("B: PLINE_ALT NOT ENOUGH LENGTH", _line_str(pline_alt), "depth", depth, "full", _line_str(pline_alt.full()));
+//          }
           assert(check_line_terminates(pline_alt));
         }
         m_best = m;
@@ -487,7 +525,7 @@ public:
       }
     };
     if(overwrite) {
-      ab_store[k] = { .info=info, .play_as=activePlayer(), .depth=depth, .eval=bestscore, .m=m_best, .subpline=pline.get_future() };
+      ab_store[k] = { .info=info, .depth=depth, .eval=bestscore, .m=m_best, .subpline=pline.get_future() };
     }
     return bestscore;
   }
@@ -549,8 +587,8 @@ public:
       }
       std::sort(bestmoves.begin(), bestmoves.end());
       std::reverse(bestmoves.begin(), bestmoves.end());
-      const move_t m_best = bestmoves.front().second;
-      if(!callback_f(m_best, pline[m_best])) {
+      const auto [eval_best, m_best] = bestmoves.front();
+      if(!callback_f(m_best, eval_best, pline[m_best])) {
         break;
       }
       str::print("depth:", d, "pline:", _line_str(pline[m_best].full(), true), "size:", pline[m_best].full().size(), "eval", alpha);
@@ -640,7 +678,7 @@ public:
     reset_planning();
     decltype(auto) store_scope = get_zobrist_alphabeta_scope();
     auto [_, m] = iterative_deepening_dfs(depth, searchmoves, store_scope.get_object(),
-                                          [&](const move_t m, const MoveLine &pline) mutable -> bool { return true; });
+                                          [&](move_t m, double eval, const MoveLine &pline) mutable -> bool { return true; });
     evaluation = _;
     return m;
   }
@@ -649,7 +687,7 @@ public:
     reset_planning();
     decltype(auto) store_scope = get_zobrist_alphabeta_scope();
     auto [_, m] = iterative_deepening_astar(depth, searchmoves, store_scope.get_object(),
-                                            [&](const move_t m, const MoveLine &pline) mutable -> bool { return true; });
+                                            [&](move_t m, double eval, const MoveLine &pline) mutable -> bool { return true; });
     evaluation = _;
     return m;
   }
@@ -676,9 +714,9 @@ public:
   }
 
   decltype(auto) get_fixed_depth_move(int16_t depth, const std::unordered_set<move_t> &searchmoves={}) {
-    return get_fixed_depth_move(depth, [](const move_t m, const MoveLine &pline) mutable -> bool {return true;}, searchmoves);
+    return get_fixed_depth_move(depth, [](move_t m, double eval, const MoveLine &pline) mutable -> bool {return true;}, searchmoves);
   }
-//
+
   struct perft_info {
     board_info info;
     int16_t depth;
@@ -693,7 +731,7 @@ public:
     if(depth == 1 || depth == 0) {
       return count_moves();
     }
-    zobrist::key_t k = zb_hash();
+    zobrist::key_t k = self.zb_hash();
     board_info info = get_board_info();
     if(perft_store[k].info == info && perft_store[k].depth == depth) {
       ++zb_hit;
