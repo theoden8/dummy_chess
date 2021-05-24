@@ -36,7 +36,7 @@ protected:
           );
     }
 
-    INLINE void unset() {
+    INLINE void unset() noexcept {
       active_player = NEUTRAL;
     }
   };
@@ -61,7 +61,7 @@ public:
     Piece(KING, WHITE), Piece(KING, BLACK),
     Piece(EMPTY, NEUTRAL)
   };
-  Board(const fen::FEN f):
+  explicit Board(const fen::FEN &f):
     activePlayer_(f.active_player),
     halfmoves({f.halfmove_clock})
   {
@@ -121,17 +121,17 @@ public:
   }
 
   INLINE board_info get_board_info() const {
-    pos_t enpassant_castlings = (((enpassant_trace() == event::enpassantnotrace) ? 0x0f : board::_x(enpassant_trace())) << 4);
+    pos_t enpassant_castlings = ((enpassant_trace() == event::enpassantnotrace) ? 0xf0 : board::_x(enpassant_trace())) << 4;
     enpassant_castlings |= get_castlings_compressed();
     return (board_info){
-      .active_player = activePlayer(),
-      .enpassant_castlings = enpassant_castlings,
-      .kings = bitmask::_pos_pair(pos_king[WHITE], pos_king[BLACK]),
-      .whites = bits[WHITE],
-      .blacks = bits[BLACK],
-      .diagonal_sliding = bits_slid_diag,
-      .orthogonal_sliding = bits_slid_orth,
-      .pawns = bits_pawns,
+      .active_player=activePlayer(),
+      .enpassant_castlings=enpassant_castlings,
+      .kings=bitmask::_pos_pair(pos_king[WHITE], pos_king[BLACK]),
+      .whites=bits[WHITE],
+      .blacks=bits[BLACK],
+      .diagonal_sliding=bits_slid_diag,
+      .orthogonal_sliding=bits_slid_orth,
+      .pawns=bits_pawns,
     };
   }
 

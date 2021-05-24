@@ -13,12 +13,24 @@ struct MoveLine {
   INLINE MoveLine()
   {}
 
+  explicit INLINE MoveLine(const std::vector<move_t> &line):
+    line(line)
+  {}
+
   size_t size() const {
     return line.size() - start;
   }
 
   INLINE bool empty() const {
     return size() == 0;
+  }
+
+  bool startswith(const MoveLine &tline) const {
+    auto f = full();
+    for(size_t i = 0; i < std::min(f.size(), tline.size()); ++i) {
+      if(f[i] != tline[i])return false;
+    }
+    return true;
   }
 
   INLINE void pop_back() {

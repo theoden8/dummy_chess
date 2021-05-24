@@ -94,9 +94,9 @@ public:
       pos_t moves_from = bitmask::count_bits(get_moves_from(i));
       if(self[i].value == PAWN && (board::_y(i) == 2-1 || board::_y(i) == 7-1)
           && (
-            (self[i].color == WHITE && board::_y(i) == 7-1)
-            || (self[i].color == BLACK && board::_y(i) == 2-1)
-        ))
+            (self[i].color == WHITE && 1+board::_y(i) == 7)
+            || (self[i].color == BLACK && 1+board::_y(i) == 2))
+        )
       {
         moves_from *= 4;
       }
@@ -129,7 +129,7 @@ public:
                MATERIAL_BISHOP = 3.25,
                MATERIAL_ROOK = 5,
                MATERIAL_QUEEN = 10,
-               MATERIAL_KING = 1e9;
+               MATERIAL_KING = 1e7;
 
   inline double material_of(PIECE p) const {
     switch(p) {
@@ -191,18 +191,17 @@ public:
     return h;
   }
 
-  double evaluate() const {
+  INLINE double evaluate() const {
     if(self.is_draw()){
       return 0;
     } else if(is_checkmate()) {
-      return -1e7;
+      return -MATERIAL_KING;
     }
-    double score;
-    score = heuristic_of(play_as) - heuristic_of(enemy_of(play_as));
-    return (play_as == activePlayer()) ? score : -score;
+    const COLOR c = activePlayer();
+    return heuristic_of(c) - heuristic_of(enemy_of(c));
   }
 
-  double move_heuristic(pos_t i, pos_t j) const {
+  INLINE double move_heuristic(pos_t i, pos_t j) const {
     double val = material_of(self[j & board::MOVEMASK].value);
     if(is_enpassant_take_move(i, j)) {
       val += material_of(PAWN);
@@ -226,8 +225,8 @@ public:
   };
 
   double score_decay(double score) const {
-    if(std::abs(score) > 1e6) {
-      score *= .999;
+    if(std::abs(score) > MATERIAL_KING / 1e3) {
+      score -= score / std::abs(score);
     }
     return score;
   }
@@ -297,15 +296,16 @@ public:
     return gain[0];
   }
 
-  decltype(auto) get_ab_store_zobrist(int16_t depth, MoveLine &pline, zobrist::hash_table<ab_info> &ab_store) {
+  INLINE decltype(auto) get_ab_store_zobrist(int16_t depth, MoveLine &pline, zobrist::hash_table<ab_info> &ab_store) {
     std::optional<double> maybe_score;
     const auto info = get_board_info();
     const zobrist::key_t k = zb_hash();
-    if(ab_store[k].info == info && depth <= ab_store[k].depth && ab_store[k].play_as == play_as) {
+    //TODO fix zobrist evaluation caching
+    if(ab_store[k].info == info && depth <= ab_store[k].depth && ab_store[k].play_as == activePlayer() && false) {
       ++zb_hit;
       ++nodes_searched;
       pline.replace_line(ab_store[k].subpline);
-      double score = (ab_store[k].play_as == play_as) ? ab_store[k].eval : -ab_store[k].eval;
+      double score = (ab_store[k].play_as == activePlayer()) ? ab_store[k].eval : -ab_store[k].eval;
       maybe_score.emplace(score);
     } else {
       ++zb_miss;
@@ -313,13 +313,20 @@ public:
     return std::make_tuple(maybe_score, k, info);
   }
 
+  int debug_depth = 4;
+  const MoveLine debug_moveline = MoveLine(std::vector<move_t>{
+  });
+
   double alpha_beta_quiescence(double alpha, double beta, int16_t depth, MoveLine &pline,
                               zobrist::hash_table<ab_info> &ab_store, int8_t delta)
   {
+    std::string TAB = ""s;
+    for(int i=0;i<debug_depth-depth;++i)TAB+=" "s;
+
     double score = evaluate();
     double bestscore = -DBL_MAX;
     const bool king_in_check = state_checkline[activePlayer()] != ~0ULL;
-    if(king_in_check) {
+    if(!king_in_check) {
       if(score >= beta || delta <= 0) {
         ++nodes_searched;
         return score;
@@ -333,10 +340,12 @@ public:
     }
 
     // zobrist
-    const auto [zbscore, k, info] = get_ab_store_zobrist(depth, pline, ab_store);
-    if(zbscore.has_value()) {
-      return zbscore.value();
-    }
+    auto info = get_board_info();
+    auto k = zb_hash();
+//    const auto [zbscore, k, info] = get_ab_store_zobrist(depth, pline, ab_store);
+//    if(zbscore.has_value()) {
+//      return zbscore.value();
+//    }
     bool overwrite = (depth + 1 >= ab_store[k].depth);
 
     std::vector<std::pair<double, move_t>> quiescmoves;
@@ -380,16 +389,15 @@ public:
       {
         volatile auto mscope = move_scope(m);
         pline_alt.premove(m);
+        assert(pline_alt.empty());
         score = -score_decay(alpha_beta_quiescence(-beta, -alpha, depth - 1, pline_alt, ab_store, delta));
         assert(check_valid_sequence(pline_alt));
         pline_alt.recall();
       }
-      //for(int i=0;i>depth;--i)printf(" ");
-      //printf("depth=%d, score=%.5f, %s\n", depth,score,board::_move_str(m).c_str());
       if(score >= beta) {
         pline.replace_line(pline_alt);
         if(overwrite) {
-          ab_store[k] = { .info=info, .play_as = play_as, .depth=depth, .eval=score, .m=m, .subpline=pline_alt.get_future() };
+          ab_store[k] = { .info=info, .play_as=activePlayer(), .depth=depth, .eval=score, .m=m, .subpline=pline_alt.get_future() };
         }
         return score;
       } else if(score > alpha) {
@@ -400,10 +408,9 @@ public:
           alpha = score;
         }
       }
-//      str::print(TAB, "score", score);
     }
     if(overwrite) {
-      ab_store[k] = { .info=info, .play_as = play_as, .depth=depth, .eval=bestscore, .m=bestmove, .subpline=pline.get_future() };
+      ab_store[k] = { .info=info, .play_as=activePlayer(), .depth=depth, .eval=bestscore, .m=bestmove, .subpline=pline.get_future() };
     }
     return alpha;
   }
@@ -411,8 +418,12 @@ public:
   double alpha_beta(double alpha, double beta, int16_t depth, MoveLine &pline,
                                   zobrist::hash_table<ab_info> &ab_store)
   {
+    std::string TAB=""s;
+    for(int i=debug_depth;i>depth;--i)TAB+=" ";
+
     if(depth == 0) {
       const int delta = 5;
+      assert(pline.empty());
       const double score = alpha_beta_quiescence(alpha, beta, depth, pline, ab_store, delta);
       return score;
     }
@@ -449,33 +460,22 @@ public:
       {
         volatile auto mscope = move_scope(m);
         pline_alt.premove(m);
+        assert(pline_alt.empty());
         score = -score_decay(alpha_beta(-beta, -alpha, depth - 1, pline_alt, ab_store));
-//        if(!check_valid_sequence(pline_alt)) {
-//          str::print("pline not playable", _line_str(pline_alt.full()));
-//          str::print("sequence not valid: [", _line_str(pline_alt), "]");
-//          str::print("FEN: ", fen::export_as_string(self.export_as_fen()));
-//        }
         assert(check_valid_sequence(pline_alt));
         pline_alt.recall();
       }
-      //printf("depth=%d, score=%.5f, %s\n", depth,score,board::_move_str(m).c_str());
       if(score >= beta) {
         if(pline_alt.size() < size_t(depth)) {
-//          if(!check_line_terminates(pline_alt)) {
-//            str::print("A: PLINE_ALT NOT ENOUGH LENGTH", _line_str(pline_alt), "depth", depth, "full", _line_str(pline_alt.full()));
-//          }
           assert(check_line_terminates(pline_alt));
         }
         pline.replace_line(pline_alt);
         if(overwrite) {
-          ab_store[k] = { .info=info, .play_as = play_as, .depth=depth, .eval=score, .m=m, .subpline=pline.get_future() };
+          ab_store[k] = { .info=info, .play_as=activePlayer(), .depth=depth, .eval=score, .m=m, .subpline=pline.get_future() };
         }
         return score;
       } else if(score > bestscore) {
         if(pline_alt.size() < size_t(depth)) {
-//          if(!check_line_terminates(pline_alt)) {
-//            str::print("B: PLINE_ALT NOT ENOUGH LENGTH", _line_str(pline_alt), "depth", depth, "full", _line_str(pline_alt.full()));
-//          }
           assert(check_line_terminates(pline_alt));
         }
         m_best = m;
@@ -487,7 +487,7 @@ public:
       }
     };
     if(overwrite) {
-      ab_store[k] = { .info=info, .play_as = play_as, .depth=depth, .eval=bestscore, .m=m_best, .subpline=pline.get_future() };
+      ab_store[k] = { .info=info, .play_as=activePlayer(), .depth=depth, .eval=bestscore, .m=m_best, .subpline=pline.get_future() };
     }
     return bestscore;
   }
@@ -627,7 +627,6 @@ public:
   }
 
   void reset_planning() {
-    play_as = activePlayer();
     nodes_searched = 0;
     zb_hit = 0, zb_miss = 0;
   }
@@ -655,7 +654,6 @@ public:
     return m;
   }
 
-  COLOR play_as = WHITE;
   size_t nodes_searched = 0;
   double evaluation = DBL_MAX;
   size_t zb_hit = 0, zb_miss = 0;
@@ -664,6 +662,7 @@ public:
     reset_planning();
     decltype(auto) store_scope = get_zobrist_alphabeta_scope();
     MoveLine pline;
+    debug_depth = depth;
     evaluation = alpha_beta(-1e9, 1e9, depth, pline, store_scope.get_object());
     move_t m = get_random_move();
     if(!pline.full().empty()) {
