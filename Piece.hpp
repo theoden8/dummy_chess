@@ -54,7 +54,7 @@ namespace piece {
     return 1ULL << k;
   }
 
-  inline constexpr piece_bitboard_t get_pawn_attack(pos_t pos, piece_bitboard_t occupied, COLOR c) {
+  inline constexpr piece_bitboard_t get_pawn_attack(pos_t pos, COLOR c) {
     if(c==WHITE) return Attacks<WPAWNM>::get_attacks(pos);
     if(c==BLACK) return Attacks<BPAWNM>::get_attacks(pos);
     return 0x00ULL;
@@ -122,8 +122,8 @@ namespace piece {
     return MultiAttacks<KNIGHTM>::get_attacks(mask);
   }
 
-  inline piece_bitboard_t get_king_attack(pos_t pos, piece_bitboard_t occupied) {
-    return Attacks<KINGM>::get_attacks(pos,occupied);
+  inline piece_bitboard_t get_king_attack(pos_t pos) {
+    return Attacks<KINGM>::get_attacks(pos,0x00);
   }
 
 //  inline piece_bitboard_t get_king_attacks(piece_bitboard_t mask, piece_bitboard_t occupied) {
@@ -151,6 +151,19 @@ struct Piece {
     value(p), color(c),
     piece_index(get_piece_index(p, c))
   {}
+
+  piece_bitboard_t get_attack(pos_t pos, piece_bitboard_t occupied) {
+    switch(value) {
+      case EMPTY: return 0x00;
+      case PAWN: return piece::get_pawn_attack(pos, color);
+      case KNIGHT: return piece::get_knight_attack(pos);
+      case BISHOP: return piece::get_sliding_diag_attack(pos, occupied);
+      case ROOK: return piece::get_sliding_orth_attack(pos, occupied);
+      case QUEEN: return piece::get_sliding_diag_attack(pos, occupied) | piece::get_sliding_orth_attack(pos, occupied);
+      case KING: return piece::get_king_attack(pos);
+    }
+    return 0x00;
+  }
 
   inline constexpr bool is_empty() const {
     return value == EMPTY;

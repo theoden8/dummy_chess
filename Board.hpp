@@ -695,7 +695,7 @@ public:
       const piece_bitboard_t occupied = (bits[WHITE] | bits[BLACK]) & ~kingmask[enemy_of(c)];
 
       bitmask::foreach(bits_pawns & bits[c], [&](pos_t pos) mutable noexcept -> void {
-        state_attacks[pos] |= piece::get_pawn_attack(pos,occupied,c);
+        state_attacks[pos] |= piece::get_pawn_attack(pos,c);
       });
       bitmask::foreach(bits_slid_diag & bits[c], [&](pos_t pos) mutable noexcept -> void {
         state_attacks[pos] |= piece::get_sliding_diag_attack(pos,occupied);
@@ -706,7 +706,7 @@ public:
       bitmask::foreach(get_knight_bits() & bits[c], [&](pos_t pos) mutable noexcept -> void {
         state_attacks[pos] |= piece::get_knight_attack(pos);
       });
-      state_attacks[pos_king[c]] |= piece::get_king_attack(pos_king[c], occupied);
+      state_attacks[pos_king[c]] |= piece::get_king_attack(pos_king[c]);
     }
   }
 
@@ -722,16 +722,14 @@ public:
   INLINE piece_bitboard_t get_pawn_attacks_to(pos_t j, COLOR c=NEUTRAL) const {
     if(c==NEUTRAL)c=activePlayer();
     if(c==BOTH)return get_pawn_attacks_to(j, WHITE) | get_pawn_attacks_to(j, BLACK);
-    const piece_bitboard_t occupied = bits[WHITE] | bits[BLACK];
-    return piece::get_pawn_attack(j,occupied,enemy_of(c)) & (bits_pawns & bits[c]);
+    return piece::get_pawn_attack(j,enemy_of(c)) & (bits_pawns & bits[c]);
   }
 
   INLINE piece_bitboard_t get_king_attacks_to(pos_t j, COLOR c=NEUTRAL) const {
     if(c==NEUTRAL)c=activePlayer();
-    const piece_bitboard_t occupied = bits[WHITE] | bits[BLACK];
     const piece_bitboard_t kingmask = (c == BOTH) ? (piece::pos_mask(pos_king[WHITE]) | piece::pos_mask(pos_king[BLACK]))
                                                   : piece::pos_mask(pos_king[c]);
-    return piece::get_king_attack(j,occupied) & kingmask;
+    return piece::get_king_attack(j) & kingmask;
   }
 
   INLINE piece_bitboard_t get_attacks_to(pos_t j, COLOR c=NEUTRAL, piece_bitboard_t occ_mask=~0ULL) const {
@@ -759,9 +757,9 @@ public:
         state_attacks[pos] = 0x00;
         return;
       } else if(bits_pawns & posmask) {
-        state_attacks[pos] = piece::get_pawn_attack(pos, occ_c, self[pos].color);
+        state_attacks[pos] = piece::get_pawn_attack(pos, self[pos].color);
       } else if(pos == pos_king[WHITE] || pos == pos_king[BLACK]) {
-        state_attacks[pos] = piece::get_king_attack(pos,occ_c);
+        state_attacks[pos] = piece::get_king_attack(pos);
       } else if(posmask & (bits_slid_diag | bits_slid_orth)) {
         state_attacks[pos] = 0x00;
         if(posmask & bits_slid_diag) {
@@ -784,7 +782,7 @@ public:
     mask |= piece::get_sliding_diag_attacks(bits_slid_diag & bits[c], occupied);
     mask |= piece::get_sliding_orth_attacks(bits_slid_orth & bits[c], occupied);
     mask |= piece::get_knight_attacks(get_knight_bits() & bits[c]);
-    mask |= piece::get_king_attack(pos_king[c], occupied);
+    mask |= piece::get_king_attack(pos_king[c]);
     return mask;
   }
 
