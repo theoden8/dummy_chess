@@ -4,7 +4,7 @@
 #include <iostream>
 
 #include <Constants.hpp>
-#include <Bitboard.hpp>
+#include <Bitmask.hpp>
 #include <Attacks.hpp>
 
 

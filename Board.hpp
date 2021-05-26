@@ -680,7 +680,7 @@ public:
     update_state_checkline();
     init_state_moves();
     state_hist_board_info.emplace_back(get_board_info_());
-    if(state_hist_draw_repetitions > self.get_current_ply() && can_draw_repetition(3)) {
+    if(state_hist_draw_repetitions > self.get_current_ply() && can_draw_repetition_(3)) {
       state_hist_draw_repetitions = self.get_current_ply();
     }
   }
@@ -835,7 +835,7 @@ public:
 
   // fifty-halfmoves-draw
   INLINE bool is_draw_halfmoves() const {
-    return get_halfmoves() == 100 && !is_checkmate();
+    return get_halfmoves() == 100;// && !is_checkmate();
   }
 
   INLINE bool is_checkmate() const {
@@ -877,8 +877,8 @@ public:
     return is_draw_halfmoves() || is_draw_material() || is_draw_stalemate();
   }
 
-  INLINE bool can_draw_repetition(int no_times=3) const {
-    if(state_hist_draw_repetitions < self.get_current_ply()) {
+  INLINE bool can_draw_repetition_(int no_times=3) const {
+    if(no_times >= 3 && state_hist_draw_repetitions <= self.get_current_ply()) {
       return true;
     }
     const board_info info = state_hist_board_info.back();
@@ -893,6 +893,10 @@ public:
       }
     }
     return false;
+  }
+
+  INLINE bool can_draw_repetition(int no_times=3) const {
+    return state_hist_draw_repetitions <= self.get_current_ply();
   }
 
   std::array <piece_bitboard_t, board::SIZE> state_moves = {0x00};

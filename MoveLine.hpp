@@ -1,6 +1,6 @@
 #include <vector>
 
-#include <Bitboard.hpp>
+#include <Bitmask.hpp>
 #include <Constants.hpp>
 #include <Optimizations.hpp>
 

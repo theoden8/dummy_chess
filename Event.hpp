@@ -1,7 +1,7 @@
 #pragma once
 
 
-#include <Bitboard.hpp>
+#include <Bitmask.hpp>
 #include <Constants.hpp>
 
 

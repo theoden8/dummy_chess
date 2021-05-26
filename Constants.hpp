@@ -4,7 +4,7 @@
 #include <string>
 
 #include <String.hpp>
-#include <Bitboard.hpp>
+#include <Bitmask.hpp>
 
 
 // pieces

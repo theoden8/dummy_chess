@@ -7,7 +7,7 @@
 
 #include <m42.h>
 
-#include <Bitboard.hpp>
+#include <Bitmask.hpp>
 #include <Constants.hpp>
 #include <Event.hpp>
 
