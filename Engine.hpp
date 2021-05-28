@@ -551,12 +551,12 @@ public:
                                                     zobrist::hash_table<ab_info> &ab_store, F &&callback_f)
   {
     if(depth == 0)return {DBL_MAX, board::nomove};
-    std::vector<std::pair<double, move_t>> bestmoves;
+    std::vector<std::tuple<double, int, move_t>> bestmoves;
     iter_moves([&](pos_t i, pos_t j) mutable -> void {
       double val = move_heuristic(i, j);
       const move_t m = bitmask::_pos_pair(i, j);
       if(searchmoves.empty() || searchmoves.find(m) != std::end(searchmoves)) {
-        bestmoves.emplace_back(-val,m);
+        bestmoves.emplace_back(-val,0,m);
       }
     });
     std::sort(bestmoves.begin(), bestmoves.end());
@@ -565,7 +565,7 @@ public:
     for(int16_t d = 0; d < depth; ++d) {
       double alpha = -DBL_MAX;
       for(size_t i = 0; i < bestmoves.size(); ++i) {
-        auto &[eval, m] = bestmoves[i];
+        auto &[eval, curdepth, m] = bestmoves[i];
         if(d == 0) {
           pline[m].premove(m);
         }
@@ -576,6 +576,7 @@ public:
           while(1) {
             MoveLine mline = pline[m];
             eval = -alpha_beta(-aw_beta, -aw_alpha, d, mline, ab_store);
+            ++curdepth;
             if(mline.size() >= (size_t)d || check_line_terminates(mline)) {
               alpha = std::max(eval, alpha);
               pline[m].replace_line(mline);
@@ -588,8 +589,8 @@ public:
 //          str::print("line:", _line_str(mline), "depth:", d);
         }
         {
-          const auto [eval_best, m_best] = *std::max_element(std::begin(bestmoves), std::end(bestmoves));
-          if(!callback_f(d + 1, m_best, eval_best, pline[m_best].full())) {
+          const auto [eval_best, d_best, m_best] = *std::max_element(std::begin(bestmoves), std::end(bestmoves));
+          if(!callback_f(d_best, m_best, eval_best, pline[m_best].full())) {
             should_stop_iddfs = true;
             break;
           }
@@ -598,14 +599,15 @@ public:
       }
       std::sort(bestmoves.begin(), bestmoves.end());
       std::reverse(bestmoves.begin(), bestmoves.end());
-      const auto [eval_best, m_best] = *std::max_element(std::begin(bestmoves), std::end(bestmoves));
-      str::pdebug("depth:", d, "pline:", _line_str(pline[m_best].full(), true), "size:", pline[m_best].full().size(), "eval", alpha);
+      const auto [eval_best, curdepth, m_best] = *std::max_element(std::begin(bestmoves), std::end(bestmoves));
+      str::pdebug("depth:", curdepth, "pline:", _line_str(pline[m_best].full(), true), "size:", pline[m_best].full().size(), "eval", alpha);
       if(should_stop_iddfs)break;
     }
     if(bestmoves.empty())return {DBL_MAX, board::nomove};
 //    const move_t m_best = bestmoves.front().second;
 //    str::print("principal variation:"s, _line_str(pline[m_best]), "size"s, pline.size());
-    return bestmoves.front();
+    auto [eval, _, m] = bestmoves.front();
+    return std::make_pair(eval, m);
   }
 
   template <typename F>

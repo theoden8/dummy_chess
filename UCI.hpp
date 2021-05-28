@@ -267,13 +267,13 @@ struct UCI {
           } else if(cmd[ind] == "ponder"s) {
             g.ponder = true;
           } else if(cmd[ind] == "wtime"s) {
-            g.wtime = double(atol(cmd[++ind].c_str()))*1e-6;
+            g.wtime = double(atol(cmd[++ind].c_str()))*1e-3;
           } else if(cmd[ind] == "btime"s) {
-            g.btime = double(atol(cmd[++ind].c_str()))*1e-6;
+            g.btime = double(atol(cmd[++ind].c_str()))*1e-3;
           } else if(cmd[ind] == "winc"s) {
-            g.winc = double(atol(cmd[++ind].c_str()))*1e-6;
+            g.winc = double(atol(cmd[++ind].c_str()))*1e-3;
           } else if(cmd[ind] == "binc"s) {
-            g.binc = double(atol(cmd[++ind].c_str()))*1e-6;
+            g.binc = double(atol(cmd[++ind].c_str()))*1e-3;
           } else if(cmd[ind] == "movestogo"s) {
             g.movestogo = atoi(cmd[++ind].c_str());
           } else if(cmd[ind] == "depth"s) {
@@ -283,7 +283,7 @@ struct UCI {
           } else if(cmd[ind] == "mate"s) {
             g.mate = atoi(cmd[++ind].c_str());
           } else if(cmd[ind] == "movetime"s) {
-            g.movetime = double(atol(cmd[++ind].c_str()))*1e-6;
+            g.movetime = double(atol(cmd[++ind].c_str()))*1e-3;
           } else if(cmd[ind] == "infinite"s) {
             g.infinite = true;
           } else {
@@ -358,8 +358,8 @@ struct UCI {
     std::string s = str::join(searchmoves_s, ", "s);
     _printf("searchmoves: [%s]\n", s.c_str());
     // TODO ponder, mate, movestogo
-    double movetime = engine->activePlayer() == WHITE ? std::min(10., args.wtime / 40. + args.winc)
-                                                      : std::min(10., args.btime / 40. + args.binc);
+    double movetime = std::min(60., engine->activePlayer() == WHITE ? args.wtime / 40. + args.winc
+                                                                    : args.btime / 40. + args.binc);
     if(args.movetime!=DBL_MAX)movetime=args.movetime;
     const auto start = system_clock::now();
     MoveLine currline;
@@ -367,28 +367,28 @@ struct UCI {
     size_t nodes_searched = 0;
     const std::unordered_set<move_t> searchmoves(args.searchmoves.begin(), args.searchmoves.end());
     const move_t bestmove = engine->get_fixed_depth_move_iddfs(args.depth,
-    [&](int16_t depth, move_t currmove, double curreval, const auto &pline) mutable -> bool {
-      size_t nps = update_nodes_per_second(start, time_spent, nodes_searched);
-      currline.replace_line(pline);
-      respond(RESP_INFO, "nodes"s, engine->nodes_searched,
-                         "nps"s, size_t(nps),
-                         "currmove"s, engine->_move_str(currmove),
-                         "currline"s, engine->_line_str(pline, true),
-                         "score"s, "cp"s, int(round(curreval * 1e2)),
-                         "depth"s, depth,
-                         "seldepth", pline.size()
-      );
-      const double time_to_use = std::max(10., movetime);
-      return !check_if_should_stop(args, time_spent, time_to_use);
-    }, searchmoves);
+      [&](int16_t depth, move_t currmove, double curreval, const auto &pline) mutable -> bool {
+        size_t nps = update_nodes_per_second(start, time_spent, nodes_searched);
+        currline.replace_line(pline);
+        respond(RESP_INFO, "nodes"s, engine->nodes_searched,
+                           "nps"s, size_t(nps),
+                           "currmove"s, engine->_move_str(currmove),
+                           "score"s, "cp"s, int(round(curreval * 1e2)),
+                           "pv"s, engine->_line_str(pline, true),
+                           "time"s, int(round(time_spent * 1000)),
+                           "depth"s, depth,
+                           "seldepth"s, pline.size()
+        );
+        return !check_if_should_stop(args, time_spent, movetime);
+      }, searchmoves);
     should_stop = false;
     if(bestmove != board::nomove) {
       respond(RESP_INFO, "nodes"s, engine->nodes_searched,
-                         "time", time_spent,
+                         "currmove"s, engine->_move_str(bestmove),
                          "score"s, "cp"s, int(round(engine->evaluation * 1e2)),
-                         "pv", engine->_line_str(currline, true),
-                         "currmove", engine->_move_str(bestmove),
-                         "seldepth", currline.size()
+                         "pv"s, engine->_line_str(currline, true),
+                         "time"s, time_spent,
+                         "seldepth"s, currline.size()
       );
       respond(RESP_BESTMOVE, engine->_move_str(bestmove));
     }
