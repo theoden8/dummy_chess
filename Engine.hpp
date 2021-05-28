@@ -15,7 +15,17 @@ class Engine : public Board {
 public:
   Engine(const fen::FEN fen=fen::starting_pos):
     Board(fen)
-  {}
+  {
+    const std::vector<PIECE> piece_types = {PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING};
+    std::vector<std::pair<double, PIECE>> pieces;
+    for(PIECE p : piece_types) {
+      pieces.emplace_back(material_of(p), p);
+    }
+    std::sort(pieces.begin(), pieces.end());
+    for(const auto &[_, p] : pieces) {
+      MATERIAL_PIECE_ORDERING.emplace_back(p);
+    }
+  }
 
   static constexpr std::array<pos_t, 4> PROMOTION_PIECES = {
     board::PROMOTE_KNIGHT, board::PROMOTE_BISHOP,
@@ -36,7 +46,7 @@ public:
   }
 
   template <typename F>
-  INLINE void iter_capture_moves_from(pos_t i, F &&func) const {
+  INLINE void iter_quiesc_moves_from(pos_t i, F &&func) const {
     const COLOR c = self[i].color;
     const piece_bitboard_t foes = bits[enemy_of(c)];
     iter_moves_from(i, [&](pos_t i, pos_t j) mutable -> void {
@@ -65,7 +75,7 @@ public:
 
   piece_bitboard_t get_capture_moves_from(pos_t i) const {
     piece_bitboard_t pb = 0x00;
-    iter_capture_moves_from(i, [&](pos_t i, pos_t j) mutable -> void {
+    iter_quiesc_moves_from(i, [&](pos_t i, pos_t j) mutable -> void {
       pb |= piece::pos_mask(j & board::MOVEMASK);
     });
     return pb;
@@ -79,9 +89,9 @@ public:
   }
 
   template <typename F>
-  INLINE void iter_capture_moves(F &&func) const {
+  INLINE void iter_quiesc_moves(F &&func) const {
     bitmask::foreach(bits[activePlayer()], [&](pos_t i) mutable -> void {
-      iter_capture_moves_from(i, func);
+      iter_quiesc_moves_from(i, func);
     });
   }
 
@@ -130,6 +140,7 @@ public:
                MATERIAL_ROOK = 5,
                MATERIAL_QUEEN = 10,
                MATERIAL_KING = 1e7;
+  std::vector<PIECE> MATERIAL_PIECE_ORDERING;
 
   inline double material_of(PIECE p) const {
     switch(p) {
@@ -231,19 +242,12 @@ public:
   }
 
   piece_bitboard_t get_least_valuable_piece(piece_bitboard_t mask) const {
-    // find material heuristic ordering
-    const std::vector<PIECE> piece_types = {PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING};
-    std::vector<std::pair<double, PIECE>> pieces;
-    for(PIECE p : piece_types) {
-      pieces.emplace_back(material_of(p), p);
-    }
-    std::sort(pieces.begin(), pieces.end());
     // short-hands for bits
     const piece_bitboard_t diag = self.bits_slid_diag, orth = self.bits_slid_orth;
     const piece_bitboard_t kings = piece::pos_mask(pos_king[WHITE]) | piece::pos_mask(pos_king[BLACK]);
     // get some piece that is minimal
     piece_bitboard_t found = 0x00ULL;
-    for(const auto &[_, p] : pieces) {
+    for(const auto p : MATERIAL_PIECE_ORDERING) {
       switch(p) {
         case PAWN: if(mask & self.bits_pawns) found = mask & self.bits_pawns; break;
         case KNIGHT: if(mask & self.get_knight_bits()) found = mask & self.get_knight_bits(); break;
@@ -345,7 +349,6 @@ public:
           alpha = score;
         }
       }
-      --delta;
     }
 
     // zobrist
@@ -360,7 +363,7 @@ public:
     std::vector<std::pair<double, move_t>> quiescmoves;
     quiescmoves.reserve(8);
     if(!king_in_check) {
-      iter_capture_moves([&](pos_t i, pos_t j) mutable -> void {
+      iter_quiesc_moves([&](pos_t i, pos_t j) mutable -> void {
         double val = move_heuristic(i, j);
         const move_t m = bitmask::_pos_pair(i, j);
         if(is_promotion_move(i, j) || is_enpassant_take_move(i, j) || material_of(self[i].value) <= material_of(self[j].value)) {
@@ -531,7 +534,7 @@ public:
   }
 
   std::pair<double, double> init_aspiration_window(double eval) {
-    return {eval - .75, eval + .75};
+    return {eval - .25, eval + .25};
   }
 
   void set_aspiration_window_re_search(double &aw_alpha, double &aw_beta) {
@@ -558,6 +561,7 @@ public:
     });
     std::sort(bestmoves.begin(), bestmoves.end());
     std::map<move_t, MoveLine> pline;
+    bool should_stop_iddfs = false;
     for(int16_t d = 0; d < depth; ++d) {
       double alpha = -DBL_MAX;
       for(size_t i = 0; i < bestmoves.size(); ++i) {
@@ -565,7 +569,7 @@ public:
         if(d == 0) {
           pline[m].premove(m);
         }
-        str::print("IDDFS:", d, "move:", _move_str(m), "pre-eval:", eval);
+        str::pdebug("IDDFS:", d, "move:", _move_str(m), "pre-eval:", eval);
         {
           volatile auto mscope = move_scope(m);
           auto [aw_alpha, aw_beta] = init_aspiration_window(eval);
@@ -579,19 +583,24 @@ public:
               break;
             }
             set_aspiration_window_re_search(aw_alpha, aw_beta);
-            str::print("RE-SEARCH", aw_alpha);
+            str::perror("RE-SEARCH", aw_alpha);
           }
 //          str::print("line:", _line_str(mline), "depth:", d);
+        }
+        {
+          const auto [eval_best, m_best] = *std::max_element(std::begin(bestmoves), std::end(bestmoves));
+          if(!callback_f(d + 1, m_best, eval_best, pline[m_best].full())) {
+            should_stop_iddfs = true;
+            break;
+          }
         }
         //if(d+1==depth)str::print("eval:", eval, "move:", _move_str(m), "pvline", _line_str(pline[m]));
       }
       std::sort(bestmoves.begin(), bestmoves.end());
       std::reverse(bestmoves.begin(), bestmoves.end());
-      const auto [eval_best, m_best] = bestmoves.front();
-      if(!callback_f(m_best, eval_best, pline[m_best])) {
-        break;
-      }
-      str::print("depth:", d, "pline:", _line_str(pline[m_best].full(), true), "size:", pline[m_best].full().size(), "eval", alpha);
+      const auto [eval_best, m_best] = *std::max_element(std::begin(bestmoves), std::end(bestmoves));
+      str::pdebug("depth:", d, "pline:", _line_str(pline[m_best].full(), true), "size:", pline[m_best].full().size(), "eval", alpha);
+      if(should_stop_iddfs)break;
     }
     if(bestmoves.empty())return {DBL_MAX, board::nomove};
 //    const move_t m_best = bestmoves.front().second;
@@ -635,7 +644,7 @@ public:
       // increase depth of max
       auto [eval, d, m] = mx;
       if(d == 0)pline[m].premove(m);
-      str::print("IDA*:", d, "move:", _move_str(m), "pre-eval:", eval, "pline", _line_str(pline[m].full()));
+      str::pdebug("IDA*:", d, "move:", _move_str(m), "pre-eval:", eval, "pline", _line_str(pline[m].full()));
       volatile auto mscope = move_scope(m);
       auto [aw_alpha, aw_beta] = init_aspiration_window(eval);
       while(1) {
@@ -653,11 +662,11 @@ public:
         str::print("RE-SEARCH", aw_alpha);
       }
       //printf("increase %.5f %d %s\n", score, d, _move_str(m).c_str());
-//      const move_t m_best = bestmoves.front().second;
-//      if(!callback_f(m_best, pline[m_best])) {
-//        break;
-//      }
-//      str::print("depth:", d, "pline:", _line_str(pline[m_best].full(), true), "size:", pline[m_best].full().size(), "eval", alpha);
+      const auto [eval_best, depth_best, m_best] = *std::max_element(std::begin(bestmoves), std::end(bestmoves));
+      if(!callback_f(depth_best, m_best, eval_best, pline[m_best])) {
+        break;
+      }
+      str::pdebug("depth:", d, "pline:", _line_str(pline[m_best].full(), true), "size:", pline[m_best].full().size(), "eval", eval_best);
     }
     if(bestmoves.empty())return {DBL_MAX, board::nomove};
     auto [eval, d, m] = *std::max_element(bestmoves.begin(), bestmoves.end());
@@ -674,22 +683,40 @@ public:
   }
 
   zobrist::hash_table_ptr<ab_info> ab_store = nullptr;
-  move_t get_fixed_depth_move_iddfs(int16_t depth, const std::unordered_set<move_t> &searchmoves={}) {
+
+  decltype(auto) make_callback_f() {
+    return [&](int16_t depth, move_t m, double eval, const MoveLine &pline) mutable -> bool {
+      return true;
+    };
+  }
+
+  template <typename F>
+  move_t get_fixed_depth_move_iddfs(int16_t depth, F &&callback_f, const std::unordered_set<move_t> &searchmoves) {
     reset_planning();
     decltype(auto) store_scope = get_zobrist_alphabeta_scope();
-    auto [_, m] = iterative_deepening_dfs(depth, searchmoves, store_scope.get_object(),
-                                          [&](move_t m, double eval, const MoveLine &pline) mutable -> bool { return true; });
+    debug_depth = depth;
+    auto [_, m] = iterative_deepening_dfs(depth, searchmoves, store_scope.get_object(), std::forward<F>(callback_f));
     evaluation = _;
     return m;
   }
 
-  move_t get_fixed_depth_move_idastar(int16_t depth, const std::unordered_set<move_t> &searchmoves={}) {
+  move_t get_fixed_depth_move_iddfs(int16_t depth, const std::unordered_set<move_t> &searchmoves={}) {
+    return get_fixed_depth_move_iddfs(depth, make_callback_f(), searchmoves);
+  }
+
+  template <typename F>
+  move_t get_fixed_depth_move_idastar(int16_t depth, F &&callback_f, const std::unordered_set<move_t> &searchmoves={}) {
     reset_planning();
     decltype(auto) store_scope = get_zobrist_alphabeta_scope();
-    auto [_, m] = iterative_deepening_astar(depth, searchmoves, store_scope.get_object(),
-                                            [&](move_t m, double eval, const MoveLine &pline) mutable -> bool { return true; });
+    debug_depth = depth;
+    auto [_, m] = iterative_deepening_astar(depth, searchmoves, store_scope.get_object(), std::forward<F>(callback_f));
     evaluation = _;
     return m;
+  }
+
+  template <typename F>
+  move_t get_fixed_depth_move_idastar(int16_t depth, const std::unordered_set<move_t> &searchmoves={}) {
+    return get_fixed_depth_move_idastar(depth, make_callback_f(), searchmoves);
   }
 
   size_t nodes_searched = 0;
@@ -706,15 +733,15 @@ public:
     if(!pline.full().empty()) {
       m = pline.full().front();
     }
-    str::print("pvline:", _line_str(pline, true), "size:", pline.size(), "eval:", evaluation);
+    str::pdebug("pvline:", _line_str(pline, true), "size:", pline.size(), "eval:", evaluation);
     if(!check_valid_sequence(pline)) {
-      str::print("pvline not playable");
+      str::pdebug("pvline not playable");
     }
     return m;
   }
 
-  decltype(auto) get_fixed_depth_move(int16_t depth, const std::unordered_set<move_t> &searchmoves={}) {
-    return get_fixed_depth_move(depth, [](move_t m, double eval, const MoveLine &pline) mutable -> bool {return true;}, searchmoves);
+  move_t get_fixed_depth_move(int16_t depth, const std::unordered_set<move_t> &searchmoves={}) {
+    return get_fixed_depth_move(depth, make_callback_f(), searchmoves);
   }
 
   struct perft_info {

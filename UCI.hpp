@@ -5,6 +5,9 @@
 #include <vector>
 #include <map>
 #include <chrono>
+#include <thread>
+#include <mutex>
+#include <atomic>
 
 #include <FEN.hpp>
 #include <Engine.hpp>
@@ -22,6 +25,13 @@ using namespace std::chrono;
 
 struct UCI {
   Engine *engine = nullptr;
+  std::atomic<bool> debug_mode = false;
+  std::atomic<bool> should_quit = false;
+  std::atomic<bool> should_stop = false;
+
+  std::recursive_mutex engine_mtx;
+  using lock_guard = std::lock_guard<std::recursive_mutex>;
+  std::thread engine_thread;
 
   UCI()
   {}
@@ -93,8 +103,6 @@ struct UCI {
     {RESP_OPTION,         "option"s},
   };
 
-  bool should_quit = false;
-  bool should_stop = false;
   void run() {
     std::vector<std::string> cmd = {""s};
     char c = 0;
@@ -147,13 +155,22 @@ struct UCI {
     double winc = 0;
     double binc = 0;
     int movestogo = 0;
-    size_t depth = SIZE_MAX;
+    int16_t depth = INT16_MAX;
     size_t nodes = SIZE_MAX;
     size_t mate = SIZE_MAX;
     double movetime = DBL_MAX;
     bool infinite = false;
   } go_command;
 
+  void join_engine_thread() {
+    if(should_stop == true) {
+      lock_guard guard(engine_mtx);
+      if(engine_thread.joinable()) {
+        engine_thread.join();
+        str::pdebug("joining engine thread"s);
+      }
+    }
+  }
 
   void process_cmd(std::vector<std::string> cmd) {
     _printf("processing cmd {");
@@ -173,13 +190,20 @@ struct UCI {
     }
     switch(cmdmap.at(cmd.front())) {
       case CMD_UCI:
-        respond(RESP_UCIOK);
         respond(RESP_ID, "name", "dummy_chess");
         respond(RESP_ID, "author", "$USER");
+        respond(RESP_UCIOK);
       return;
-      case CMD_DEBUG:return;
+      case CMD_DEBUG:
+        if(cmd.size() < 2 || cmd[1] == "on"s) {
+          debug_mode = true;
+        } else if(cmd[1] == "off"s) {
+          debug_mode = false;
+        } else {
+          str::perror("error: debug mode unknown '"s, cmd[1], "'"s);
+        }
+      return;
       case CMD_ISREADY:
-        init(fen::starting_pos);
         respond(RESP_READYOK);
       return;
       case CMD_SETOPTION:
@@ -187,88 +211,106 @@ struct UCI {
       return;
       case CMD_REGISTER:return;
       case CMD_UCINEWGAME:
-        destroy();
+        {
+          join_engine_thread();
+          lock_guard guard(engine_mtx);
+          destroy();
+        }
       return;
       case CMD_POSITION:
-        {
-          fen::FEN f;
-          size_t ind = 1;
-          if(cmd[1] == "startpos"s) {
-            ++ind;
-            f = fen::starting_pos;
-          } else {
-            std::string s;
-            for(; ind < cmd.size(); ++ind) {
-              if(cmd[ind] == "moves")break;
-              if(ind != 1)s += " ";
-              s += cmd[ind];
-            }
-            f = fen::load_from_string(s);
+      {
+        join_engine_thread();
+        lock_guard guard(engine_mtx);
+        fen::FEN f;
+        size_t ind = 1;
+        if(cmd[1] == "startpos"s) {
+          ++ind;
+          f = fen::starting_pos;
+        } else {
+          std::string s;
+          for(; ind < cmd.size(); ++ind) {
+            if(cmd[ind] == "moves")break;
+            if(ind != 1)s += " ";
+            s += cmd[ind];
           }
-          init(f);
-          if(ind < cmd.size() && cmd[ind] == "moves"s) {
-            std::vector<move_t> moves;
-            ++ind;
-            for(; ind < cmd.size(); ++ind) {
-              moves.emplace_back(scan_move(cmd[ind]));
-            }
-            for(const auto m : moves) {
-              engine->make_move(m);
-            }
-          }
-          engine->print();
+          f = fen::load_from_string(s);
         }
+        init(f);
+        if(ind < cmd.size() && cmd[ind] == "moves"s) {
+          MoveLine moves;
+          ++ind;
+          for(; ind < cmd.size(); ++ind) {
+            moves.put(scan_move(cmd[ind]));
+          }
+          str::pdebug("moves"s, engine->_line_str(moves, true));
+          for(const auto m : moves) {
+            engine->make_move(m);
+          }
+        }
+//        engine->print();
+      }
       return;
       case CMD_GO:
+      {
+        join_engine_thread();
         should_stop = false;
-        {
-          go_command g;
-          size_t ind = 1;
-          while(ind < cmd.size()) {
-            if(cmd[ind] == "searchmoves"s) {
-              ++ind;
-              for(; ind < cmd.size(); ++ind) {
-                g.searchmoves.emplace_back(scan_move(cmd[ind]));
-              }
-            } else if(cmd[ind] == "ponder"s) {
-              g.ponder = true;
-            } else if(cmd[ind] == "wtime"s) {
-              g.wtime = double(atol(cmd[++ind].c_str()))*1e-6;
-            } else if(cmd[ind] == "btime"s) {
-              g.btime = double(atol(cmd[++ind].c_str()))*1e-6;
-            } else if(cmd[ind] == "winc"s) {
-              g.winc = double(atol(cmd[++ind].c_str()))*1e-6;
-            } else if(cmd[ind] == "binc"s) {
-              g.binc = double(atol(cmd[++ind].c_str()))*1e-6;
-            } else if(cmd[ind] == "movestogo"s) {
-              g.movestogo = atoi(cmd[++ind].c_str());
-            } else if(cmd[ind] == "depth"s) {
-              g.depth = atoi(cmd[++ind].c_str());
-            } else if(cmd[ind] == "nodes"s) {
-              g.nodes = atoll(cmd[++ind].c_str());
-            } else if(cmd[ind] == "mate"s) {
-              g.mate = atoi(cmd[++ind].c_str());
-            } else if(cmd[ind] == "movetime"s) {
-              g.movetime = double(atol(cmd[++ind].c_str()))*1e-6;
-            } else if(cmd[ind] == "infinite"s) {
-              g.infinite = true;
-            } else {
-              str::perror("error: unknown subcommand", cmd[ind]);
-              return;
-            }
+      }
+      {
+        go_command g;
+        size_t ind = 1;
+        while(ind < cmd.size()) {
+          if(cmd[ind] == "searchmoves"s) {
             ++ind;
+            for(; ind < cmd.size(); ++ind) {
+              g.searchmoves.emplace_back(scan_move(cmd[ind]));
+            }
+          } else if(cmd[ind] == "ponder"s) {
+            g.ponder = true;
+          } else if(cmd[ind] == "wtime"s) {
+            g.wtime = double(atol(cmd[++ind].c_str()))*1e-6;
+          } else if(cmd[ind] == "btime"s) {
+            g.btime = double(atol(cmd[++ind].c_str()))*1e-6;
+          } else if(cmd[ind] == "winc"s) {
+            g.winc = double(atol(cmd[++ind].c_str()))*1e-6;
+          } else if(cmd[ind] == "binc"s) {
+            g.binc = double(atol(cmd[++ind].c_str()))*1e-6;
+          } else if(cmd[ind] == "movestogo"s) {
+            g.movestogo = atoi(cmd[++ind].c_str());
+          } else if(cmd[ind] == "depth"s) {
+            g.depth = atoi(cmd[++ind].c_str());
+          } else if(cmd[ind] == "nodes"s) {
+            g.nodes = atoll(cmd[++ind].c_str());
+          } else if(cmd[ind] == "mate"s) {
+            g.mate = atoi(cmd[++ind].c_str());
+          } else if(cmd[ind] == "movetime"s) {
+            g.movetime = double(atol(cmd[++ind].c_str()))*1e-6;
+          } else if(cmd[ind] == "infinite"s) {
+            g.infinite = true;
+          } else {
+            str::perror("error: unknown subcommand", cmd[ind]);
+            return;
           }
-          perform_go(g);
+          ++ind;
         }
+        engine_thread = std::thread([&](auto g) mutable -> void {
+          perform_go(g);
+        }, g);
+      }
       return;
       case CMD_STOP:
+      {
         should_stop = true;
+      }
       return;
       case CMD_PONDERHIT:
         //TODO
       return;
       case CMD_QUIT:
+      {
+        should_stop = true;
+        join_engine_thread();
         should_quit = true;
+      }
       return;
       default:
         str::perror("error: unknown command");
@@ -276,13 +318,37 @@ struct UCI {
     }
   }
 
-  void perform_go(const go_command &args) {
+  template <typename TimeT>
+  INLINE size_t update_nodes_per_second(const TimeT &start, double &time_spent, size_t &nodes_searched) {
+    const double prev_time_spent = time_spent;
+    const size_t prev_nodes_searched = nodes_searched;
+    time_spent = 1e-9*duration_cast<nanoseconds>(system_clock::now()-start).count();
+    nodes_searched = engine->nodes_searched;
+    const double nps = double(nodes_searched - prev_nodes_searched) / (time_spent - prev_time_spent);
+    return nps;
+  }
+
+  INLINE bool check_if_should_stop(const go_command &args, double time_spent, double time_to_use) {
+    const bool ret = (
+        should_stop || should_quit
+        || (!args.infinite && time_spent >= args.movetime)
+        || engine->nodes_searched >= args.nodes
+        || time_spent >= time_to_use
+    );
+    if(ret) {
+      str::pdebug("SHOULD STOP");
+    }
+    return ret;
+  }
+
+  void perform_go(const go_command args) {
+    lock_guard guard(engine_mtx);
     _printf("GO COMMAND\n");
     _printf("ponder: %d\n", args.ponder ? 1 : 0);
     _printf("wtime: %.6f, btime: %.6f\n", args.wtime, args.btime);
     _printf("winc: %.6f, binc: %.6f\n", args.winc, args.binc);
     _printf("movestogo: %d\n", args.movestogo);
-    _printf("depth: %lu\n", args.depth);
+    _printf("depth: %hd\n", args.depth);
     _printf("nodes: %lu\n", args.nodes);
     _printf("mate: %lu\n", args.mate);
     _printf("movetime: %.6f\n", args.movetime);
@@ -300,29 +366,34 @@ struct UCI {
     double time_spent = 0.;
     size_t nodes_searched = 0;
     const std::unordered_set<move_t> searchmoves(args.searchmoves.begin(), args.searchmoves.end());
-    const move_t bestmove = engine->get_fixed_depth_move(args.depth, [&](move_t currmove, double curreval, const auto &pline) mutable -> bool
-    {
-      const double prev_time_spent = time_spent;
-      const size_t prev_nodes_searched = nodes_searched;
-      time_spent = 1e-9*duration_cast<nanoseconds>(system_clock::now()-start).count();
-      nodes_searched = engine->nodes_searched;
-      const double nps = double(nodes_searched - prev_nodes_searched) / (time_spent - prev_time_spent);
+    const move_t bestmove = engine->get_fixed_depth_move_iddfs(args.depth,
+    [&](int16_t depth, move_t currmove, double curreval, const auto &pline) mutable -> bool {
+      size_t nps = update_nodes_per_second(start, time_spent, nodes_searched);
       currline.replace_line(pline);
-      respond(RESP_INFO, "nodes", engine->nodes_searched,
-                         "nps", size_t(nps),
-                         "currmove", engine->_move_str(currmove),
-                         "currline", engine->_line_str(pline));
-      return !(should_stop || should_quit) && (args.ponder || args.infinite || (time_spent < movetime && engine->nodes_searched < args.nodes));
+      respond(RESP_INFO, "nodes"s, engine->nodes_searched,
+                         "nps"s, size_t(nps),
+                         "currmove"s, engine->_move_str(currmove),
+                         "currline"s, engine->_line_str(pline, true),
+                         "score"s, "cp"s, int(round(curreval * 1e2)),
+                         "depth"s, depth,
+                         "seldepth", pline.size()
+      );
+      const double time_to_use = std::max(10., movetime);
+      return !check_if_should_stop(args, time_spent, time_to_use);
     }, searchmoves);
     should_stop = false;
-    if(bestmove == board::nomove) {
-      return;
+    if(bestmove != board::nomove) {
+      respond(RESP_INFO, "nodes"s, engine->nodes_searched,
+                         "time", time_spent,
+                         "score"s, "cp"s, int(round(engine->evaluation * 1e2)),
+                         "pv", engine->_line_str(currline, true),
+                         "currmove", engine->_move_str(bestmove),
+                         "seldepth", currline.size()
+      );
+      respond(RESP_BESTMOVE, engine->_move_str(bestmove));
     }
-    respond(RESP_INFO, "depth", currline.size(),
-                       "time", time_spent,
-                       "score", "cp", engine->evaluation,
-                       "pv", engine->_line_str(currline, true),
-                       "bestmove", engine->_move_str(bestmove));
+    str::pdebug("NOTE: search is over");
+    should_stop = true;
   }
 
   template <typename... Str>
@@ -331,6 +402,7 @@ struct UCI {
   }
 
   ~UCI() {
+    join_engine_thread();
     destroy();
   }
 };
