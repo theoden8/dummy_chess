@@ -234,11 +234,21 @@ public:
     MoveLine subpline;
   };
 
+  bool score_is_mate(double score) const {
+    return std::abs(score) > MATERIAL_KING * 1e-2;
+  }
+
   double score_decay(double score) const {
-    if(std::abs(score) > MATERIAL_KING / 1e3) {
+    if(score_is_mate(score)) {
       score -= score / std::abs(score);
     }
     return score;
+  }
+
+  int score_mate_in(double score) const {
+    assert(score_is_mate(score));
+    const int mate_in = int(MATERIAL_KING - std::abs(score));
+    return (score < 0) ? -mate_in : mate_in;
   }
 
   piece_bitboard_t get_least_valuable_piece(piece_bitboard_t mask) const {
@@ -328,14 +338,13 @@ public:
 //    bitmask::_pos_pair(board::_pos(F, 5), board::_pos(F, 4)),
 //    3 '8/8/8/3p3p/3PkP2/8/8/3K4 b - - 4 47'
 //    bitmask::_pos_pair(board::_pos(E, 4), board::_pos(D, 4)),
+//    3 'r5k1/pn1b2bp/2p3p1/6P1/P1Pp3P/3K4/1q6/RN4NR w - - 0 25'
+//    bitmask::_pos_pair(board::_pos(A, 1), board::_pos(A, 3)),
   });
 
   double alpha_beta_quiescence(double alpha, double beta, int16_t depth, MoveLine &pline,
                               zobrist::hash_table<ab_info> &ab_store, int8_t delta)
   {
-    std::string TAB = ""s;
-    for(int i=0;i<debug_depth-depth;++i)TAB+=" "s;
-
     double score = evaluate();
     double bestscore = -DBL_MAX;
     const bool king_in_check = state_checkline[activePlayer()] != ~0ULL;
@@ -405,6 +414,8 @@ public:
         score = -score_decay(alpha_beta_quiescence(-beta, -alpha, depth - 1, pline_alt, ab_store, delta));
         assert(check_valid_sequence(pline_alt));
         if(!debug_moveline.empty() && pline_alt.startswith(debug_moveline)) {
+          std::string TAB = ""s;
+          for(int i=0;i<debug_depth-depth;++i)TAB+=" "s;
           printf("%s", TAB.c_str());
           printf("depth=%d, %s, score=%.5f (%.4f, %.4f) %s\n", depth,board::_move_str(m).c_str(),score, beta, alpha,
             ("["s + str::join(_line_str(pline_alt.full())) + "]"s).c_str());
@@ -435,9 +446,6 @@ public:
   double alpha_beta(double alpha, double beta, int16_t depth, MoveLine &pline,
                                   zobrist::hash_table<ab_info> &ab_store)
   {
-    std::string TAB=""s;
-    for(int i=debug_depth;i>depth;--i)TAB+=" ";
-
     if(depth == 0) {
       const int delta = 5;
       assert(pline.empty());
@@ -488,11 +496,14 @@ public:
 //        }
         assert(check_valid_sequence(pline_alt));
         if(!debug_moveline.empty() && pline_alt.startswith(debug_moveline)) {
+          std::string TAB=""s;
+          for(int i=debug_depth;i>depth;--i)TAB+=" ";
+
           std::string actinfo = ""s;
           if(score >= beta) {
             actinfo = "beta-curoff"s;
           } else if(score > bestscore) {
-            actinfo = "new best";
+            actinfo = "new best"s;
           }
           printf("%s", TAB.c_str());
           printf("depth=%d, %s, score=%.5f (%.4f, %.4f) %s %s\n", depth,board::_move_str(m).c_str(),score, beta, alpha, actinfo.c_str(),
@@ -534,23 +545,24 @@ public:
   }
 
   std::pair<double, double> init_aspiration_window(double eval) {
-    return {eval - .25, eval + .25};
+//    return {eval - .25, eval + .25};
+    return {-DBL_MAX, DBL_MAX};
   }
 
   void set_aspiration_window_re_search(double &aw_alpha, double &aw_beta) {
-    if(aw_alpha < -3) {
-      aw_alpha = -DBL_MAX;
-      aw_beta = DBL_MAX;
-    }
-    aw_alpha -= 1.;
-    aw_beta += 1.;
+//    if(aw_alpha < -3) {
+//      aw_alpha = -DBL_MAX;
+//      aw_beta = DBL_MAX;
+//    }
+//    aw_alpha -= 1.;
+//    aw_beta += 1.;
   }
 
   template <typename F>
-  std::pair<double, move_t> iterative_deepening_dfs(int16_t depth, const std::unordered_set<move_t> &searchmoves,
+  decltype(auto) iterative_deepening_dfs(int16_t depth, const std::unordered_set<move_t> &searchmoves,
                                                     zobrist::hash_table<ab_info> &ab_store, F &&callback_f)
   {
-    if(depth == 0)return {DBL_MAX, board::nomove};
+    if(depth == 0)return std::make_tuple(DBL_MAX, board::nomove);
     std::vector<std::tuple<double, int, move_t>> bestmoves;
     iter_moves([&](pos_t i, pos_t j) mutable -> void {
       double val = move_heuristic(i, j);
@@ -580,7 +592,7 @@ public:
             if(mline.size() >= (size_t)d || check_line_terminates(mline)) {
               alpha = std::max(eval, alpha);
               pline[m].replace_line(mline);
-              assert(pline[m].full()[0] == m);
+              assert(pline[m].full().front() == m);
               break;
             }
             set_aspiration_window_re_search(aw_alpha, aw_beta);
@@ -603,18 +615,16 @@ public:
       str::pdebug("depth:", curdepth, "pline:", _line_str(pline[m_best].full(), true), "size:", pline[m_best].full().size(), "eval", alpha);
       if(should_stop_iddfs)break;
     }
-    if(bestmoves.empty())return {DBL_MAX, board::nomove};
-//    const move_t m_best = bestmoves.front().second;
-//    str::print("principal variation:"s, _line_str(pline[m_best]), "size"s, pline.size());
-    auto [eval, _, m] = bestmoves.front();
-    return std::make_pair(eval, m);
+    if(bestmoves.empty())return std::make_tuple(-DBL_MAX, board::nomove);
+    const auto [eval, _, best_m] = bestmoves.front();
+    return std::make_tuple(eval, best_m);
   }
 
   template <typename F>
-  std::pair<double, move_t> iterative_deepening_astar(int16_t depth, const std::unordered_set<move_t> &searchmoves,
+  decltype(auto) iterative_deepening_astar(int16_t depth, const std::unordered_set<move_t> &searchmoves,
                                                       std::array<ab_info, ZOBRIST_SIZE> &ab_store, F &&callback_f)
   {
-    if(depth == 0)return {DBL_MAX, board::nomove};
+    if(depth == 0)return std::make_tuple(DBL_MAX, board::nomove);
     std::vector<std::tuple<double, int, move_t>> bestmoves;
     iter_moves([&](pos_t i, pos_t j) mutable -> void {
       double val = move_heuristic(i, j);
@@ -670,9 +680,9 @@ public:
       }
       str::pdebug("depth:", d, "pline:", _line_str(pline[m_best].full(), true), "size:", pline[m_best].full().size(), "eval", eval_best);
     }
-    if(bestmoves.empty())return {DBL_MAX, board::nomove};
-    auto [eval, d, m] = *std::max_element(bestmoves.begin(), bestmoves.end());
-    return {eval, m};
+    if(bestmoves.empty())return std::make_tuple(DBL_MAX, board::nomove);
+    const auto [eval, _, m] = *std::max_element(bestmoves.begin(), bestmoves.end());
+    return std::make_tuple(eval, m);
   }
 
   void reset_planning() {

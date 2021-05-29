@@ -1,7 +1,7 @@
 DBGFLAGS = -g3 -DZOBRIST_SIZE="(1<<12)"
 OPTFLAGS = -Ofast -DNDEBUG -flto -fwhole-program -march=native
 PROFFLAGS = $(OPTFLAGS) -pg
-CXXFLAGS = -std=c++20 -I. -Wall -Wextra -Wno-unused -Wno-parentheses -m64
+CXXFLAGS = -std=c++20 -I. -Wall -Wextra -Wno-unused -Wno-parentheses -m64 -march=native
 # clang:
 #CXX = clang++-13
 #CXXFLAGS += -Wno-unused-parameter -Wno-range-loop-construct -Wno-unknown-attributes -Wno-ignored-optimization-argument
@@ -51,4 +51,4 @@ dummy_chess_uci_opt: uci.cpp $(SOURCES) $(HPPFILES) Makefile
 
 clean:
 	rm -vf *.o
-	rm -vf dummy_chess dummy_chess_curses dummy_chess_curses_rel dummy_chess_bench dummy_chess_perft dummy_chess_uci
+	rm -vf dummy_chess dummy_chess_opt dummy_chess_curses dummy_chess_curses_rel dummy_chess_bench dummy_chess_perft dummy_chess_playout dummy_chess_abwalk dummy_chess_alphabeta dummy_chess_uci dummy_chess_uci_opt

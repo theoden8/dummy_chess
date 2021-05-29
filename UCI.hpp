@@ -150,8 +150,8 @@ struct UCI {
   typedef struct _go_command {
     std::vector<move_t> searchmoves = {};
     bool ponder = false;
-    double wtime = 0;
-    double btime = 0;
+    double wtime = DBL_MAX;
+    double btime = DBL_MAX;
     double winc = 0;
     double binc = 0;
     int movestogo = 0;
@@ -172,15 +172,20 @@ struct UCI {
     }
   }
 
-  void process_cmd(std::vector<std::string> cmd) {
-    _printf("processing cmd {");
+  std::string to_string(const std::vector<std::string> &cmd) {
+    std::string s = "{"s;
     for(size_t i=0;i<cmd.size();++i) {
-      _printf("\"%s\"", cmd[i].c_str());
+      s += "\""s + cmd[i] + "\""s;
       if(i != cmd.size() - 1) {
-        _printf(", ");
+        s += ", "s;
       }
     }
-    _printf("}\n");
+    s += "}"s;
+    return s;
+  }
+
+  void process_cmd(std::vector<std::string> cmd) {
+    str::pdebug("processing cmd", to_string(cmd));
     while(cmdmap.find(cmd.front()) == std::end(cmdmap)) {
       str::perror("error: unknown command", cmd.front());
       cmd.erase(cmd.begin());
@@ -287,7 +292,7 @@ struct UCI {
           } else if(cmd[ind] == "infinite"s) {
             g.infinite = true;
           } else {
-            str::perror("error: unknown subcommand", cmd[ind]);
+            str::perror("error: unknown subcommand"s, cmd[ind]);
             return;
           }
           ++ind;
@@ -328,20 +333,32 @@ struct UCI {
     return nps;
   }
 
-  INLINE bool check_if_should_stop(const go_command &args, double time_spent, double time_to_use) {
-    const bool ret = (
-        should_stop || should_quit
+  INLINE bool check_if_should_stop(const go_command &args, double time_spent, double time_to_use) const {
+    return (
+        should_stop
         || (!args.infinite && time_spent >= args.movetime)
         || engine->nodes_searched >= args.nodes
         || time_spent >= time_to_use
     );
-    if(ret) {
-      str::pdebug("SHOULD STOP");
-    }
-    return ret;
   }
 
-  void perform_go(const go_command args) {
+  std::string get_score_type_string(double score) const {
+    std::string s = ""s;
+    if(!engine->score_is_mate(score)) {
+      s += "cp"s;
+    } else {
+      s += "mate"s;
+    }
+    s += " "s;
+    if(!engine->score_is_mate(score)) {
+      s += std::to_string(int(round(score * 1e2)));
+    } else {
+      s += std::to_string(engine->score_mate_in(score));
+    }
+    return s;
+  }
+
+  void perform_go(go_command args) {
     lock_guard guard(engine_mtx);
     _printf("GO COMMAND\n");
     _printf("ponder: %d\n", args.ponder ? 1 : 0);
@@ -368,27 +385,27 @@ struct UCI {
     const std::unordered_set<move_t> searchmoves(args.searchmoves.begin(), args.searchmoves.end());
     const move_t bestmove = engine->get_fixed_depth_move_iddfs(args.depth,
       [&](int16_t depth, move_t currmove, double curreval, const auto &pline) mutable -> bool {
-        size_t nps = update_nodes_per_second(start, time_spent, nodes_searched);
+        const size_t nps = update_nodes_per_second(start, time_spent, nodes_searched);
         currline.replace_line(pline);
-        respond(RESP_INFO, "nodes"s, engine->nodes_searched,
+        respond(RESP_INFO, "depth"s, depth,
+                           "seldepth"s, pline.size(),
+                           "nodes"s, engine->nodes_searched,
                            "nps"s, size_t(nps),
                            "currmove"s, engine->_move_str(currmove),
-                           "score"s, "cp"s, int(round(curreval * 1e2)),
+                           "score"s, get_score_type_string(curreval),
                            "pv"s, engine->_line_str(pline, true),
-                           "time"s, int(round(time_spent * 1000)),
-                           "depth"s, depth,
-                           "seldepth"s, pline.size()
+                           "time"s, int(round(time_spent * 1e3))
         );
         return !check_if_should_stop(args, time_spent, movetime);
       }, searchmoves);
     should_stop = false;
     if(bestmove != board::nomove) {
-      respond(RESP_INFO, "nodes"s, engine->nodes_searched,
+      respond(RESP_INFO, "seldepth"s, currline.size(),
+                         "nodes"s, engine->nodes_searched,
                          "currmove"s, engine->_move_str(bestmove),
-                         "score"s, "cp"s, int(round(engine->evaluation * 1e2)),
+                         "score"s, get_score_type_string(engine->evaluation),
                          "pv"s, engine->_line_str(currline, true),
-                         "time"s, time_spent,
-                         "seldepth"s, currline.size()
+                         "time"s, int(round(time_spent * 1e3))
       );
       respond(RESP_BESTMOVE, engine->_move_str(bestmove));
     }
@@ -397,7 +414,7 @@ struct UCI {
   }
 
   template <typename... Str>
-  void respond(RESPONSE resp, Str... args) {
+  void respond(RESPONSE resp, Str... args) const {
     str::print(respmap.at(resp), args...);
   }
 
