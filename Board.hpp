@@ -94,10 +94,8 @@ public:
     if(!(f.castling_compressed & (1 << 1)))unset_castling(BLACK,KING_SIDE);
     if(!(f.castling_compressed & (1 << 2)))unset_castling(WHITE,QUEEN_SIDE);
     if(!(f.castling_compressed & (1 << 3)))unset_castling(WHITE,KING_SIDE);
+    set_enpassant(f.enpassant);
     init_update_state();
-    if(f.enpassant != event::enpassantnotrace) {
-      enpassants.emplace_back(get_current_ply(), f.enpassant);
-    }
   }
 
   INLINE constexpr COLOR activePlayer() const {
@@ -117,7 +115,7 @@ public:
     return pieces[Piece::get_piece_index(p, c)];
   }
 
-  INLINE const Piece get_piece(const Piece p) {
+  INLINE const Piece get_piece(const Piece p) const {
     return get_piece(p.value, p.color);
   }
 
@@ -147,12 +145,12 @@ public:
   }
 
   INLINE void unset_pos(pos_t i) {
-    if(self[i].color == WHITE) {
+    if(bits[WHITE] & piece::pos_mask(i)) {
       piece::unset_pos(bits[WHITE], i);
 //      if(self[i].value == KING && pos_king[WHITE] == i) {
 //        pos_king[WHITE] = piece::uninitialized_king;
 //      }
-    } else if(self[i].color == BLACK) {
+    } else if(bits[BLACK] & piece::pos_mask(i)) {
       piece::unset_pos(bits[BLACK], i);
 //      if(self[i].value == KING && pos_king[BLACK] == i) {
 //        pos_king[BLACK] = piece::uninitialized_king;
@@ -200,16 +198,16 @@ public:
   INLINE bool is_castling_move(pos_t i, pos_t j) const {
     assert(j <= board::MOVEMASK);
     if(self[i].value != KING)return false;
-    if(self[i].color == WHITE)return Moves<KINGM>::is_castling_move<WHITE>(i, j);
-    if(self[i].color == BLACK)return Moves<KINGM>::is_castling_move<BLACK>(i, j);
+    if(bits[WHITE] & piece::pos_mask(i))return Moves<KINGM>::is_castling_move<WHITE>(i, j);
+    if(bits[BLACK] & piece::pos_mask(i))return Moves<KINGM>::is_castling_move<BLACK>(i, j);
     return false;
   }
 
   INLINE bool is_doublepush_move(pos_t i, pos_t j) const {
     j &= board::MOVEMASK;
     if(self[i].value != PAWN)return false;
-    if(self[i].color == WHITE)return Moves<WPAWNM>::is_double_push(i, j);
-    if(self[i].color == BLACK)return Moves<BPAWNM>::is_double_push(i, j);
+    if(bits[WHITE] & piece::pos_mask(i))return Moves<WPAWNM>::is_double_push(i, j);
+    if(bits[BLACK] & piece::pos_mask(i))return Moves<BPAWNM>::is_double_push(i, j);
     return false;
   }
 
@@ -221,8 +219,8 @@ public:
   INLINE bool is_promotion_move(pos_t i, pos_t j) const {
     j &= board::MOVEMASK;
     if(self[i].value != PAWN)return false;
-    if(self[i].color == WHITE)return Moves<WPAWNM>::is_promotion_move(i, j);
-    if(self[i].color == BLACK)return Moves<BPAWNM>::is_promotion_move(i, j);
+    if(bits[WHITE] & piece::pos_mask(i))return Moves<WPAWNM>::is_promotion_move(i, j);
+    if(bits[BLACK] & piece::pos_mask(i))return Moves<BPAWNM>::is_promotion_move(i, j);
     return false;
   }
 
@@ -242,8 +240,8 @@ public:
       killwhat = self[j].piece_index;
     }
     if(is_doublepush_move(i, j)) {
-      if(self[i].color==WHITE)enpassant_trace=Moves<WPAWNM>::get_enpassant_trace(i,j);
-      if(self[i].color==BLACK)enpassant_trace=Moves<BPAWNM>::get_enpassant_trace(i,j);
+      if(bits[WHITE] & piece::pos_mask(i))enpassant_trace=Moves<WPAWNM>::get_enpassant_trace(i,j);
+      if(bits[BLACK] & piece::pos_mask(i))enpassant_trace=Moves<BPAWNM>::get_enpassant_trace(i,j);
     }
     return event::basic(bitmask::_pos_pair(i, j | promote_flag), killwhat, enpassant_trace);
   }
@@ -251,8 +249,8 @@ public:
   event_t ev_castle(pos_t i, pos_t j) const {
     assert(j <= board::MOVEMASK);
     pos_pair_t rookmove = 0x00;
-    if(self[i].color == WHITE)rookmove = Moves<KINGM>::castle_rook_move<WHITE>(i,j);
-    if(self[i].color == BLACK)rookmove = Moves<KINGM>::castle_rook_move<BLACK>(i,j);
+    if(bits[WHITE] & piece::pos_mask(i))rookmove = Moves<KINGM>::castle_rook_move<WHITE>(i,j);
+    if(bits[BLACK] & piece::pos_mask(i))rookmove = Moves<KINGM>::castle_rook_move<BLACK>(i,j);
     const pos_t r_i = bitmask::first(rookmove),
                 r_j = bitmask::second(rookmove);
     return event::castling(bitmask::_pos_pair(i, j), bitmask::_pos_pair(r_i, r_j));
@@ -278,8 +276,10 @@ public:
     return board::_y(enpassant_trace()) == 3-1 ? board::_pos(A+x, 4) : board::_pos(A+x, 5);
   }
 
-  void set_enpassant(pos_t e) {
-    enpassants.emplace_back(get_current_ply(), e);
+  INLINE void set_enpassant(pos_t e) {
+    if(e != event::enpassantnotrace) {
+      enpassants.emplace_back(get_current_ply(), e);
+    }
   }
 
   INLINE void restore_enpassants() {
@@ -340,7 +340,7 @@ public:
   void update_castlings(pos_t i, pos_t j) {
     const COLOR c = self[i].color;
     const pos_t shift = (c == WHITE) ? 0 : board::SIZE-board::LEN;
-    if(self[i].value == KING) {
+    if(pos_king[c] == i) {
       unset_castling(c, KING_SIDE);
       unset_castling(c, QUEEN_SIDE);
     } else if(is_castling(c, QUEEN_SIDE) && self[i].value == ROOK && i == board::_pos(A, 1) + shift) {
@@ -412,7 +412,7 @@ public:
 
   INLINE bool check_valid_move(pos_t i, pos_t j) const {
     return i == (i & board::MOVEMASK) &&
-           self[i].color == activePlayer() &&
+           (bits[activePlayer()] & piece::pos_mask(i)) &&
            self.get_moves_from(i) & piece::pos_mask(j & board::MOVEMASK);
   }
 
@@ -431,7 +431,7 @@ public:
           const pos_t killwhat = event::extract_piece_ind(ev);
           const pos_t new_enpassant = event::extract_pos(ev);
           set_enpassant(new_enpassant);
-          if(killwhat != event::killnothing || self[i].value == PAWN) {
+          if(killwhat != event::killnothing || bits_pawns & piece::pos_mask(i)) {
             update_halfmoves();
           }
           update_castlings(i, j);
@@ -705,9 +705,8 @@ public:
   std::array <piece_bitboard_t, board::SIZE> state_attacks = {0x00ULL};
   ALWAYS_UNROLL void init_state_attacks() {
     for(auto&a:state_attacks)a=0ULL;
-    std::array<piece_bitboard_t, 2> kingmask = {piece::pos_mask(pos_king[WHITE]), piece::pos_mask(pos_king[BLACK])};
     for(COLOR c : {WHITE, BLACK}) {
-      const piece_bitboard_t occupied = (bits[WHITE] | bits[BLACK]) & ~kingmask[enemy_of(c)];
+      const piece_bitboard_t occupied = (bits[WHITE] | bits[BLACK]) & ~piece::pos_mask(pos_king[enemy_of(c)]);
 
       bitmask::foreach(bits_pawns & bits[c], [&](pos_t pos) mutable noexcept -> void {
         state_attacks[pos] |= piece::get_pawn_attack(pos,c);
@@ -727,11 +726,20 @@ public:
 
   INLINE piece_bitboard_t get_attacks_from(pos_t pos) const { return state_attacks[pos]; }
 
-  INLINE piece_bitboard_t get_sliding_attacks_to(pos_t j, piece_bitboard_t occupied, COLOR c=NEUTRAL) const {
+  INLINE piece_bitboard_t get_sliding_diag_attacks_to(pos_t j, piece_bitboard_t occupied, COLOR c=NEUTRAL) const {
     if(c==NEUTRAL)c=activePlayer();
     const piece_bitboard_t colormask = (c == BOTH) ? occupied : occupied & bits[c];
-    return (piece::get_sliding_diag_attack(j,occupied) & bits_slid_diag & colormask)
-        | (piece::get_sliding_orth_attack(j,occupied) & bits_slid_orth & colormask);
+    return piece::get_sliding_diag_attack(j,occupied) & bits_slid_diag & colormask;
+  }
+
+  INLINE piece_bitboard_t get_sliding_orth_attacks_to(pos_t j, piece_bitboard_t occupied, COLOR c=NEUTRAL) const {
+    if(c==NEUTRAL)c=activePlayer();
+    const piece_bitboard_t colormask = (c == BOTH) ? occupied : occupied & bits[c];
+    return piece::get_sliding_orth_attack(j,occupied) & bits_slid_orth & colormask;
+  }
+
+  INLINE piece_bitboard_t get_sliding_attacks_to(pos_t j, piece_bitboard_t occupied, COLOR c=NEUTRAL) const {
+    return get_sliding_diag_attacks_to(j, occupied, c) | get_sliding_orth_attacks_to(j, occupied, c);
   }
 
   INLINE piece_bitboard_t get_pawn_attacks_to(pos_t j, COLOR c=NEUTRAL) const {
@@ -907,7 +915,7 @@ public:
     // maybe do this as a loop for incremental updates
     {
       const COLOR ec = enemy_of(c);
-      const piece_bitboard_t friends = bits[c], foes  = bits[ec],
+      const piece_bitboard_t friends = bits[c], foes = bits[ec],
                              attack_mask = get_attack_mask(ec);
       const bool doublecheck = (state_checkline[c] == 0x00);
       if(!doublecheck) {
@@ -927,22 +935,23 @@ public:
       }
       state_moves[pos_king[c]] = get_attacks_from(pos_king[c]) & ~friends & ~attack_mask;
       state_moves[pos_king[c]] |= Moves<KINGM>::get_castling_moves(pos_king[c], friends|foes, attack_mask, get_castlings_mask(), c);
-      init_state_moves_checkline_enpassant_takes(c);
+      init_state_moves_checkline_enpassant_takes();
       init_state_pins();
     }
   }
 
-  void init_state_moves_checkline_enpassant_takes(COLOR c=NEUTRAL) {
-    if(c==NEUTRAL)c=activePlayer();
+  void init_state_moves_checkline_enpassant_takes() {
+    const COLOR c = activePlayer();
     const pos_t etrace = enpassant_trace();
     const pos_t epawn = enpassant_pawn();
     if(etrace == event::enpassantnotrace)return;
     if(!bitmask::is_exp2(state_checkline[c]))return;
     const pos_t attacker = bitmask::log2_of_exp2(state_checkline[c]);
     if(epawn != attacker)return;
+    str::pdebug("etrace", board::_pos_str(etrace), "epawn", board::_pos_str(epawn), "attacker", board::_pos_str(attacker));
     const piece_bitboard_t apawns = get_pawn_attacks_to(etrace,c);
     if(!apawns)return;
-    bitmask::foreach(apawns, [&](pos_t apawn) mutable -> void {
+    bitmask::foreach(apawns, [&](pos_t apawn) mutable noexcept -> void {
       state_moves[apawn] |= piece::pos_mask(etrace);
     });
   }
@@ -1015,27 +1024,26 @@ public:
     // maybe do this as a loop for incremental updates
     {
       const COLOR c = activePlayer();
+      const COLOR ec = enemy_of(c);
       if(state_checkline[c] != ~0ULL)return;
       const pos_t etrace = enpassant_trace();
       const pos_t epawn = enpassant_pawn();
       const piece_bitboard_t h = bitmask::hline << (board::_y(pos_king[c]) * board::LEN);
-      if(!(h & bits_slid_orth & bits[c]))return;
+      if(!(h & bits_slid_orth & bits[ec]))return;
       if(!(h & piece::pos_mask(epawn)))return;
       const piece_bitboard_t apawns = get_pawn_attacks_to(etrace,c);
       if(!apawns)return;
       bitmask::foreach(apawns, [&](pos_t apawn) mutable -> void {
-        put_pos(apawn, get_piece(EMPTY));
-        put_pos(epawn, get_piece(EMPTY));
+        piece_bitboard_t occupied = bits[WHITE] | bits[BLACK];
+        occupied &= ~(piece::pos_mask(apawn) | piece::pos_mask(epawn));
         //printf("consider horizontal pin %hhu -> %hhu\n", apawn, etrace);
-        if(get_sliding_attacks_to(pos_king[c],enemy_of(c))) {
+        if(get_sliding_orth_attacks_to(pos_king[c],occupied,ec)) {
           //printf("horizontal pin disable %hhu -> %hhu\n", apawn, etrace);
           state_pins[self[apawn].color] |= piece::pos_mask(apawn);
           const piece_bitboard_t forbid = ~piece::pos_mask(etrace);
           state_pins_rays[apawn] &= forbid;
           state_moves[apawn] &= forbid;
         }
-        put_pos(apawn, pieces[get_piece(PAWN,c).piece_index]);
-        put_pos(epawn, pieces[get_piece(PAWN,enemy_of(c)).piece_index]);
       });
     }
   }

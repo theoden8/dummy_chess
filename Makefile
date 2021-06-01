@@ -38,7 +38,7 @@ dummy_chess_bench: bench.cpp $(SOURCES) $(HPPFILES) Makefile
 	$(CXX) $(OPTFLAGS) $(CXXFLAGS) bench.cpp $(SOURCES) $(LDFLAGS) -o $@
 
 dummy_chess_perft: perft.cpp $(SOURCES) $(HPPFILES) Makefile
-	$(CXX) $(PROFFLAGS) $(CXXFLAGS) perft.cpp $(SOURCES) $(LDFLAGS) -o $@
+	$(CXX) $(OPTFLAGS) $(CXXFLAGS) perft.cpp $(SOURCES) $(LDFLAGS) -o $@
 
 dummy_chess_alphabeta: alphabeta.cpp $(SOURCES) $(HPPFILES) Makefile
 	$(CXX) $(PROFFLAGS) $(CXXFLAGS) alphabeta.cpp $(SOURCES) $(LDFLAGS) -o $@

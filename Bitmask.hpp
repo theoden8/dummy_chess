@@ -145,7 +145,7 @@ namespace bitmask {
       pos_t r = bitmask::log2(x);
       func(r);
       // unset msb
-      assert(x & 1ULL << r);
+      assert(x & (1ULL << r));
       x &= ~(1LLU << r);
     }
   }
