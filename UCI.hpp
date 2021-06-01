@@ -353,7 +353,7 @@ struct UCI {
     if(!engine->score_is_mate(score)) {
       s += std::to_string(int(round(score * 1e2)));
     } else {
-      s += std::to_string(engine->score_mate_in(score));
+      s += std::to_string(engine->score_mate_in(score) / 2 + 1);
     }
     return s;
   }

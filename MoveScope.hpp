@@ -1,7 +1,7 @@
 #pragma once
 
 
-#include <Constants.hpp>
+#include <Bitboard.hpp>
 
 
 // kind of like lock_scope, but for moves

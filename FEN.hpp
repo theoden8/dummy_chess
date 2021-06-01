@@ -4,7 +4,7 @@
 #include <cctype>
 #include <strings.h>
 
-#include <Constants.hpp>
+#include <Bitboard.hpp>
 #include <Event.hpp>
 #include <String.hpp>
 

@@ -3,8 +3,8 @@
 
 #include <iostream>
 
-#include <Constants.hpp>
 #include <Bitmask.hpp>
+#include <Bitboard.hpp>
 #include <Attacks.hpp>
 
 

@@ -9,8 +9,8 @@
 #include <unordered_set>
 #include <vector>
 
-#include <Constants.hpp>
 #include <Optimizations.hpp>
+#include <Bitboard.hpp>
 #include <Piece.hpp>
 
 

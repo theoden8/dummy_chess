@@ -2,7 +2,7 @@
 
 
 #include <Bitmask.hpp>
-#include <Constants.hpp>
+#include <Bitboard.hpp>
 
 
 typedef uint_fast32_t event_t;

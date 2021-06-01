@@ -1,8 +1,8 @@
 #include <vector>
 
-#include <Bitmask.hpp>
-#include <Constants.hpp>
 #include <Optimizations.hpp>
+#include <Bitmask.hpp>
+#include <Bitboard.hpp>
 
 
 struct MoveLine {

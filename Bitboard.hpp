@@ -29,7 +29,7 @@ typedef enum { KING_SIDE, QUEEN_SIDE } CASTLING_SIDE;
 
 enum {
   A,B,C,D,E,F,G,H
-} ENUM_ROW;
+} BOARD_FILE;
 
 namespace board {
   constexpr pos_t LEN = 8;
