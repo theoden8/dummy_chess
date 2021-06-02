@@ -52,28 +52,15 @@ public:
     iter_moves_from(i, [&](pos_t i, pos_t j) mutable -> void {
       if(is_promotion_move(i, j)
           || is_enpassant_take_move(i, j)
-          || self[j & board::MOVEMASK].color == enemy_of(c))
+          || is_naively_capture_move(i, j)
+          || is_naively_checking_move(i, j))
       {
         func(i, j);
       }
     });
   }
 
-  template <typename F>
-  INLINE void iter_check_moves_from(pos_t i, F &&func) const {
-    const COLOR c = self[i].color;
-    const piece_bitboard_t foes = bits[enemy_of(c)];
-    iter_moves_from(i, [&](pos_t i, pos_t j) mutable -> void {
-      if(is_promotion_move(i, j)
-          || is_enpassant_take_move(i, j)
-          || self[j & board::MOVEMASK].color == enemy_of(c))
-      {
-        func(i, j);
-      }
-    });
-  }
-
-  piece_bitboard_t get_capture_moves_from(pos_t i) const {
+  piece_bitboard_t get_quiesc_moves_from(pos_t i) const {
     piece_bitboard_t pb = 0x00;
     iter_quiesc_moves_from(i, [&](pos_t i, pos_t j) mutable -> void {
       pb |= piece::pos_mask(j & board::MOVEMASK);
@@ -378,9 +365,19 @@ public:
         if(is_promotion_move(i, j) || is_enpassant_take_move(i, j) || material_of(self[i].value) <= material_of(self[j].value)) {
           ;
         } else {
-          double see = static_exchange_evaluation(i, j);
-          if(see < 0 && !king_in_check)return;
-          val += see;
+          // captures and checks
+          bool should_prune = true;
+          if(is_naively_checking_move(i, j)) {
+            if(!is_naively_capture_move(i, j)) {
+              --delta;
+            }
+            should_prune = false;
+          }
+          if(is_naively_capture_move(i, j)) {
+            double see = static_exchange_evaluation(i, j);
+            if(see < 0 && !king_in_check && should_prune)return;
+            val += see;
+          }
         }
         if(pline.find_in_mainline(m)) {
           val += 10.;

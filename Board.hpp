@@ -224,6 +224,35 @@ public:
     return false;
   }
 
+  INLINE bool is_naively_capture_move(pos_t i, pos_t j) const {
+    j &= board::MOVEMASK;
+//    return self[j].color == enemy_of(self[i].color);
+    return self[j].color == enemy_of(activePlayer());
+  }
+
+  INLINE bool is_naively_checking_move(pos_t i, pos_t j) const {
+    j &= board::MOVEMASK;
+    const COLOR c = activePlayer();
+    const pos_t target = pos_king[enemy_of(c)];
+    const piece_bitboard_t occupied = (bits[WHITE] | bits[BLACK]) & ~piece::pos_mask(i);
+    const move_t m = bitmask::_pos_pair(i, j);
+    if(bits_pawns & piece::pos_mask(i)) {
+      return piece::get_pawn_attack(j, c) & piece::pos_mask(target);
+    }
+    if(bits_slid_diag & piece::pos_mask(i)) {
+      const piece_bitboard_t mask = piece::get_sliding_diag_attack(j, occupied) & piece::pos_mask(target);
+      if(mask)return true;
+    }
+    if(bits_slid_orth & piece::pos_mask(i)) {
+      const piece_bitboard_t mask = piece::get_sliding_orth_attack(j, occupied) & piece::pos_mask(target);
+      if(mask)return true;
+    }
+    if(get_knight_bits() & piece::pos_mask(i)) {
+      return piece::get_knight_attack(j) & piece::pos_mask(target);
+    }
+    return false;
+  }
+
   void move_pos(pos_t i, pos_t j) {
     assert(j <= board::MOVEMASK);
     put_pos(j, self[i]);
@@ -1097,8 +1126,7 @@ public:
       .halfmove_clock = get_halfmoves(),
       .fullmove = uint16_t((history.size() / 2) + 1),
     };
-    for(pos_t y_ = 0; y_ < board::LEN; ++y_) {
-      const pos_t y = board::LEN - y_ - 1;
+    for(pos_t y = 0; y < board::LEN; ++y) {
       for(pos_t x = 0; x < board::LEN; ++x) {
         const pos_t ind = board::_pos(A+x, 1+y);
         if(self[ind].value == EMPTY) {
