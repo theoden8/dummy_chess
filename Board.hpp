@@ -25,12 +25,12 @@ protected:
     COLOR active_player;
     pos_t enpassant_castlings;
     pos_pair_t kings;
-    piece_bitboard_t whites, blacks, diagonal_sliding, orthogonal_sliding, pawns;
+    piece_bitboard_t whites, blacks, diag_slid, orth_slid, pawns;
 
     INLINE bool operator==(board_info other) const noexcept {
       return active_player == other.active_player &&
              whites == other.whites && blacks == other.blacks &&
-             diagonal_sliding == other.diagonal_sliding && orthogonal_sliding == other.orthogonal_sliding &&
+             diag_slid == other.diag_slid && orth_slid == other.orth_slid &&
              pawns == other.pawns && kings == other.kings &&
              enpassant_castlings == other.enpassant_castlings;
     }
@@ -120,7 +120,7 @@ public:
   }
 
   INLINE board_info get_board_info_() const {
-    pos_t enpassant_castlings = ((enpassant_trace() == event::enpassantnotrace) ? 0xf0 : board::_x(enpassant_trace())) << 4;
+    pos_t enpassant_castlings = ((enpassant_trace() == event::enpassantnotrace) ? 0x0f : board::_x(enpassant_trace())) << 4;
     enpassant_castlings |= get_castlings_compressed();
     return (board_info){
       .active_player=activePlayer(),
@@ -128,8 +128,8 @@ public:
       .kings=bitmask::_pos_pair(pos_king[WHITE], pos_king[BLACK]),
       .whites=bits[WHITE],
       .blacks=bits[BLACK],
-      .diagonal_sliding=bits_slid_diag,
-      .orthogonal_sliding=bits_slid_orth,
+      .diag_slid=bits_slid_diag,
+      .orth_slid=bits_slid_orth,
       .pawns=bits_pawns,
     };
   }
@@ -224,7 +224,7 @@ public:
     return false;
   }
 
-  INLINE bool is_naively_capture_move(pos_t i, pos_t j) const {
+  INLINE bool is_capture_move(pos_t i, pos_t j) const {
     j &= board::MOVEMASK;
 //    return self[j].color == enemy_of(self[i].color);
     return self[j].color == enemy_of(activePlayer());
@@ -253,7 +253,7 @@ public:
     return false;
   }
 
-  void move_pos(pos_t i, pos_t j) {
+  INLINE void move_pos(pos_t i, pos_t j) {
     assert(j <= board::MOVEMASK);
     put_pos(j, self[i]);
     unset_pos(i);
@@ -275,7 +275,7 @@ public:
     return event::basic(bitmask::_pos_pair(i, j | promote_flag), killwhat, enpassant_trace);
   }
 
-  event_t ev_castle(pos_t i, pos_t j) const {
+  INLINE event_t ev_castle(pos_t i, pos_t j) const {
     assert(j <= board::MOVEMASK);
     pos_pair_t rookmove = 0x00;
     if(bits[WHITE] & piece::pos_mask(i))rookmove = Moves<KINGM>::castle_rook_move<WHITE>(i,j);
@@ -285,7 +285,7 @@ public:
     return event::castling(bitmask::_pos_pair(i, j), bitmask::_pos_pair(r_i, r_j));
   }
 
-  event_t ev_take_enpassant(pos_t i, pos_t j) const {
+  INLINE event_t ev_take_enpassant(pos_t i, pos_t j) const {
     assert(j <= board::MOVEMASK);
     return event::enpassant(bitmask::_pos_pair(i, j), enpassant_pawn());
   }
@@ -977,7 +977,6 @@ public:
     if(!bitmask::is_exp2(state_checkline[c]))return;
     const pos_t attacker = bitmask::log2_of_exp2(state_checkline[c]);
     if(epawn != attacker)return;
-    str::pdebug("etrace", board::_pos_str(etrace), "epawn", board::_pos_str(epawn), "attacker", board::_pos_str(attacker));
     const piece_bitboard_t apawns = get_pawn_attacks_to(etrace,c);
     if(!apawns)return;
     bitmask::foreach(apawns, [&](pos_t apawn) mutable noexcept -> void {

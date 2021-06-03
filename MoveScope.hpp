@@ -10,7 +10,7 @@ struct MoveScope {
   BOARD &b;
 
   // make a move on constructor
-  inline MoveScope(BOARD &b, move_t m) noexcept:
+  inline explicit MoveScope(BOARD &b, move_t m) noexcept:
     b(b)
   {
     b.make_move(m);
@@ -33,7 +33,7 @@ struct RecursiveMoveScope {
   BOARD &b;
   int counter = 0;
 
-  inline RecursiveMoveScope(BOARD &b) noexcept:
+  inline explicit RecursiveMoveScope(BOARD &b) noexcept:
     b(b)
   {}
 

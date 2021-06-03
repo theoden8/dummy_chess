@@ -383,10 +383,13 @@ struct UCI {
     double time_spent = 0.;
     size_t nodes_searched = 0;
     const std::unordered_set<move_t> searchmoves(args.searchmoves.begin(), args.searchmoves.end());
+    move_t pondermove = board::nomove;
     const move_t bestmove = engine->get_fixed_depth_move_iddfs(args.depth,
-      [&](int16_t depth, move_t currmove, double curreval, const auto &pline) mutable -> bool {
+      [&](int16_t depth, move_t currmove, double curreval, const auto &pline, move_t ponder_m) mutable -> bool {
         const size_t nps = update_nodes_per_second(start, time_spent, nodes_searched);
         currline.replace_line(pline);
+        pondermove = ponder_m;
+        const double hit_rate = double(engine->zb_hit) / double(1e-9+engine->zb_hit + engine->zb_miss);
         respond(RESP_INFO, "depth"s, depth,
                            "seldepth"s, pline.size(),
                            "nodes"s, engine->nodes_searched,
@@ -394,20 +397,27 @@ struct UCI {
                            "currmove"s, engine->_move_str(currmove),
                            "score"s, get_score_type_string(curreval),
                            "pv"s, engine->_line_str(pline, true),
-                           "time"s, int(round(time_spent * 1e3))
+                           "time"s, int(round(time_spent * 1e3)),
+                           "hashfull"s, int(round(hit_rate * 1e3))
         );
         return !check_if_should_stop(args, time_spent, movetime);
       }, searchmoves);
     should_stop = false;
     if(bestmove != board::nomove) {
+      const double hit_rate = double(engine->zb_hit) / double(1e-9+engine->zb_hit + engine->zb_miss);
       respond(RESP_INFO, "seldepth"s, currline.size(),
                          "nodes"s, engine->nodes_searched,
                          "currmove"s, engine->_move_str(bestmove),
                          "score"s, get_score_type_string(engine->evaluation),
                          "pv"s, engine->_line_str(currline, true),
-                         "time"s, int(round(time_spent * 1e3))
+                         "time"s, int(round(time_spent * 1e3)),
+                         "hashfull"s, int(round(hit_rate * 1e3))
       );
-      respond(RESP_BESTMOVE, engine->_move_str(bestmove));
+      if(pondermove != board::nomove) {
+        respond(RESP_BESTMOVE, engine->_move_str(bestmove), "ponder"s, engine->_move_str(pondermove));
+      } else {
+        respond(RESP_BESTMOVE, engine->_move_str(bestmove));
+      }
     }
     str::pdebug("NOTE: search is over");
     should_stop = true;
