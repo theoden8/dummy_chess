@@ -1123,11 +1123,11 @@ public:
       .castling_compressed = fen::compress_castlings(get_castlings_mask()),
       .enpassant = enpassant_trace(),
       .halfmove_clock = get_halfmoves(),
-      .fullmove = uint16_t((history.size() / 2) + 1),
+      .fullmove = uint16_t((get_current_ply() / 2) + 1),
     };
     for(pos_t y = 0; y < board::LEN; ++y) {
       for(pos_t x = 0; x < board::LEN; ++x) {
-        const pos_t ind = board::_pos(A+x, 1+y);
+        const pos_t ind = board::_pos(A+x, 8-y);
         if(self[ind].value == EMPTY) {
           f.board += ' ';
         } else {

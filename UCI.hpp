@@ -385,7 +385,7 @@ struct UCI {
     const std::unordered_set<move_t> searchmoves(args.searchmoves.begin(), args.searchmoves.end());
     move_t pondermove = board::nomove;
     const move_t bestmove = engine->get_fixed_depth_move_iddfs(args.depth,
-      [&](int16_t depth, move_t currmove, double curreval, const auto &pline, move_t ponder_m) mutable -> bool {
+      [&](int16_t depth, move_t currmove, double curreval, const MoveLine &pline, move_t ponder_m) mutable -> bool {
         const size_t nps = update_nodes_per_second(start, time_spent, nodes_searched);
         currline.replace_line(pline);
         pondermove = ponder_m;
