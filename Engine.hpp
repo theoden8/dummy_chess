@@ -404,7 +404,7 @@ public:
     if(zbscore.has_value()) {
       return zbscore.value();
     }
-    const bool overwrite = false;//(depth >= ab_store[k].depth);
+    const bool overwrite = false;//ab_store[k].depth < 0;//(depth >= ab_store[k].depth);
     decltype(auto) quiescmoves = ab_get_quiesc_moves(pline, delta, king_in_check);
     if(quiescmoves.empty()) {
       ++nodes_searched;
@@ -415,11 +415,13 @@ public:
     for(const auto [_, m] : quiescmoves) {
       //assert(check_valid_move(m));
       MoveLine pline_alt = pline.branch_from_past();
+      bool repetitions = false;
       {
         volatile auto mscope = move_scope(m);
         pline_alt.premove(m);
         assert(pline_alt.empty());
         score = -score_decay(alpha_beta_quiescence(-beta, -alpha, depth - 1, pline_alt, ab_store, delta));
+        repetitions = can_draw_repetition();
         assert(check_valid_sequence(pline_alt));
         if(!debug_moveline.empty() && pline_alt.startswith(debug_moveline)) {
           std::string TAB = ""s;
@@ -432,7 +434,7 @@ public:
       }
       if(score >= beta) {
         pline.replace_line(pline_alt);
-        if(overwrite && std::abs(score) > 1e-7) {
+        if(overwrite && !repetitions) {
           ab_store[k] = { .info=info, .depth=depth, .eval=score, .m=m, .subpline=pline_alt.get_future() };
         }
         return score;
@@ -617,7 +619,7 @@ public:
             MoveLine mline = pline[m];
             eval = -alpha_beta(-aw_beta, -aw_alpha, d, mline, ab_store);
             ++curdepth;
-            if(mline.size() >= (size_t)d || check_line_terminates(mline)) {
+            if(mline.size() >= size_t(d) || check_line_terminates(mline)) {
               alpha = std::max(eval, alpha);
               pline[m].replace_line(mline);
               assert(pline[m].full().front() == m);
@@ -630,7 +632,7 @@ public:
         }
         {
           const auto [eval_best, d_best, m_best] = *std::max_element(std::begin(bestmoves), std::end(bestmoves));
-          if(!callback_f(d_best, m_best, eval_best, pline[m_best].full(), m)) {
+          if(!callback_f(d_best, m_best, eval_best, pline[m_best].full(), m) || (score_is_mate(eval_best) && d > 1)) {
             should_stop_iddfs = true;
             break;
           }
