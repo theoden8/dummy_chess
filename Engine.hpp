@@ -184,8 +184,8 @@ public:
     double h = .0;
     h += h_material(c);
     h += h_pins(c) * 1e-4;
-    h += count_moves(c) * 2e-4;
-//    h += h_attack_cells(c) * 1e-4;
+//    h += count_moves(c) * 2e-4;
+    h += h_attack_cells(c) * 1e-4;
     return h;
   }
 

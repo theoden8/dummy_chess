@@ -801,11 +801,11 @@ public:
       bitmask::foreach(bits_slid_orth & bits[c], [&](pos_t pos) mutable noexcept -> void {
         state_attacks[pos] |= piece::get_sliding_orth_attack(pos,occupied);
       });
-      bitmask::foreach(get_knight_bits() & bits[c], [&](pos_t pos) mutable noexcept -> void {
-        state_attacks[pos] |= piece::get_knight_attack(pos);
-      });
       state_attacks[pos_king[c]] |= piece::get_king_attack(pos_king[c]);
     }
+    bitmask::foreach(get_knight_bits(), [&](pos_t pos) mutable noexcept -> void {
+      state_attacks[pos] |= piece::get_knight_attack(pos);
+    });
   }
 
   INLINE piece_bitboard_t get_attacks_from(pos_t pos) const { return state_attacks[pos]; }
@@ -1013,7 +1013,7 @@ public:
           state_moves[pos] |= get_push_moves(c, pos, friends|foes);
           state_moves[pos] &= state_checkline[c];
         });
-        bitmask::foreach(bits[c] & ~bits_pawns, [&](pos_t pos) mutable noexcept -> void {
+        bitmask::foreach(bits[c] & ~(bits_pawns | get_king_bits()), [&](pos_t pos) mutable noexcept -> void {
           state_moves[pos] = get_attacks_from(pos) & ~friends;
           state_moves[pos] &= state_checkline[c];
         });
