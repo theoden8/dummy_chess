@@ -89,10 +89,10 @@ public:
     }
     bitmask::foreach(bits[c], [&](pos_t i) mutable -> void {
       pos_t moves_from = bitmask::count_bits(get_moves_from(i));
-      if(self[i].value == PAWN && (board::_y(i) == 2-1 || board::_y(i) == 7-1)
+      if(piece::is_set(bits_pawns, i) && (board::_y(i) == 2-1 || board::_y(i) == 7-1)
           && (
-            (self[i].color == WHITE && 1+board::_y(i) == 7)
-            || (self[i].color == BLACK && 1+board::_y(i) == 2))
+            (self.color_at_pos(i) == WHITE && 1+board::_y(i) == 7)
+            || (self.color_at_pos(i) == BLACK && 1+board::_y(i) == 2))
         )
       {
         moves_from *= 4;
@@ -207,7 +207,7 @@ public:
     if(is_promotion_move(i, j)) {
       val += material_of(board::get_promotion_as(j)) - material_of(PAWN);
     }
-    if(self[j & board::MOVEMASK].value != EMPTY) {
+    if(!self.empty_at_pos(j & board::MOVEMASK)) {
       val -= material_of(self[i].value)*.05;
     }
     return val;
@@ -283,7 +283,7 @@ public:
       if(from_set & may_xray) {
         attadef |= get_attacks_to(j, BOTH, occupied);
       }
-      const COLOR c = self[(depth & 1) ? j : i].color;
+      const COLOR c = self.color_at_pos((depth & 1) ? j : i);
       from_set = get_least_valuable_piece(attadef & bits[c]);
     } while(from_set);
     int maxdepth = depth;
@@ -375,6 +375,7 @@ public:
       });
     }
     std::sort(quiescmoves.begin(), quiescmoves.end());
+    // no need for reverse sort: values are already negated
     return quiescmoves;
   }
 
@@ -565,7 +566,7 @@ public:
         }
       }
     };
-    if(overwrite && std::abs(bestscore) > 1e-7) {
+   if(overwrite && std::abs(bestscore) > 1e-7) {
       ab_store[k] = { .info=info, .depth=depth, .eval=bestscore, .m=m_best, .subpline=pline.get_future() };
     }
     return bestscore;

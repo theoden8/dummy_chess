@@ -14,16 +14,16 @@ namespace piece {
   }
 
   inline void set_pos(piece_bitboard_t &mask, pos_t b) {
-    assert(!is_set(mask, b));
+//    assert(!is_set(mask, b));
     mask |= 1LLU << b;
   }
 
   inline void unset_pos(piece_bitboard_t &mask, pos_t b) {
-    assert(is_set(mask, b));
+//    assert(is_set(mask, b));
     mask &= ~(1LLU << b);
   }
 
-  inline void move(piece_bitboard_t &mask, pos_t i, pos_t j) {
+  inline void move_pos(piece_bitboard_t &mask, pos_t i, pos_t j) {
     unset_pos(mask, i);
     set_pos(mask, j);
   }
