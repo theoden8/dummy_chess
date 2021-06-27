@@ -5,6 +5,7 @@ import os
 import sys
 import subprocess
 import random
+import time
 from pprint import pprint
 
 
@@ -25,9 +26,11 @@ def get_output(command):
 
 
 startingpos = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
-stockfish = 'stockfish'
-def get_output_stockfish(depth=5, fen=startingpos):
-    s = get_output(f"(echo 'position fen {fen}'; echo 'go perft {depth}') | {stockfish}")
+def get_output_uci(uci_exec, depth: int, fen=startingpos) -> dict:
+    start = time.time()
+    s = get_output(f"(echo 'position fen {fen}'; echo 'go perft {depth}') | {uci_exec}")
+    dur = time.time() - start
+    print(f'{uci_exec + " " * (30 - len(uci_exec))}: {dur:.3f}s')
     turnmaps = {}
     for line in s.split('\n'):
         if ':' in line:
@@ -37,21 +40,18 @@ def get_output_stockfish(depth=5, fen=startingpos):
     return turnmaps
 
 
+def get_output_stockfish(depth=5, fen=startingpos) -> dict:
+    return get_output_uci('stockfish', depth=depth, fen=fen)
+
+
+def get_output_dummy_chess(depth=5, fen=startingpos) -> dict:
+    return get_output_uci('./dummy_chess_uci_opt', depth=depth, fen=fen)
+
+
 def get_next_fen(fen, move):
     s = get_output(f"(echo 'position fen {fen} moves {move}'; echo 'd') | {stockfish} | grep Fen")
     s = s.replace('Fen: ', '')
     return s.strip()
-
-
-def get_output_dummy_chess(depth=5, fen=startingpos):
-    perft = './dummy_chess_perft'
-    s = get_output(f'{perft} {depth} "{fen}"')
-    turnmaps = {}
-    for line in s.split('\n'):
-        if ':' in line:
-            left, right = line.split(':')
-            turnmaps[left.strip()] = right.strip();
-    return turnmaps
 
 
 def compare_outputs(depth=5, fen=startingpos, path=[]):
@@ -85,7 +85,7 @@ def compare_outputs(depth=5, fen=startingpos, path=[]):
 if __name__ == "__main__":
     # https://github.com/official-stockfish/Stockfish/blob/master/tests/perft.sh
     # https://www.chessprogramming.org/Perft_Results
-    compare_outputs(depth=5, fen=startingpos)
+    compare_outputs(depth=6, fen=startingpos)
     compare_outputs(depth=5, fen='r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 0')
     compare_outputs(depth=6, fen='8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 0')
     compare_outputs(depth=5, fen='r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1')

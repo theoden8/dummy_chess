@@ -28,6 +28,7 @@ struct UCI {
   std::atomic<bool> debug_mode = false;
   std::atomic<bool> should_quit = false;
   std::atomic<bool> should_stop = false;
+  std::atomic<bool> job_started = false;
 
   std::recursive_mutex engine_mtx;
   using lock_guard = std::lock_guard<std::recursive_mutex>;
@@ -37,12 +38,14 @@ struct UCI {
   {}
 
   void init(const fen::FEN &f) {
+    lock_guard guard(engine_mtx);
     destroy();
     _printf("init\n");
     engine = new Engine(f);
   }
 
   void destroy() {
+    lock_guard guard(engine_mtx);
     if(engine != nullptr) {
       _printf("destroy\n");
       delete engine;
@@ -125,6 +128,7 @@ struct UCI {
     if(cmd.size() > 1 || !cmd.back().empty()) {
       process_cmd(cmd);
     }
+    should_stop = true;
   }
 
   static move_t scan_move(const std::string &s) {
@@ -162,13 +166,17 @@ struct UCI {
     bool infinite = false;
   } go_command;
 
+  typedef struct _go_perft_command {
+    int16_t depth;
+  } go_perft_command;
+
   void join_engine_thread() {
-    if(should_stop == true) {
-      lock_guard guard(engine_mtx);
-      if(engine_thread.joinable()) {
-        engine_thread.join();
-        str::pdebug("joining engine thread"s);
-      }
+    if(job_started == true) {
+      while(!engine_thread.joinable())
+        ;
+      engine_thread.join();
+      str::pdebug("joining engine thread"s);
+      job_started = false;
     }
   }
 
@@ -218,32 +226,31 @@ struct UCI {
       case CMD_UCINEWGAME:
         {
           join_engine_thread();
-          lock_guard guard(engine_mtx);
           destroy();
         }
       return;
       case CMD_POSITION:
       {
-        join_engine_thread();
         lock_guard guard(engine_mtx);
+        join_engine_thread();
         fen::FEN f;
         size_t ind = 1;
-        if(cmd[1] == "startpos"s) {
+        if(cmd[ind] == "startpos"s) {
           ++ind;
           f = fen::starting_pos;
-        } else {
-          std::string s;
-          for(; ind < cmd.size(); ++ind) {
-            if(cmd[ind] == "moves")break;
-            if(ind != 1)s += " ";
-            s += cmd[ind];
+        } else if(cmd[ind] == "fen"s) {
+          ++ind;
+          const size_t begin_ind = ind;
+          for(; ind < cmd.size() && cmd[ind] != "moves"s; ++ind) {
+            ;
           }
+          std::string s = str::join(std::vector<std::string>(cmd.begin() + begin_ind, cmd.begin() + ind), " "s);
           f = fen::load_from_string(s);
+          str::pdebug("loaded fen", fen::export_as_string(f));
         }
         init(f);
-        if(ind < cmd.size() && cmd[ind] == "moves"s) {
+        if(ind < cmd.size() && cmd[ind++] == "moves"s) {
           MoveLine moves;
-          ++ind;
           for(; ind < cmd.size(); ++ind) {
             moves.put(scan_move(cmd[ind]));
           }
@@ -252,54 +259,71 @@ struct UCI {
             engine->make_move(m);
           }
         }
-//        engine->print();
+        str::pdebug("position set");
+        //engine->print();
       }
       return;
       case CMD_GO:
       {
         join_engine_thread();
         should_stop = false;
-      }
-      {
-        go_command g;
+        // perft command
         size_t ind = 1;
-        while(ind < cmd.size()) {
-          if(cmd[ind] == "searchmoves"s) {
-            ++ind;
-            for(; ind < cmd.size(); ++ind) {
-              g.searchmoves.emplace_back(scan_move(cmd[ind]));
-            }
-          } else if(cmd[ind] == "ponder"s) {
-            g.ponder = true;
-          } else if(cmd[ind] == "wtime"s) {
-            g.wtime = double(atol(cmd[++ind].c_str()))*1e-3;
-          } else if(cmd[ind] == "btime"s) {
-            g.btime = double(atol(cmd[++ind].c_str()))*1e-3;
-          } else if(cmd[ind] == "winc"s) {
-            g.winc = double(atol(cmd[++ind].c_str()))*1e-3;
-          } else if(cmd[ind] == "binc"s) {
-            g.binc = double(atol(cmd[++ind].c_str()))*1e-3;
-          } else if(cmd[ind] == "movestogo"s) {
-            g.movestogo = atoi(cmd[++ind].c_str());
-          } else if(cmd[ind] == "depth"s) {
-            g.depth = atoi(cmd[++ind].c_str());
-          } else if(cmd[ind] == "nodes"s) {
-            g.nodes = atoll(cmd[++ind].c_str());
-          } else if(cmd[ind] == "mate"s) {
-            g.mate = atoi(cmd[++ind].c_str());
-          } else if(cmd[ind] == "movetime"s) {
-            g.movetime = double(atol(cmd[++ind].c_str()))*1e-3;
-          } else if(cmd[ind] == "infinite"s) {
-            g.infinite = true;
-          } else {
+        if(cmd[ind] == "perft"s) {
+          ++ind;
+          if(cmd.size() != 3) {
             str::perror("error: unknown subcommand"s, cmd[ind]);
             return;
           }
-          ++ind;
+          go_perft_command g = (go_perft_command){
+            .depth = int16_t(atoi(cmd[ind].c_str()))
+          };
+          job_started = true;
+          engine_thread = std::thread([&](auto g) mutable -> void {
+            perform_go_perft(g);
+          }, g);
+          return;
+        } else {
+          go_command g;
+          while(ind < cmd.size()) {
+            if(cmd[ind] == "searchmoves"s) {
+              ++ind;
+              for(; ind < cmd.size(); ++ind) {
+                g.searchmoves.emplace_back(scan_move(cmd[ind]));
+              }
+            } else if(cmd[ind] == "ponder"s) {
+              g.ponder = true;
+            } else if(cmd[ind] == "wtime"s) {
+              g.wtime = double(atol(cmd[++ind].c_str()))*1e-3;
+            } else if(cmd[ind] == "btime"s) {
+              g.btime = double(atol(cmd[++ind].c_str()))*1e-3;
+            } else if(cmd[ind] == "winc"s) {
+              g.winc = double(atol(cmd[++ind].c_str()))*1e-3;
+            } else if(cmd[ind] == "binc"s) {
+              g.binc = double(atol(cmd[++ind].c_str()))*1e-3;
+            } else if(cmd[ind] == "movestogo"s) {
+              g.movestogo = atoi(cmd[++ind].c_str());
+            } else if(cmd[ind] == "depth"s) {
+              g.depth = atoi(cmd[++ind].c_str());
+            } else if(cmd[ind] == "nodes"s) {
+              g.nodes = atoll(cmd[++ind].c_str());
+            } else if(cmd[ind] == "mate"s) {
+              g.mate = atoi(cmd[++ind].c_str());
+            } else if(cmd[ind] == "movetime"s) {
+              g.movetime = double(atol(cmd[++ind].c_str()))*1e-3;
+            } else if(cmd[ind] == "infinite"s) {
+              g.infinite = true;
+            } else {
+              str::perror("error: unknown subcommand"s, cmd[ind]);
+              return;
+            }
+            ++ind;
+          }
+          job_started = true;
+          engine_thread = std::thread([&](auto g) mutable -> void {
+            perform_go(g);
+          }, g);
         }
-        engine_thread = std::thread([&](auto g) mutable -> void {
-          perform_go(g);
-        }, g);
       }
       return;
       case CMD_STOP:
@@ -312,9 +336,7 @@ struct UCI {
       return;
       case CMD_QUIT:
       {
-        should_stop = true;
-        join_engine_thread();
-        should_quit = true;
+        perform_quit();
       }
       return;
       default:
@@ -423,12 +445,49 @@ struct UCI {
     should_stop = true;
   }
 
+  void perform_go_perft(go_perft_command args) {
+    lock_guard guard(engine_mtx);
+    const int16_t depth = args.depth;
+    size_t total = 0;
+    {
+      decltype(auto) store_scope = engine->get_zobrist_perft_scope();
+      engine->iter_moves([&](pos_t i, pos_t j) mutable -> void {
+        const move_t m = bitmask::_pos_pair(i, j);
+        event_t ev = engine->get_move_event(i, j);
+        std::string sm = engine->_move_str(m);
+        engine->make_move(m);
+        size_t nds = 0;
+        if(depth > 1) {
+          nds = engine->perft(depth-1);
+        } else if(depth == 1) {
+          nds = 1;
+        } else {
+          nds = 0;
+        }
+        str::print(sm + ":", nds);
+        total += nds;
+        engine->retract_move();
+      });
+    }
+    str::print();
+    str::print("Nodes searched:"s, total);
+    str::print();
+  }
+
+  void perform_quit() {
+    should_stop = true;
+    join_engine_thread();
+    should_quit = true;
+    str::pdebug("job state", job_started);
+  }
+
   template <typename... Str>
-  void respond(RESPONSE resp, Str... args) const {
-    str::print(respmap.at(resp), args...);
+  void respond(RESPONSE resp, Str &&... args) const {
+    str::print(respmap.at(resp), std::forward<Str>(args)...);
   }
 
   ~UCI() {
+    str::pdebug("job state", job_started);
     join_engine_thread();
     destroy();
   }

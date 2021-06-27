@@ -14,7 +14,7 @@ SOURCES = m42.cpp
 
 CORES = $(shell getconf _NPROCESSORS_ONLN)
 all :; @$(MAKE) _all -j$(CORES)
-_all : dummy_chess dummy_chess_opt dummy_chess_abwalk dummy_chess_playout dummy_chess_curses dummy_chess_curses_rel dummy_chess_bench dummy_chess_perft dummy_chess_alphabeta dummy_chess_uci dummy_chess_uci_opt
+_all : dummy_chess dummy_chess_opt dummy_chess_abwalk dummy_chess_playout dummy_chess_curses dummy_chess_curses_rel dummy_chess_bench dummy_chess_alphabeta dummy_chess_uci dummy_chess_uci_opt
 
 dummy_chess: simple.cpp $(SOURCES) $(HPPFILES) Makefile
 	$(CXX) $(DBGFLAGS) $(CXXFLAGS) simple.cpp $(SOURCES) $(LDFLAGS) -o $@
@@ -37,9 +37,6 @@ dummy_chess_curses_rel: ui.cpp $(SOURCES) $(HPPFILES) Makefile
 dummy_chess_bench: bench.cpp $(SOURCES) $(HPPFILES) Makefile
 	$(CXX) $(OPTFLAGS) $(CXXFLAGS) bench.cpp $(SOURCES) $(LDFLAGS) -o $@
 
-dummy_chess_perft: perft.cpp $(SOURCES) $(HPPFILES) Makefile
-	$(CXX) $(OPTFLAGS) $(CXXFLAGS) perft.cpp $(SOURCES) $(LDFLAGS) -o $@
-
 dummy_chess_alphabeta: alphabeta.cpp $(SOURCES) $(HPPFILES) Makefile
 	$(CXX) $(PROFFLAGS) $(CXXFLAGS) alphabeta.cpp $(SOURCES) $(LDFLAGS) -o $@
 
@@ -51,4 +48,4 @@ dummy_chess_uci_opt: uci.cpp $(SOURCES) $(HPPFILES) Makefile
 
 clean:
 	rm -vf *.o
-	rm -vf dummy_chess dummy_chess_opt dummy_chess_curses dummy_chess_curses_rel dummy_chess_bench dummy_chess_perft dummy_chess_playout dummy_chess_abwalk dummy_chess_alphabeta dummy_chess_uci dummy_chess_uci_opt
+	rm -vf dummy_chess dummy_chess_opt dummy_chess_curses dummy_chess_curses_rel dummy_chess_bench dummy_chess_playout dummy_chess_abwalk dummy_chess_alphabeta dummy_chess_uci dummy_chess_uci_opt
