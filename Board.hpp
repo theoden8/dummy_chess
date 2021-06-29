@@ -23,14 +23,13 @@ protected:
   struct board_info {
     COLOR active_player;
     pos_t enpassant_castlings;
-    pos_pair_t kings;
     piece_bitboard_t whites, blacks, diag_slid, orth_slid, pawns;
 
     INLINE bool operator==(board_info other) const noexcept {
       return active_player == other.active_player &&
+             pawns == other.pawns &&
              whites == other.whites && blacks == other.blacks &&
              diag_slid == other.diag_slid && orth_slid == other.orth_slid &&
-             pawns == other.pawns && kings == other.kings &&
              enpassant_castlings == other.enpassant_castlings;
     }
 
@@ -151,17 +150,19 @@ public:
   }
 
   INLINE board_info get_board_info_() const {
-    pos_t enpassant_castlings = ((enpassant_trace() == event::enpassantnotrace) ? 0x0f : board::_x(enpassant_trace())) << 4;
-    enpassant_castlings |= get_castlings_compressed();
+    const pos_t etrace = enpassant_trace();
+    uint8_t enpassant_castlings = (etrace == event::enpassantnotrace) ? 0x0f : board::_x(etrace);
+    enpassant_castlings |= get_castlings_compressed() << 4;
     return (board_info){
       .active_player=activePlayer(),
       .enpassant_castlings=enpassant_castlings,
-      .kings=bitmask::_pos_pair(pos_king[WHITE], pos_king[BLACK]),
       .whites=bits[WHITE],
       .blacks=bits[BLACK],
       .diag_slid=bits_slid_diag,
       .orth_slid=bits_slid_orth,
-      .pawns=bits_pawns,
+      .pawns=bits_pawns
+             | (uint64_t(pos_king[BLACK]) << 7*board::LEN) \
+             | uint64_t(pos_king[WHITE]),
     };
   }
 

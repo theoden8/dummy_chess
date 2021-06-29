@@ -1,7 +1,7 @@
 DBGFLAGS = -g3 -DZOBRIST_SIZE="(1<<12)"
-OPTFLAGS = -Ofast -DNDEBUG -flto -fwhole-program -march=native
+OPTFLAGS = -Ofast -DNDEBUG -flto -fwhole-program -march=native -m64 -march=native
 PROFFLAGS = $(OPTFLAGS) -pg
-CXXFLAGS = -std=c++20 -I. -Wall -Wextra -Wno-unused -Wno-parentheses -m64 -march=native
+CXXFLAGS = -std=c++20 -I. -Wall -Wextra -Wno-unused -Wno-parentheses
 # clang:
 #CXX = clang++-13
 #CXXFLAGS += -Wno-unused-parameter -Wno-range-loop-construct -Wno-unknown-attributes -Wno-ignored-optimization-argument
