@@ -402,9 +402,14 @@ struct UCI {
     std::string s = str::join(searchmoves_s, ", "s);
     _printf("searchmoves: [%s]\n", s.c_str());
     // TODO ponder, mate, movestogo
-    double movetime = std::min(60., engine->activePlayer() == WHITE ? args.wtime / 40. + args.winc
-                                                                    : args.btime / 40. + args.binc);
-    if(args.movetime!=DBL_MAX)movetime=args.movetime;
+    // time management
+    double inctime = (engine->activePlayer() == WHITE) ? args.winc : args.binc;
+    inctime = std::max(inctime - 2., inctime * .5);
+    double tottime = engine->activePlayer() == WHITE ? args.wtime : args.btime;
+    tottime = std::max(std::max(tottime - 2., (tottime - .2) * .7), tottime * .5);
+    double movetime = std::min(60., tottime / 40. + inctime);
+    if(args.movetime!=DBL_MAX)movetime=std::max(args.movetime - 1., args.movetime * .5);
+    // time/note counting
     const auto start = system_clock::now();
     MoveLine currline;
     double time_spent = 0.;
