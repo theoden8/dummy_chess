@@ -232,18 +232,17 @@ public:
 
   INLINE bool is_castling_move(pos_t i, pos_t j) const {
     assert(j <= board::MOVEMASK);
-    if(pos_king[self.color_at_pos(i)] != i)return false;
-    if(bits[WHITE] & piece::pos_mask(i))return Moves<KINGM>::is_castling_move<WHITE>(i, j);
-    if(bits[BLACK] & piece::pos_mask(i))return Moves<KINGM>::is_castling_move<BLACK>(i, j);
-    return false;
+    const COLOR c = self.color_at_pos(i);
+    if(c == NEUTRAL)return false;
+    if(pos_king[c] != i)return false;
+    return piece::is_king_castling_move(c, i, j);
   }
 
   INLINE bool is_doublepush_move(pos_t i, pos_t j) const {
     j &= board::MOVEMASK;
     if(~bits_pawns & piece::pos_mask(i))return false;
-    if(bits[WHITE] & piece::pos_mask(i))return Moves<WPAWNM>::is_double_push(i, j);
-    if(bits[BLACK] & piece::pos_mask(i))return Moves<BPAWNM>::is_double_push(i, j);
-    return false;
+    const COLOR c = self.color_at_pos(i);
+    return piece::is_pawn_double_push(c, i, j);
   }
 
   INLINE bool is_enpassant_take_move(pos_t i, pos_t j) const {
@@ -254,9 +253,8 @@ public:
   INLINE bool is_promotion_move(pos_t i, pos_t j) const {
     j &= board::MOVEMASK;
     if(~bits_pawns & piece::pos_mask(i))return false;
-    if(bits[WHITE] & piece::pos_mask(i))return Moves<WPAWNM>::is_promotion_move(i, j);
-    if(bits[BLACK] & piece::pos_mask(i))return Moves<BPAWNM>::is_promotion_move(i, j);
-    return false;
+    const COLOR c = self.color_at_pos(i);
+    return piece::is_pawn_promotion_move(c, i, j);
   }
 
   INLINE bool is_capture_move(pos_t i, pos_t j) const {
@@ -323,8 +321,8 @@ public:
       killwhat = self[j].piece_index;
     }
     if(is_doublepush_move(i, j)) {
-      if(bits[WHITE] & piece::pos_mask(i))enpassant_trace=Moves<WPAWNM>::get_enpassant_trace(i,j);
-      if(bits[BLACK] & piece::pos_mask(i))enpassant_trace=Moves<BPAWNM>::get_enpassant_trace(i,j);
+      if(bits[WHITE] & piece::pos_mask(i))enpassant_trace=piece::get_pawn_enpassant_trace(WHITE, i, j);
+      if(bits[BLACK] & piece::pos_mask(i))enpassant_trace=piece::get_pawn_enpassant_trace(BLACK, i, j);
     }
     return event::basic(bitmask::_pos_pair(i, j | promote_flag), killwhat, enpassant_trace);
   }
@@ -332,8 +330,8 @@ public:
   INLINE event_t ev_castle(pos_t i, pos_t j) const {
     assert(j <= board::MOVEMASK);
     pos_pair_t rookmove = 0x00;
-    if(bits[WHITE] & piece::pos_mask(i))rookmove = Moves<KINGM>::castle_rook_move<WHITE>(i,j);
-    if(bits[BLACK] & piece::pos_mask(i))rookmove = Moves<KINGM>::castle_rook_move<BLACK>(i,j);
+    if(bits[WHITE] & piece::pos_mask(i))rookmove = piece::get_king_castle_rook_move(WHITE, i, j);
+    if(bits[BLACK] & piece::pos_mask(i))rookmove = piece::get_king_castle_rook_move(BLACK, i, j);
     const pos_t r_i = bitmask::first(rookmove),
                 r_j = bitmask::second(rookmove);
     return event::castling(bitmask::_pos_pair(i, j), bitmask::_pos_pair(r_i, r_j));
@@ -1011,7 +1009,7 @@ public:
             foes_pawn |= piece::pos_mask(enpassant_trace());
           }
           state_moves[pos] = get_attacks_from(pos) & foes_pawn;
-          state_moves[pos] |= get_push_moves(c, pos, friends|foes);
+          state_moves[pos] |= piece::get_pawn_push_moves(c, pos, friends|foes);
           state_moves[pos] &= state_checkline[c];
         });
         bitmask::foreach(bits[c] & ~(bits_pawns | get_king_bits()), [&](pos_t pos) mutable noexcept -> void {
@@ -1020,7 +1018,7 @@ public:
         });
       }
       state_moves[pos_king[c]] = get_attacks_from(pos_king[c]) & ~friends & ~attack_mask;
-      state_moves[pos_king[c]] |= Moves<KINGM>::get_castling_moves(pos_king[c], friends|foes, attack_mask, get_castlings_mask(), c);
+      state_moves[pos_king[c]] |= piece::get_king_castling_moves(c, pos_king[c], friends|foes, attack_mask, get_castlings_mask());
       init_state_moves_checkline_enpassant_takes();
       init_state_pins();
     }

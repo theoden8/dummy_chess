@@ -17,7 +17,7 @@ struct MoveLine {
     line(line)
   {}
 
-  size_t size() const {
+  INLINE size_t size() const {
     return line.size() - start;
   }
 
@@ -25,7 +25,12 @@ struct MoveLine {
     return size() == 0;
   }
 
-  bool startswith(const MoveLine &tline) const {
+  INLINE bool operator==(const MoveLine &tline) const {
+    if(size() != tline.size())return false;
+    return startswith(tline);
+  }
+
+  INLINE bool startswith(const MoveLine &tline) const {
     auto f = full();
     for(size_t i = 0; i < std::min(f.size(), tline.size()); ++i) {
       if(f[i] != tline[i])return false;

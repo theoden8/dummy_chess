@@ -27,6 +27,7 @@ typedef uint16_t pos_pair_t;
 // https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html
 // https://en.cppreference.com/w/cpp/header/bit
 namespace bitmask {
+  const uint64_t full = ~UINT64_C(0);
   const uint64_t vline = UINT64_C(0x0101010101010101);
   const uint64_t hline = UINT64_C(0xFF);
 
