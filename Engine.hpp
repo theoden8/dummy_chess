@@ -387,7 +387,6 @@ public:
   double alpha_beta_quiescence(double alpha, double beta, int16_t depth, MoveLine &pline,
                                zobrist::ttable<tt_ab_entry> &ab_ttable, int8_t delta)
   {
-//    str::pdebug(depth, _line_str_full(pline));
     const double _alpha = alpha, _beta = beta;
     double score = -MATERIAL_KING;
     double bestscore = -MATERIAL_KING;
@@ -406,21 +405,21 @@ public:
     }
 
     // zobrist
-//    const auto [zbscore, k, info] = get_ab_ttable_zobrist(depth, ab_ttable);
-//    if(zbscore.has_value()) {
-//      const auto &zb = ab_ttable[k];
-//      if(zb.lowerbound >= beta) {
-//        pline.replace_line(ab_ttable[k].subpline);
-//        return zb.lowerbound;
-//      }
-//      if(zb.upperbound <= alpha) {
-//        pline.replace_line(ab_ttable[k].subpline);
-//        return zb.upperbound;
-//      }
-//      alpha = std::max(alpha, zb.lowerbound);
-//      beta = std::min(beta, zb.upperbound);
-//    }
-//    const bool overwrite = false;//(depth >= ab_ttable[k].depth);
+    const auto [zbscore, k, info] = get_ab_ttable_zobrist(depth, ab_ttable);
+    if(zbscore.has_value()) {
+      const auto &zb = ab_ttable[k];
+      if(zb.lowerbound >= beta) {
+        pline.replace_line(ab_ttable[k].subpline);
+        return zb.lowerbound;
+      }
+      if(zb.upperbound <= alpha) {
+        pline.replace_line(ab_ttable[k].subpline);
+        return zb.upperbound;
+      }
+      alpha = std::max(alpha, zb.lowerbound);
+      beta = std::min(beta, zb.upperbound);
+    }
+    const bool overwrite = (depth >= ab_ttable[k].depth && (ab_ttable[k].info.is_unset() || ab_ttable[k].lowerbound != ab_ttable[k].upperbound));
     decltype(auto) quiescmoves = ab_get_quiesc_moves(depth, pline, delta, king_in_check);
     if(quiescmoves.empty() || delta <= 0) {
       ++nodes_searched;
@@ -451,9 +450,11 @@ public:
       assert(check_pvline_score(pline_alt, score));
       if(score >= beta) {
         pline.replace_line(pline_alt);
-//        if(overwrite) {
-//          ab_ttable[k] = { .info=info, .depth=depth, .eval=score, .lowerbound=score, .upperbound=DBL_MAX, .m=m, .subpline=pline };
-//        }
+        if(overwrite) {
+          if(ab_ttable[k].info.is_unset())++zb_occupied;
+          ab_ttable[k] = { .info=info, .depth=depth, .eval=score, .lowerbound=score, .upperbound=DBL_MAX,
+                           .m=m, .subpline=pline, .age=tt_age };
+        }
         return score;
       } else if(score > bestscore) {
         pline.replace_line(pline_alt);
@@ -464,13 +465,16 @@ public:
         }
       }
     }
-//    if(overwrite) {
-//      if(bestscore < alpha) {
-//        ab_ttable[k] = { .info=info, .depth=depth, .eval=bestscore, .lowerbound=-DBL_MAX, .upperbound=bestscore, .m=m_best, .subpline=pline };
-//      } else {
-//        ab_ttable[k] = { .info=info, .depth=depth, .eval=bestscore, .lowerbound=bestscore, .upperbound=bestscore, .m=m_best, .subpline=pline };
-//      }
-//    }
+    if(overwrite) {
+      if(ab_ttable[k].info.is_unset())++zb_occupied;
+      if(bestscore < alpha) {
+        ab_ttable[k] = { .info=info, .depth=depth, .eval=bestscore, .lowerbound=-DBL_MAX, .upperbound=bestscore, .m=m_best, .subpline=pline,
+                         .age=tt_age };
+      } else {
+        ab_ttable[k] = { .info=info, .depth=depth, .eval=bestscore, .lowerbound=bestscore, .upperbound=bestscore,
+                         .m=m_best, .subpline=pline, .age=tt_age };
+      }
+    }
     return bestscore;
   }
 
@@ -495,7 +499,6 @@ public:
   double alpha_beta(double alpha, double beta, int16_t depth, MoveLine &pline,
                                   zobrist::ttable<tt_ab_entry> &ab_ttable)
   {
-//    const double _alpha = alpha, _beta = beta;
     if(depth == 0) {
       const int delta = 3;
       assert(pline.empty());
@@ -511,17 +514,17 @@ public:
 //    }
     if(zbscore.has_value()) {
       const auto &zb = ab_ttable[k];
-      if(!debug_moveline.empty() && pline.get_past().startswith(debug_moveline)) {
-        std::string tab=""s; for(int i=debug_depth;i>depth;--i)tab+=" ";
-
-        std::string actinfo = "memoized"s;
-        MoveLine pline_alt = pline.branch_from_past();
-        pline_alt.replace_line(zb.subpline);
-        _printf("%sdepth=%d, %s, score=%.5f (%.4f, %.4f) %s -- %s (%.4f, %.4f)\n",
-            tab.c_str(), depth, board::_move_str(zb.m).c_str(), zb.eval, alpha, beta,
-            _line_str_full(pline_alt).c_str(), actinfo.c_str(),
-            zb.lowerbound, zb.upperbound);
-      }
+//      if(!debug_moveline.empty() && pline.get_past().startswith(debug_moveline)) {
+//        std::string tab=""s; for(int i=debug_depth;i>depth;--i)tab+=" ";
+//
+//        std::string actinfo = "memoized"s;
+//        MoveLine pline_alt = pline.branch_from_past();
+//        pline_alt.replace_line(zb.subpline);
+//        _printf("%sdepth=%d, %s, score=%.5f (%.4f, %.4f) %s -- %s (%.4f, %.4f)\n",
+//            tab.c_str(), depth, board::_move_str(zb.m).c_str(), zb.eval, alpha, beta,
+//            _line_str_full(pline_alt).c_str(), actinfo.c_str(),
+//            zb.lowerbound, zb.upperbound);
+//      }
       if(zb.lowerbound >= beta) {
         pline.replace_line(ab_ttable[k].subpline);
         return zb.lowerbound;
@@ -601,6 +604,7 @@ public:
     bool should_stop_iddfs = false;
     for(int16_t d = 0; d < depth; ++d) {
       double eval_best = -MATERIAL_KING;
+      const double beta = MATERIAL_KING;
       for(size_t i = 0; i < bestmoves.size(); ++i) {
         auto &[eval, curdepth, m] = bestmoves[i];
         if(d == 0) {
@@ -610,7 +614,7 @@ public:
         {
           volatile auto mscope = move_scope(m);
           MoveLine mline = pline[m];
-          eval = -alpha_beta(-MATERIAL_KING, MATERIAL_KING, d, mline, ab_ttable);
+          eval = -alpha_beta(-beta, -eval_best, d, mline, ab_ttable);
           ++curdepth;
           if(eval > eval_best) {
             eval_best = eval;
@@ -673,21 +677,6 @@ public:
     return get_fixed_depth_move_iddfs(depth, make_callback_f(), searchmoves);
   }
 
-//  template <typename F>
-//  move_t get_fixed_depth_move_idastar(int16_t depth, F &&callback_f, const std::unordered_set<move_t> &searchmoves={}) {
-//    reset_planning();
-//    decltype(auto) store_scope = get_zobrist_alphabeta_scope();
-//    debug_depth = depth;
-//    auto [_, m] = iterative_deepening_astar(depth, searchmoves, store_scope.get_object(), std::forward<F>(callback_f));
-//    evaluation = _;
-//    return m;
-//  }
-//
-//  template <typename F>
-//  move_t get_fixed_depth_move_idastar(int16_t depth, const std::unordered_set<move_t> &searchmoves={}) {
-//    return get_fixed_depth_move_idastar(depth, make_callback_f(), searchmoves);
-//  }
-
   size_t nodes_searched = 0;
   double evaluation = MATERIAL_KING;
   ply_index_t tt_age = 0;
@@ -704,9 +693,7 @@ public:
       m = pline.full().front();
     }
     str::pdebug("pvline:", _line_str(pline, true), "size:", pline.size(), "eval:", evaluation);
-//    if(!check_valid_sequence(pline)) {
-//      str::pdebug("pvline not playable");
-//    }
+    assert(check_valid_sequence(pline));
     return m;
   }
 
