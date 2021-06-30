@@ -13,19 +13,12 @@
 #include <Engine.hpp>
 
 
-#ifndef NDEBUG
-#define _printf printf
-#else
-#define _printf(...)
-#endif
-
-
 using namespace std::chrono;
 
 
 struct UCI {
   Engine *engine = nullptr;
-  zobrist::StoreScope<Engine::ab_info> *engine_ttable_owner = nullptr;
+  zobrist::StoreScope<Engine::tt_ab_entry> *engine_ttable_owner = nullptr;
 
   std::atomic<bool> debug_mode = false;
   std::atomic<bool> should_quit = false;
@@ -421,7 +414,7 @@ struct UCI {
         const size_t nps = update_nodes_per_second(start, time_spent, nodes_searched);
         currline.replace_line(pline);
         pondermove = ponder_m;
-        const double hit_rate = double(engine->zb_hit) / double(1e-9+engine->zb_hit + engine->zb_miss);
+        const double hashfull = double(engine->zb_occupied) / double(ZOBRIST_SIZE);
         respond(RESP_INFO, "depth"s, depth,
                            "seldepth"s, pline.size(),
                            "nodes"s, engine->nodes_searched,
@@ -430,20 +423,20 @@ struct UCI {
                            "score"s, get_score_type_string(curreval),
                            "pv"s, engine->_line_str(pline, true),
                            "time"s, int(round(time_spent * 1e3)),
-                           "hashfull"s, int(round(hit_rate * 1e3))
+                           "hashfull"s, int(round(hashfull * 1e3))
         );
         return !check_if_should_stop(args, time_spent, movetime);
       }, searchmoves);
     should_stop = false;
     if(bestmove != board::nomove) {
-      const double hit_rate = double(engine->zb_hit) / double(1e-9+engine->zb_hit + engine->zb_miss);
+      const double hashfull = double(engine->zb_occupied) / double(ZOBRIST_SIZE);
       respond(RESP_INFO, "seldepth"s, currline.size(),
                          "nodes"s, engine->nodes_searched,
                          "currmove"s, engine->_move_str(bestmove),
                          "score"s, get_score_type_string(engine->evaluation),
                          "pv"s, engine->_line_str(currline, true),
                          "time"s, int(round(time_spent * 1e3)),
-                         "hashfull"s, int(round(hit_rate * 1e3))
+                         "hashfull"s, int(round(hashfull * 1e3))
       );
       if(pondermove != board::nomove) {
         respond(RESP_BESTMOVE, engine->_move_str(bestmove), "ponder"s, engine->_move_str(pondermove));

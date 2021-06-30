@@ -58,20 +58,20 @@ void init() {
 }
 
 
-template <typename T> using hash_table = std::array<T, ZOBRIST_SIZE>;
-template <typename T> using hash_table_ptr = hash_table<T> *;
+template <typename T> using ttable = std::array<T, ZOBRIST_SIZE>;
+template <typename T> using ttable_ptr = ttable<T> *;
 
 template<typename InnerObject>
 struct StoreScope {
-  hash_table_ptr<InnerObject> &zb_store;
+  ttable_ptr<InnerObject> &zb_store;
   bool is_outer_scope;
 
-  explicit inline StoreScope(hash_table_ptr<InnerObject> &scope_ptr):
+  explicit inline StoreScope(ttable_ptr<InnerObject> &scope_ptr):
     zb_store(scope_ptr),
     is_outer_scope(scope_ptr == nullptr)
   {
     if(zb_store == nullptr) {
-      zb_store = new hash_table<InnerObject>{};
+      zb_store = new ttable<InnerObject>{};
       reset();
     }
   }
@@ -82,7 +82,7 @@ struct StoreScope {
     }
   }
 
-  hash_table<InnerObject> &get_object() {
+  ttable<InnerObject> &get_object() {
     return *zb_store;
   }
 
@@ -100,7 +100,7 @@ struct StoreScope {
 };
 
 template <typename InnerObject>
-decltype(auto) make_store_object_scope(hash_table_ptr<InnerObject> &zb_store) {
+decltype(auto) make_store_object_scope(ttable_ptr<InnerObject> &zb_store) {
   return StoreScope<InnerObject>(zb_store);
 }
 

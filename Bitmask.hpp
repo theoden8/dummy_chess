@@ -159,14 +159,16 @@ namespace bitmask {
   std::vector<pos_t> as_vector(uint64_t mask) {
     std::vector<pos_t> v(0, count_bits(mask));
     foreach(mask, [&](pos_t i) mutable -> void {
-      v.push_back(i);
+      v.emplace_back(i);
     });
     return v;
   }
 
   // print locations of each set bit
   NEVER_INLINE void print(uint64_t mask) {
-    foreach(mask, [](pos_t p) mutable { printf("(%c, %c)\n", 'A' + (p%8), '1' + (p/8)); });
+    foreach(mask, [](pos_t p) mutable -> void {
+      printf("(%c, %c)\n", 'A' + (p%8), '1' + (p/8));
+    });
   }
 
   NEVER_INLINE void print_mask(uint64_t mask, pos_t markspot=0xff) {
@@ -174,10 +176,13 @@ namespace bitmask {
     char s[256];
     pos_t j = 0;
     for(pos_t i = 0; i < CHAR_BIT*sizeof(mask); ++i) {
+      pos_t x = i % 8, y = i / 8;
+      y = 8 - y - 1;
+      const pos_t ind = y * 8 + x;
       if(i == markspot) {
         s[j++] = 'x';
       } else {
-        s[j++] = (mask & (1LLU << i)) ? '*' : '.';
+        s[j++] = (mask & (1LLU << ind)) ? '*' : '.';
       }
       s[j++] = ' ';
       if(i % CHAR_BIT == 7) {

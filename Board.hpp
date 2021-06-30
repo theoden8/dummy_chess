@@ -4,6 +4,7 @@
 #include <vector>
 #include <list>
 
+#include <String.hpp>
 #include <Piece.hpp>
 #include <Event.hpp>
 #include <FEN.hpp>
@@ -21,7 +22,7 @@ protected:
   std::vector<event_t> history_;
 
   struct board_info {
-    COLOR active_player;
+    COLOR active_player = NEUTRAL;
     pos_t enpassant_castlings;
     piece_bitboard_t whites, blacks, diag_slid, orth_slid, pawns;
 
@@ -33,22 +34,48 @@ protected:
              enpassant_castlings == other.enpassant_castlings;
     }
 
-    INLINE void unset() noexcept {
+    INLINE void unset() {
       active_player = NEUTRAL;
+    }
+
+    INLINE bool is_unset() const {
+      return active_player == NEUTRAL;
+    }
+
+    static board_info import_dbg(const std::string &s) {
+      auto vs = str::split(s, "|"s);
+      return (board_info){
+        .active_player=COLOR(std::stoi(vs[6])),
+        .enpassant_castlings=pos_t(std::stoi(vs[0])),
+        .whites=std::stoull(vs[2]),
+        .blacks=std::stoull(vs[3]),
+        .diag_slid=std::stoull(vs[4]),
+        .orth_slid=std::stoull(vs[5]),
+        .pawns=std::stoull(vs[1]),
+      };
+    }
+
+    std::string export_dbg() const {
+      std::string s = std::to_string(enpassant_castlings) + "|"s;
+      for(uint64_t it : {pawns, whites, blacks, diag_slid, orth_slid}) {
+        s += std::to_string(it) + "|"s;
+      }
+      s += std::to_string(active_player);
+      return s;
     }
   };
 public:
   Board &self = *this;
-  std::vector<std::pair<move_index_t, pos_t>> enpassants;
-  std::array<move_index_t, 4> castlings = {board::nocastlings, board::nocastlings, board::nocastlings, board::nocastlings};
-  std::vector<move_index_t> halfmoves;
+  std::vector<std::pair<ply_index_t, pos_t>> enpassants;
+  std::array<ply_index_t, 4> castlings = {board::nocastlings, board::nocastlings, board::nocastlings, board::nocastlings};
+  std::vector<ply_index_t> halfmoves;
 
   std::array<piece_bitboard_t, 2> bits = {0x00, 0x00};
   piece_bitboard_t
     bits_slid_diag=0x00, bits_slid_orth=0x00,
     bits_pawns=0x00;
   std::array<pos_t, 2> pos_king = {piece::uninitialized_king, piece::uninitialized_king};
-  move_index_t state_hist_draw_repetitions = ~move_index_t(0);
+  ply_index_t state_hist_draw_repetitions = ~ply_index_t(0);
   std::vector<board_info> state_hist_board_info;
 
   const std::array<Piece, 2*6+1>  pieces = {
@@ -489,7 +516,7 @@ public:
     return zb;
   }
 
-  INLINE move_index_t get_current_ply() const {
+  INLINE ply_index_t get_current_ply() const {
     return history_.size();
   }
 
@@ -708,10 +735,9 @@ public:
     return check_valid_move(bitmask::first(m), bitmask::second(m));
   }
 
-  template <typename C>
-  INLINE bool check_valid_sequence(const C &s) const {
+  INLINE bool check_valid_sequence(const MoveLine &mline) {
     auto rec = self.recursive_move_scope();
-    for(const move_t &m : s) {
+    for(const move_t &m : mline) {
       if(!check_valid_move(m)) {
         return false;
       }
@@ -739,6 +765,7 @@ public:
     state_hist_attacks.reserve(100);
     state_hist_moves.reserve(100);
     state_hist_pins.reserve(100);
+    state_hist_checklines.reserve(100);
     state_hist_pins_rays.reserve(100);
     state_hist_board_info.reserve(50);
     state_hist_board_info.emplace_back(get_board_info_());
@@ -752,6 +779,7 @@ public:
     const COLOR c = activePlayer();
     state_hist_attacks.emplace_back(state_attacks);
     state_hist_moves.emplace_back(state_moves);
+    state_hist_checklines.emplace_back(state_checkline[c]);
     state_hist_pins.emplace_back(state_pins[c]);
     state_hist_pins_rays.emplace_back(state_pins_rays);
   }
@@ -759,8 +787,9 @@ public:
   using board_mailbox_t = std::array <piece_bitboard_t, board::SIZE>;
   std::vector<board_mailbox_t> state_hist_attacks;
   std::vector<board_mailbox_t> state_hist_moves;
+  std::vector<piece_bitboard_t> state_hist_checklines;
   void update_state_on_event() {
-    update_state_checkline();
+    init_state_checkline();
     init_state_moves();
     state_hist_board_info.emplace_back(get_board_info_());
     if(state_hist_draw_repetitions > self.get_current_ply() && can_draw_repetition_(3)) {
@@ -772,7 +801,8 @@ public:
     const COLOR c = activePlayer();
     state_attacks = state_hist_attacks.back();
     state_hist_attacks.pop_back();
-    update_state_checkline();
+    state_checkline[c] = state_hist_checklines.back();
+    state_hist_checklines.pop_back();
     state_moves = state_hist_moves.back();
     state_hist_moves.pop_back();
     state_pins[c] = state_hist_pins.back();
@@ -781,7 +811,7 @@ public:
     state_hist_pins_rays.pop_back();
     state_hist_board_info.pop_back();
     if(self.get_current_ply() < state_hist_draw_repetitions) {
-      state_hist_draw_repetitions = ~move_index_t(0);
+      state_hist_draw_repetitions = ~ply_index_t(0);
     }
   }
 
@@ -837,8 +867,7 @@ public:
     return piece::get_king_attack(j) & kingmask;
   }
 
-  INLINE piece_bitboard_t get_attacks_to(pos_t j, COLOR c=NEUTRAL, piece_bitboard_t occ_mask=~0ULL) const {
-    if(c==NEUTRAL)c=activePlayer();
+  INLINE piece_bitboard_t get_attacks_to(pos_t j, COLOR c, piece_bitboard_t occ_mask=~0ULL) const {
     const piece_bitboard_t occupied = (bits[WHITE] | bits[BLACK]) & occ_mask;
     const piece_bitboard_t colormask = (c == BOTH) ? occupied : bits[c];
     return get_sliding_attacks_to(j, occupied, c)
@@ -894,6 +923,7 @@ public:
   }
 
   std::array<piece_bitboard_t, NO_COLORS> state_checkline = {0x00,0x00};
+
   void init_state_checkline(COLOR c=NEUTRAL) {
     if(c==NEUTRAL)c=activePlayer();
     const piece_bitboard_t occupied = bits[WHITE] | bits[BLACK];
@@ -908,21 +938,12 @@ public:
     const pos_t attacker = bitmask::log2_of_exp2(attackers);
     state_checkline[c] = 0x00;
     if(bits_slid_diag & attackers) {
-      state_checkline[c] |= piece::get_sliding_diag_attacking_ray(pos_king[c], attacker, occupied&~piece::pos_mask(pos_king[c]));
+      state_checkline[c] |= piece::get_sliding_diag_attacking_ray(pos_king[c], attacker, occupied & ~piece::pos_mask(pos_king[c]));
     }
     if(bits_slid_orth & attackers) {
-      state_checkline[c] |= piece::get_sliding_orth_attacking_ray(pos_king[c], attacker, occupied&~piece::pos_mask(pos_king[c]));
+      state_checkline[c] |= piece::get_sliding_orth_attacking_ray(pos_king[c], attacker, occupied & ~piece::pos_mask(pos_king[c]));
     }
     state_checkline[c] |= attackers;
-  }
-
-  piece_bitboard_t state_update_checkline_kingattacks[NO_COLORS] = {~0ULL,~0ULL};
-  INLINE void update_state_checkline() {
-    const COLOR c = activePlayer();
-    const piece_bitboard_t attackers = get_attacks_to(pos_king[c], enemy_of(c));
-    if(attackers == state_update_checkline_kingattacks[c])return;
-    state_update_checkline_kingattacks[c]=attackers;
-    init_state_checkline(c);
   }
 
   // fifty-halfmoves-draw
@@ -976,7 +997,7 @@ public:
     const board_info info = state_hist_board_info.back();
     const size_t N = state_hist_board_info.size();
     int repetitions = 0;
-    for(move_index_t i = 0; i < halfmoves.back(); ++i) {
+    for(ply_index_t i = 0; i < halfmoves.back(); ++i) {
       if(info == state_hist_board_info[N - i]) {
         ++repetitions;
         if(repetitions >= no_times) {
@@ -1156,8 +1177,7 @@ public:
     return board::_move_str(m, bits_pawns & piece::pos_mask(bitmask::first(m)));
   }
 
-  template <typename C>
-  std::vector<std::string> _line_str(const C &line, bool thorough=false) {
+  std::vector<std::string> _line_str(const MoveLine &line, bool thorough=false) {
     std::vector<std::string> s;
     if(thorough)assert(check_valid_sequence(line));
     auto rec_mscope = self.recursive_move_scope();
@@ -1167,6 +1187,14 @@ public:
       if(thorough) {
         rec_mscope.scope(m);
       }
+    }
+    return s;
+  }
+
+  std::string _line_str_full(const MoveLine &line, bool thorough_fut=false) {
+    std::string s = "["s + str::join(_line_str(line.get_past(), false), " "s) + "]"s;
+    if(!line.empty()) {
+      s += " "s + str::join(_line_str(line.get_future(), thorough_fut), " "s);
     }
     return s;
   }

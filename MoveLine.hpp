@@ -150,6 +150,14 @@ struct MoveLine {
     return mline;
   }
 
+  MoveLine get_past() const {
+    MoveLine mline = *this;
+    while(!mline.empty()) {
+      mline.pop_back();
+    }
+    return mline.full();
+  }
+
   void clear() {
     line.clear();
     start = 0;

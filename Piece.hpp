@@ -10,18 +10,30 @@
 
 
 namespace piece {
+  INLINE constexpr piece_bitboard_t pos_mask(pos_t k) {
+    return 1ULL << k;
+  }
+
+  INLINE constexpr piece_bitboard_t rank_mask(pos_t r) {
+    return bitmask::hline << (r * board::LEN);
+  }
+
+  INLINE constexpr piece_bitboard_t file_mask(pos_t f) {
+    return bitmask::vline << f;
+  }
+
   INLINE constexpr bool is_set(piece_bitboard_t mask, pos_t b) {
-    return mask & (1LLU << b);
+    return mask & pos_mask(b);
   }
 
   INLINE void set_pos(piece_bitboard_t &mask, pos_t b) {
 //    assert(!is_set(mask, b));
-    mask |= 1LLU << b;
+    mask |= pos_mask(b);
   }
 
   INLINE void unset_pos(piece_bitboard_t &mask, pos_t b) {
 //    assert(is_set(mask, b));
-    mask &= ~(1LLU << b);
+    mask &= ~pos_mask(b);
   }
 
   INLINE void move_pos(piece_bitboard_t &mask, pos_t i, pos_t j) {
@@ -33,58 +45,34 @@ namespace piece {
     return bitmask::count_bits(mask);
   }
 
-  INLINE void set_king_pos_white(pos_pair_t &kings, pos_t i) {
-    kings = bitmask::_pos_pair(i, bitmask::second(kings));
-  }
-
-  INLINE void set_king_pos_black(pos_pair_t &kings, pos_t i) {
-    kings = bitmask::_pos_pair(bitmask::first(kings), i);
-  }
-
-  constexpr pos_t uninitialized_king = 0xff;
-  constexpr pos_pair_t uninitialized_kings = bitmask::_pos_pair(uninitialized_king, uninitialized_king);
-  INLINE void unset_king_pos_white(pos_pair_t &kings) {
-    set_king_pos_white(kings, uninitialized_king);
-  }
-
-  INLINE void unset_king_pos_black(pos_pair_t &kings) {
-    set_king_pos_black(kings, uninitialized_king);
-  }
-
-  INLINE piece_bitboard_t pos_mask(pos_t k) {
-    return 1ULL << k;
-  }
 
   INLINE piece_bitboard_t get_pawn_attack(pos_t pos, COLOR c) {
     return M42::pawn_attacks(c, pos);
   }
 
   INLINE piece_bitboard_t get_pawn_attacks(piece_bitboard_t mask, COLOR c) {
+    constexpr piece_bitboard_t left = piece::file_mask(A);
+    constexpr piece_bitboard_t right = piece::file_mask(H);
+    constexpr piece_bitboard_t mid = ~(left | right);
     if(c == WHITE) {
-      constexpr piece_bitboard_t left = bitmask::vline;
-      constexpr piece_bitboard_t right = bitmask::vline << 7;
-      constexpr piece_bitboard_t mid = bitmask::full ^ left ^ right;
       return ((mask & left ) << (board::LEN + 1))
            | ((mask & mid  ) << (board::LEN + 1))
            | ((mask & mid  ) << (board::LEN - 1))
            | ((mask & right) << (board::LEN - 1));
     } else {
-      constexpr piece_bitboard_t left = bitmask::vline;
-      constexpr piece_bitboard_t right = bitmask::vline << 7;
-      constexpr piece_bitboard_t mid = bitmask::full ^ left ^ right;
-      return ((mask & left) >> (board::LEN - 1))
-             | ((mask & mid) >> (board::LEN - 1))
-             | ((mask & mid) >> (board::LEN + 1))
-             | ((mask & right) >> (board::LEN + 1));
+      return ((mask & left ) >> (board::LEN - 1))
+           | ((mask & mid  ) >> (board::LEN - 1))
+           | ((mask & mid  ) >> (board::LEN + 1))
+           | ((mask & right) >> (board::LEN + 1));
     }
   }
 
   INLINE piece_bitboard_t get_pawn_push_moves(COLOR c, pos_t i, piece_bitboard_t occupied) {
     if(c == WHITE) {
-      const piece_bitboard_t pushes = ((1ULL << i) << board::LEN) & ~occupied;
+      const piece_bitboard_t pushes = (piece::pos_mask(i) << board::LEN) & ~occupied;
       return (pushes | ((pushes & (bitmask::hline << (-1+3)*board::LEN)) << board::LEN)) & ~occupied;
     } else {
-      const piece_bitboard_t pushes = ((1ULL << i) >> board::LEN) & ~occupied;
+      const piece_bitboard_t pushes = (piece::pos_mask(i) >> board::LEN) & ~occupied;
       return (pushes | ((pushes & (bitmask::hline << (-1+6)*board::LEN)) >> board::LEN)) & ~occupied;
     }
   }
@@ -102,6 +90,7 @@ namespace piece {
     return j + ((c == WHITE) ? -board::LEN : board::LEN);
   }
 
+
   INLINE piece_bitboard_t get_sliding_diag_attack(pos_t pos, piece_bitboard_t occupied) {
     return M42::bishop_attacks(pos, occupied);
   }
@@ -112,7 +101,7 @@ namespace piece {
   }
 
   INLINE piece_bitboard_t get_sliding_diag_attacking_ray(pos_t i, pos_t j, piece_bitboard_t occupied) {
-    const piece_bitboard_t attacked_bit = 1ULL << j;
+    const piece_bitboard_t attacked_bit = piece::pos_mask(j);
     const pos_t x_i=board::_x(i), y_i=board::_y(i),
                 x_j=board::_x(j), y_j=board::_y(j);
     const piece_bitboard_t diags = M42::diag_attacks(i, occupied),
@@ -160,7 +149,7 @@ namespace piece {
   }
 
   INLINE piece_bitboard_t get_sliding_orth_attacking_ray(pos_t i, pos_t j, piece_bitboard_t occupied) {
-    const piece_bitboard_t attacked_bit = 1ULL << j;
+    const piece_bitboard_t attacked_bit = piece::pos_mask(j);
     const pos_t x_i=board::_x(i), y_i=board::_y(i),
                 x_j=board::_x(j), y_j=board::_y(j);
     if(x_i != x_j && y_i != y_j)return 0x00;
@@ -210,6 +199,8 @@ namespace piece {
     return M42::calc_knight_attacks(mask);
   }
 
+
+  constexpr pos_t uninitialized_king = 0xff;
   INLINE piece_bitboard_t get_king_attack(pos_t pos) {
     return M42::king_attacks(pos);
   }
@@ -222,7 +213,7 @@ namespace piece {
     piece_bitboard_t castlemoves = 0x00;
     if(castlings) {
       // can't castle when checked
-      if(attack_mask & (1ULL << i))castlings=0x00;
+      if(attack_mask & piece::pos_mask(i))castlings=0x00;
       const piece_bitboard_t castleleft = 0x04ULL << shift;
       const piece_bitboard_t castleleftcheck = 0x0CULL << shift;
       const piece_bitboard_t castleleftcheckocc = 0x0EULL << shift;
@@ -245,7 +236,7 @@ namespace piece {
     const pos_t shift = (c == WHITE) ? 0 : (board::SIZE-board::LEN);
     const piece_bitboard_t castlings = 0x44ULL << shift;
     const pos_t kingpos = board::_pos(E, 1) + shift;
-    return (i == kingpos) && ((1ULL << j) & castlings);
+    return (i == kingpos) && (piece::pos_mask(j) & castlings);
   }
 
   INLINE pos_pair_t get_king_castle_rook_move(COLOR c, pos_t i, pos_t j) {
@@ -291,7 +282,6 @@ struct Piece {
       case QUEEN: c = 'q'; break;
       case KING: c = 'k'; break;
     }
-    if(color == WHITE)c = toupper(c);
-    return c;
+    return (color == WHITE) ? toupper(c) : c;
   }
 };

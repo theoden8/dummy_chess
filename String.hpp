@@ -9,11 +9,33 @@
 
 using namespace std::string_literals;
 
+#ifndef NDEBUG
+#define _printf printf
+#else
+#define _printf(...)
+#endif
+
 
 namespace str {
 
+std::vector<std::string> split(const std::string &s, const std::string &sep=" "s) {
+  std::vector<std::string> vs;
+  size_t start_s = 0;
+  for(size_t i = 0; i < s.size() - sep.size(); ++i) {
+    if(s.substr(i, sep.size()) == sep) {
+      vs.emplace_back(s.substr(start_s, i - start_s));
+      start_s = i + sep.size();
+      i = start_s - 1;
+    }
+  }
+  if(start_s != s.size()) {
+    vs.emplace_back(s.substr(start_s, s.size() - start_s));
+  }
+  return vs;
+}
+
 template <typename IterableS>
-std::string join(const IterableS &iterable, std::string joinstr=", "s) {
+std::string join(const IterableS &iterable, const std::string &joinstr=", "s) {
   std::string s;
   size_t i = 0;
   for(const auto &it : iterable) {

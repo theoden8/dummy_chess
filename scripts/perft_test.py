@@ -45,7 +45,7 @@ def get_output_stockfish(depth=5, fen=startingpos) -> dict:
 
 
 def get_output_dummy_chess(depth=5, fen=startingpos) -> dict:
-    return get_output_uci('./dummy_chess_uci_opt', depth=depth, fen=fen)
+    return get_output_uci('./dummy_chess_uci', depth=depth, fen=fen)
 
 
 def get_next_fen(fen, move):
