@@ -19,7 +19,7 @@ class Board {
 protected:
   static bool initialized_;
   COLOR activePlayer_;
-  size_t current_ply = 0;
+  size_t current_ply_ = 0;
 
   struct board_info {
     COLOR active_player = NEUTRAL;
@@ -425,9 +425,6 @@ public:
     }
   }
 
-  INLINE void restore_enpassants() {
-  }
-
   INLINE event_t ev_promotion(pos_t i, pos_t j) const {
     return event::promotion_from_basic(ev_basic(i, j));
   }
@@ -534,7 +531,7 @@ public:
   }
 
   INLINE ply_index_t get_current_ply() const {
-    return current_ply;
+    return current_ply_;
   }
 
   INLINE bool check_valid_move(pos_t i, pos_t j) const {
@@ -568,7 +565,7 @@ public:
 
   void make_move(move_t m) {
     event_t ev = get_move_event(m);
-    ++current_ply;
+    ++current_ply_;
     const uint8_t marker = event::extract_marker(ev);
     assert(fen::decompress_castlings(fen::compress_castlings(get_castlings_mask())) == get_castlings_mask());
     state_hist.emplace_back(state);
@@ -668,7 +665,7 @@ public:
     pos_king[WHITE] = prev_info.pos_king(WHITE);
     pos_king[BLACK] = prev_info.pos_king(BLACK);
     activePlayer_ = enemy_of(activePlayer());
-    --current_ply;
+    --current_ply_;
     //enpassants
     while(!enpassants.empty() && enpassants.back().first > get_current_ply()) {
       enpassants.pop_back();
