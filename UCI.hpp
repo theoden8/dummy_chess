@@ -408,12 +408,10 @@ struct UCI {
     double time_spent = 0.;
     size_t nodes_searched = 0;
     const std::unordered_set<move_t> searchmoves(args.searchmoves.begin(), args.searchmoves.end());
-    move_t pondermove = board::nomove;
     const move_t bestmove = engine->get_fixed_depth_move_iddfs(args.depth,
       [&](int16_t depth, move_t currmove, double curreval, const MoveLine &pline, move_t ponder_m) mutable -> bool {
         const size_t nps = update_nodes_per_second(start, time_spent, nodes_searched);
         currline.replace_line(pline);
-        pondermove = ponder_m;
         const double hashfull = double(engine->zb_occupied) / double(ZOBRIST_SIZE);
         respond(RESP_INFO, "depth"s, depth,
                            "seldepth"s, pline.size(),
@@ -438,11 +436,7 @@ struct UCI {
                          "time"s, int(round(time_spent * 1e3)),
                          "hashfull"s, int(round(hashfull * 1e3))
       );
-      if(pondermove != board::nomove) {
-        respond(RESP_BESTMOVE, engine->_move_str(bestmove), "ponder"s, engine->_move_str(pondermove));
-      } else {
-        respond(RESP_BESTMOVE, engine->_move_str(bestmove));
-      }
+      respond(RESP_BESTMOVE, engine->_move_str(bestmove));
     }
     str::pdebug("NOTE: search is over");
     should_stop = true;
