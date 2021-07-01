@@ -430,9 +430,6 @@ public:
   }
 
   INLINE pos_t get_halfmoves() const {
-    if(halfmoves.size() == 1) {
-      return halfmoves.front();
-    }
     return get_current_ply() - halfmoves.back();
   }
 
@@ -588,8 +585,8 @@ public:
           } else {
             move_pos(i, j);
           }
-          update_state_pos(i);
-          update_state_pos(j);
+          update_state_attacks_pos(i);
+          update_state_attacks_pos(j);
         }
       break;
       case event::CASTLING_MARKER:
@@ -602,11 +599,11 @@ public:
                       r_j = bitmask::second(r_m);
           update_castlings(i, j);
           move_pos_quiet(i, j);
-          update_state_pos(i);
-          update_state_pos(j);
+          update_state_attacks_pos(i);
+          update_state_attacks_pos(j);
           move_pos_quiet(r_i, r_j);
-          update_state_pos(r_i);
-          update_state_pos(r_j);
+          update_state_attacks_pos(r_i);
+          update_state_attacks_pos(r_j);
         }
       break;
       case event::ENPASSANT_MARKER:
@@ -616,10 +613,10 @@ public:
                       j = bitmask::second(m);
           const pos_t killwhere = event::extract_pos(ev);
           put_pos(killwhere, self.get_piece(EMPTY));
-          update_state_pos(killwhere);
+          update_state_attacks_pos(killwhere);
           move_pos_quiet(i, j);
-          update_state_pos(i);
-          update_state_pos(j);
+          update_state_attacks_pos(i);
+          update_state_attacks_pos(j);
           update_halfmoves();
         }
       break;
@@ -635,8 +632,8 @@ public:
           update_castlings(i, j);
           unset_pos(i);
           put_pos(j, self.pieces[Piece::get_piece_index(becomewhat, activePlayer())]);
-          update_state_pos(i);
-          update_state_pos(j);
+          update_state_attacks_pos(i);
+          update_state_attacks_pos(j);
           update_halfmoves();
         }
       break;
@@ -677,7 +674,7 @@ public:
       }
     }
     // halfmoves
-    if(halfmoves.size() != 1) {
+    if(halfmoves.size() > 1) {
       while(halfmoves.back() > get_current_ply()) {
         halfmoves.pop_back();
       }
@@ -737,10 +734,6 @@ public:
     // memoization
     state_hist.reserve(100);
     state.info = get_board_info_();
-  }
-
-  INLINE void update_state_pos(pos_t pos) {
-    update_state_attacks_pos(pos);
   }
 
   using board_mailbox_t = std::array <piece_bitboard_t, board::SIZE>;
@@ -919,11 +912,9 @@ public:
     if(no_times >= 3 && state_hist_draw_repetitions <= self.get_current_ply()) {
       return true;
     }
-    const board_info info = state.info;
-    const size_t N = state_hist.size() - 1;
-    int repetitions = 0;
-    for(ply_index_t i = 0; i < halfmoves.back(); ++i) {
-      if(info == state_hist[N - i].info) {
+    int repetitions = 1;
+    for(ply_index_t i = 0; i < get_halfmoves(); ++i) {
+      if(state.info == state_hist[state_hist.size() - i - 1].info) {
         ++repetitions;
         if(repetitions >= no_times) {
           return true;
@@ -933,7 +924,7 @@ public:
     return false;
   }
 
-  INLINE bool can_draw_repetition(int no_times=3) const {
+  INLINE bool can_draw_repetition() const {
     return state_hist_draw_repetitions <= self.get_current_ply();
   }
 

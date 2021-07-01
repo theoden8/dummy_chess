@@ -39,7 +39,11 @@ std::string join(const IterableS &iterable, const std::string &joinstr=", "s) {
   std::string s;
   size_t i = 0;
   for(const auto &it : iterable) {
-    s += it;
+    if constexpr(std::is_same_v<typename IterableS::value_type, std::string>) {
+      s += it;
+    } else {
+      s += std::to_string(it);
+    }
     if(i + 1 != iterable.size()) {
       s += joinstr;
     }
