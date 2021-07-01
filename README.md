@@ -6,13 +6,11 @@
 $ make
 ```
 
-## run it
+## features
 
-```
-./dummy_chess_playouts [depth=4] [fen=starting_pos]
-```
-
-and copy the resulting PGNs into lichess.com's analysis board
+* alpha-beta with iterative deepening (dfs)
+* transposition tables for alpha-beta including exact and lower/upper bounds
+* uci partially supported
 
 ## tools
 

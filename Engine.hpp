@@ -405,7 +405,7 @@ public:
       alpha = std::max(alpha, zb.lowerbound);
       beta = std::min(beta, zb.upperbound);
     }
-    const bool overwrite = (depth >= ab_ttable[k].depth && (ab_ttable[k].info.is_unset() || ab_ttable[k].lowerbound != ab_ttable[k].upperbound));
+    const bool overwrite = (depth >= ab_ttable[k].depth);
     decltype(auto) quiescmoves = ab_get_quiesc_moves(depth, pline, delta, king_in_check);
     if(quiescmoves.empty() || delta <= 0) {
       ++nodes_searched;
@@ -441,7 +441,7 @@ public:
       assert(check_pvline_score(pline_alt, score));
       if(score >= beta) {
         pline.replace_line(pline_alt);
-        if(overwrite) {
+        if(overwrite && (ab_ttable[k].info.is_unset() || ab_ttable[k].lowerbound != ab_ttable[k].upperbound)) {
           if(ab_ttable[k].info.is_unset())++zb_occupied;
           ab_ttable[k] = { .info=info, .depth=depth, .eval=score, .lowerbound=score, .upperbound=DBL_MAX,
                            .m=m, .subpline=pline.get_future(), .age=tt_age };
@@ -457,11 +457,14 @@ public:
       }
     }
     if(overwrite && m_best != board::nomove) {
-      if(ab_ttable[k].info.is_unset())++zb_occupied;
       if(bestscore <= alpha) {
-        ab_ttable[k] = { .info=info, .depth=depth, .eval=bestscore, .lowerbound=-DBL_MAX, .upperbound=bestscore,
-                          .m=m_best, .subpline=pline.get_future(), .age=tt_age };
+        if(ab_ttable[k].info.is_unset() || ab_ttable[k].lowerbound != ab_ttable[k].upperbound) {
+          if(ab_ttable[k].info.is_unset())++zb_occupied;
+          ab_ttable[k] = { .info=info, .depth=depth, .eval=bestscore, .lowerbound=-DBL_MAX, .upperbound=bestscore,
+                            .m=m_best, .subpline=pline.get_future(), .age=tt_age };
+        }
       } else {
+        if(ab_ttable[k].info.is_unset())++zb_occupied;
         ab_ttable[k] = { .info=info, .depth=depth, .eval=bestscore, .lowerbound=bestscore, .upperbound=bestscore,
                          .m=m_best, .subpline=pline.get_future(), .age=tt_age };
       }
@@ -518,15 +521,17 @@ public:
 //      }
       if(zb.lowerbound >= beta) {
         pline.replace_line(ab_ttable[k].subpline);
+        ++nodes_searched;
         return zb.lowerbound;
       } else if(zb.upperbound <= alpha) {
         pline.replace_line(ab_ttable[k].subpline);
+        ++nodes_searched;
         return zb.upperbound;
       }
       alpha = std::max(alpha, zb.lowerbound);
       beta = std::min(beta, zb.upperbound);
     }
-    const bool overwrite = (depth >= ab_ttable[k].depth && (ab_ttable[k].info.is_unset() || ab_ttable[k].lowerbound != ab_ttable[k].upperbound));
+    const bool overwrite = (depth >= ab_ttable[k].depth);
     decltype(auto) moves = ab_get_ordered_moves(pline);
     if(moves.empty()) {
       ++nodes_searched;
@@ -560,7 +565,7 @@ public:
       if(score >= beta) {
         assert(pline_alt.size() >= size_t(depth) || check_line_terminates(pline_alt));
         pline.replace_line(pline_alt);
-        if(overwrite) {
+        if(overwrite && (ab_ttable[k].info.is_unset() || ab_ttable[k].lowerbound != ab_ttable[k].upperbound)) {
           if(ab_ttable[k].info.is_unset())++zb_occupied;
           ab_ttable[k] = { .info=info, .depth=depth, .eval=score, .lowerbound=score, .upperbound=DBL_MAX,
                            .m=m, .subpline=pline.get_future(), .age=tt_age };
@@ -577,11 +582,14 @@ public:
       }
     };
     if(overwrite && m_best != board::nomove) {
-      if(ab_ttable[k].info.is_unset())++zb_occupied;
       if(bestscore < alpha) {
-        ab_ttable[k] = { .info=info, .depth=depth, .eval=bestscore, .lowerbound=-DBL_MAX, .upperbound=bestscore,
-                         .m=m_best, .subpline=pline.get_future(), .age=tt_age };
+        if(ab_ttable[k].info.is_unset() || ab_ttable[k].lowerbound != ab_ttable[k].upperbound) {
+          if(ab_ttable[k].info.is_unset())++zb_occupied;
+          ab_ttable[k] = { .info=info, .depth=depth, .eval=bestscore, .lowerbound=-DBL_MAX, .upperbound=bestscore,
+                           .m=m_best, .subpline=pline.get_future(), .age=tt_age };
+        }
       } else {
+        if(ab_ttable[k].info.is_unset())++zb_occupied;
         ab_ttable[k] = { .info=info, .depth=depth, .eval=bestscore, .lowerbound=bestscore, .upperbound=bestscore,
                          .m=m_best, .subpline=pline.get_future(), .age=tt_age };
       }
