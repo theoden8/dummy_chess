@@ -82,11 +82,9 @@ public:
     });
   }
 
-  INLINE size_t count_moves(COLOR c=NEUTRAL) const {
+  INLINE size_t count_moves(COLOR c) const {
+    assert(c == WHITE || c == BLACK);
     int16_t no_moves = 0;
-    if(c==NEUTRAL) {
-      c=activePlayer();
-    }
     bitmask::foreach(bits[c], [&](pos_t i) mutable -> void {
       pos_t moves_from = bitmask::count_bits(get_moves_from(i));
       if(piece::is_set(bits_pawns, i) && (board::_y(i) == 2-1 || board::_y(i) == 7-1)
@@ -300,15 +298,6 @@ public:
     return gain[0];
   }
 
-  void compare_zb_score_values(int16_t depth, double score, const MoveLine &pline, double score2, const MoveLine &pline2, double alpha, double beta) {
-    if(std::abs(score - score2) < .24)return;
-    const char indicate[] = {(pline.get_future() == pline2.get_future()) ? '-' : '+', '\0'};
-    _printf("%d %s score discrepancy (%.3f, %.3f)\n", depth, indicate, alpha, beta);
-    _printf("   %.4f %s\n", score, _line_str_full(pline).c_str());
-    _printf("   %.4f %s\n", score2, _line_str_full(pline2).c_str());
-//    str::pdebug(zb.info.export_dbg());
-  }
-
   INLINE decltype(auto) get_ab_ttable_zobrist(int16_t depth, zobrist::ttable<tt_ab_entry> &ab_ttable) {
     std::optional<double> maybe_score;
     const auto info = self.get_board_info();
@@ -323,22 +312,9 @@ public:
     return std::make_tuple(maybe_score, k, info);
   }
 
-  int debug_depth = 4;
+  int16_t debug_depth = -1;
 //  const board_info debug_board_info = board_info::import_dbg("255|4360946792109482756|34562222993|17835716876999589888|2594073419725146112|9583660041404153985|1");
   MoveLine debug_moveline = MoveLine(std::vector<move_t>{
-//    3 'r3k3/pQp5/3bp1pn/7q/8/P1N1P3/1PPP1P2/R1B1K3 b q - 0 21'
-//    bitmask::_pos_pair(E8, E7),
-//    bitmask::_pos_pair(B7, A8),
-//    5 'rnq1kbnr/p1p4p/1p2pp2/3p2p1/2PP3N/4P3/PP1B1PQP/RN2K2R w KQkq - 0 11'
-//    bitmask::_pos_pair(board::_pos(H, 4), board::_pos(F, 3)),
-//    bitmask::_pos_pair(board::_pos(D, 5), board::_pos(C, 4)),
-//    bitmask::_pos_pair(board::_pos(F, 3), board::_pos(G, 5)),
-//    3 '8/8/8/3p1k1p/3P1P2/8/2K5/8 b - - 2 46'
-//    bitmask::_pos_pair(F5, F4),
-//    3 '8/8/8/3p3p/3PkP2/8/8/3K4 b - - 4 47'
-//    bitmask::_pos_pair(E4, D4),
-//    3 'r5k1/pn1b2bp/2p3p1/6P1/P1Pp3P/3K4/1q6/RN4NR w - - 0 25'
-//    bitmask::_pos_pair(A1, A3),
   });
 
   INLINE decltype(auto) ab_get_quiesc_moves(int16_t depth, MoveLine &pline, int8_t delta, bool king_in_check) {
@@ -387,7 +363,6 @@ public:
   double alpha_beta_quiescence(double alpha, double beta, int16_t depth, MoveLine &pline,
                                zobrist::ttable<tt_ab_entry> &ab_ttable, int8_t delta)
   {
-    const double _alpha = alpha, _beta = beta;
     double score = -MATERIAL_KING;
     double bestscore = -MATERIAL_KING;
     const bool king_in_check = state_checkline[activePlayer()] != ~0ULL;
@@ -438,13 +413,6 @@ public:
         assert(pline_alt.empty());
         score = -score_decay(alpha_beta_quiescence(-beta, -alpha, depth - 1, pline_alt, ab_ttable, reduce_delta ? delta - 1 : delta));
         assert(check_valid_sequence(pline_alt));
-//        if(!debug_moveline.empty() && pline_alt.get_past().startswith(debug_moveline)) {
-//          std::string TAB = ""s;
-//          for(int i=0;i<debug_depth-depth;++i)TAB+=" "s;
-//          _printf("%s", TAB.c_str());
-//          _printf("depth=%d, %s, score=%.5f (%.4f, %.4f) %s\n", depth,board::_move_str(m).c_str(),score, _beta, _alpha,
-//            _line_str_full(pline_alt).c_str());
-//        }
         pline_alt.recall();
       }
       assert(check_pvline_score(pline_alt, score));
@@ -465,9 +433,9 @@ public:
         }
       }
     }
-    if(overwrite) {
+    if(overwrite && m_best != board::nomove) {
       if(ab_ttable[k].info.is_unset())++zb_occupied;
-      if(bestscore < alpha) {
+      if(bestscore <= alpha) {
         ab_ttable[k] = { .info=info, .depth=depth, .eval=bestscore, .lowerbound=-DBL_MAX, .upperbound=bestscore, .m=m_best, .subpline=pline,
                          .age=tt_age };
       } else {
@@ -508,23 +476,8 @@ public:
 
     // zobrist
     const auto [zbscore, k, info] = get_ab_ttable_zobrist(depth, ab_ttable);
-//    if(info == debug_board_info) {
-//      str::pdebug(depth, "depth", "changed moveline", _line_str_full(pline), "("s, _beta, ", "s, _alpha, ")"s);
-//      debug_moveline = pline.full();
-//    }
     if(zbscore.has_value()) {
       const auto &zb = ab_ttable[k];
-//      if(!debug_moveline.empty() && pline.get_past().startswith(debug_moveline)) {
-//        std::string tab=""s; for(int i=debug_depth;i>depth;--i)tab+=" ";
-//
-//        std::string actinfo = "memoized"s;
-//        MoveLine pline_alt = pline.branch_from_past();
-//        pline_alt.replace_line(zb.subpline);
-//        _printf("%sdepth=%d, %s, score=%.5f (%.4f, %.4f) %s -- %s (%.4f, %.4f)\n",
-//            tab.c_str(), depth, board::_move_str(zb.m).c_str(), zb.eval, alpha, beta,
-//            _line_str_full(pline_alt).c_str(), actinfo.c_str(),
-//            zb.lowerbound, zb.upperbound);
-//      }
       if(zb.lowerbound >= beta) {
         pline.replace_line(ab_ttable[k].subpline);
         return zb.lowerbound;
@@ -573,7 +526,7 @@ public:
         }
       }
     };
-    if(overwrite) {
+    if(overwrite && m_best != board::nomove) {
       if(ab_ttable[k].info.is_unset())++zb_occupied;
       if(bestscore < alpha) {
         ab_ttable[k] = { .info=info, .depth=depth, .eval=bestscore, .lowerbound=-DBL_MAX, .upperbound=bestscore,
@@ -604,7 +557,6 @@ public:
     bool should_stop_iddfs = false;
     for(int16_t d = 0; d < depth; ++d) {
       double eval_best = -MATERIAL_KING;
-      const double beta = MATERIAL_KING;
       for(size_t i = 0; i < bestmoves.size(); ++i) {
         auto &[eval, curdepth, m] = bestmoves[i];
         if(d == 0) {
@@ -614,7 +566,7 @@ public:
         {
           volatile auto mscope = move_scope(m);
           MoveLine mline = pline[m];
-          eval = -alpha_beta(-beta, -eval_best, d, mline, ab_ttable);
+          eval = -alpha_beta(-MATERIAL_KING, MATERIAL_KING, d, mline, ab_ttable);
           ++curdepth;
           if(eval > eval_best) {
             eval_best = eval;
@@ -713,7 +665,7 @@ public:
   }
   size_t _perft(int16_t depth, std::array<tt_perft_entry, ZOBRIST_SIZE> &perft_ttable) {
     if(depth == 1 || depth == 0) {
-      return count_moves();
+      return count_moves(activePlayer());
     }
     // look-up:
     zobrist::key_t k = self.zb_hash();
