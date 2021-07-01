@@ -70,10 +70,10 @@ namespace piece {
   INLINE piece_bitboard_t get_pawn_push_moves(COLOR c, pos_t i, piece_bitboard_t occupied) {
     if(c == WHITE) {
       const piece_bitboard_t pushes = (piece::pos_mask(i) << board::LEN) & ~occupied;
-      return (pushes | ((pushes & (bitmask::hline << (-1+3)*board::LEN)) << board::LEN)) & ~occupied;
+      return (pushes | ((pushes & piece::rank_mask(-1+3)) << board::LEN)) & ~occupied;
     } else {
       const piece_bitboard_t pushes = (piece::pos_mask(i) >> board::LEN) & ~occupied;
-      return (pushes | ((pushes & (bitmask::hline << (-1+6)*board::LEN)) >> board::LEN)) & ~occupied;
+      return (pushes | ((pushes & piece::rank_mask(-1+6)) >> board::LEN)) & ~occupied;
     }
   }
 

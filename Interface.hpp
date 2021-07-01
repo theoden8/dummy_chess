@@ -265,10 +265,6 @@ struct Interface {
     attron(A_BOLD);
     const COLOR c = board.activePlayer();
     //set statusbar message
-    event_t lastevent = board.last_event();
-    const pos_t marker = event::extract_byte(lastevent);
-    const pos_t from = event::extract_byte(lastevent);
-    const pos_t to = event::extract_byte(lastevent);
     //int len = printw("[ %s ]", activePlayer().c_str());
     //int len = printw("[ %s %hhu %hhu->%hhu ]", activePlayer().c_str(), fen::compress_castlings(board.get_castlings_mask()), from, to);
     int len = printw("[ %s [%hu %hu %hu %hu]", activePlayer().c_str(), board.castlings[0], board.castlings[1],
@@ -378,8 +374,7 @@ struct Interface {
           pos_t pos_to = board::_pos(A+cursor_x, 1+cursor_y);
           auto moves = board.get_moves_from(pos_from);
           if((1ULL << pos_to) & moves && board[pos_from].color == board.activePlayer()) {
-            event_t ev = board.get_move_event(pos_from, pos_to | board::PROMOTE_QUEEN);
-            pgn.handle_event(ev);
+            pgn.handle_move(pos_from, pos_to | board::PROMOTE_QUEEN);
             sel_x=-1,sel_y=-1;
           } else {
             sel_x=cursor_x,sel_y=cursor_y;
@@ -392,8 +387,7 @@ struct Interface {
           if(sel_x==-1||sel_y==-1)m=board.get_random_move();
           else m=board.get_random_move_from(board::_pos(A+sel_x, 1+sel_y));
           if(m != board::nomove) {
-            event_t ev = board.get_move_event(bitmask::first(m), bitmask::second(m));
-            pgn.handle_event(ev);
+            pgn.handle_move(m);
           }
         }
       break;
@@ -404,8 +398,7 @@ struct Interface {
         {
           move_t m = board.get_fixed_depth_move(6);
           if(m != board::nomove) {
-            event_t ev = board.get_move_event(bitmask::first(m), bitmask::second(m));
-            pgn.handle_event(ev);
+            pgn.handle_move(m);
           }
         }
       break;

@@ -163,7 +163,7 @@ public:
   INLINE double heuristic_of(COLOR c) const {
     double h = .0;
     h += count_material(bits[c]);
-    h += count_material(state_pins[enemy_of(c)]) * 1e-4;
+    h += count_material(state.pins[enemy_of(c)]) * 1e-4;
 //    h += count_moves(c) * 2e-4;
     h += h_attack_cells(c) * 1e-4;
     return h;
@@ -375,7 +375,7 @@ public:
     double score = -MATERIAL_KING;
     double bestscore = -MATERIAL_KING;
 
-    const bool king_in_check = state_checkline[activePlayer()] != ~0ULL;
+    const bool king_in_check = state.checkline[activePlayer()] != ~0ULL;
     if(!king_in_check) {
       score = evaluate();
       if(score >= beta) {
@@ -434,8 +434,7 @@ public:
     for(const auto &[_, m, reduce_delta] : quiescmoves) {
       MoveLine pline_alt = pline.branch_from_past();
       {
-        volatile auto mscope = move_scope(m);
-        pline_alt.premove(m);
+        volatile auto mscope = mline_scope(m, pline_alt);
         assert(pline_alt.empty());
         score = -score_decay(alpha_beta_quiescence(-beta, -alpha, depth - 1, pline_alt, ab_ttable, reduce_delta ? delta - 1 : delta));
         assert(check_valid_sequence(pline_alt));
@@ -451,7 +450,6 @@ public:
 //            tab.c_str(), depth, board::_move_str(m).c_str(), score, beta, alpha,
 //            _line_str_full(pline_alt).c_str(), actinfo.c_str());
 //        }
-        pline_alt.recall();
       }
       assert(check_pvline_score(pline_alt, score));
       if(score >= beta) {
@@ -559,12 +557,12 @@ public:
       return evaluate();
     }
     double bestscore = -DBL_MAX;
-    for(const auto [_, m] : moves) {
+    for(size_t move_index = 0; move_index < moves.size(); ++move_index) {
+      const auto [_, m] = moves[move_index];
       MoveLine pline_alt = pline.branch_from_past();
       double score;
       {
-        volatile auto mscope = move_scope(m);
-        pline_alt.premove(m);
+        volatile auto mscope = mline_scope(m, pline_alt);
         assert(pline_alt.empty());
         score = -score_decay(alpha_beta(-beta, -alpha, depth - 1, pline_alt, ab_ttable));
 //        if(!debug_moveline.empty() && pline_alt.get_past().startswith(debug_moveline)) {
@@ -579,7 +577,6 @@ public:
 //            tab.c_str(), depth, board::_move_str(m).c_str(), score, beta, alpha,
 //            _line_str_full(pline_alt).c_str(), actinfo.c_str());
 //        }
-        pline_alt.recall();
       }
       assert(check_pvline_score(pline_alt, score));
       if(score >= beta) {
@@ -620,12 +617,12 @@ public:
                                                     zobrist::ttable<tt_ab_entry> &ab_ttable, F &&callback_f)
   {
     if(depth == 0)return std::make_tuple(MATERIAL_KING, board::nomove);
-    std::vector<std::tuple<double, int, move_t>> bestmoves;
+    std::vector<std::tuple<double, move_t>> bestmoves;
     iter_moves([&](pos_t i, pos_t j) mutable -> void {
       double val = move_heuristic(i, j);
       const move_t m = bitmask::_pos_pair(i, j);
       if(searchmoves.empty() || searchmoves.find(m) != std::end(searchmoves)) {
-        bestmoves.emplace_back(-val,0,m);
+        bestmoves.emplace_back(-val,m);
       }
     });
     std::sort(bestmoves.begin(), bestmoves.end());
@@ -633,32 +630,32 @@ public:
     bool should_stop_iddfs = false;
     for(int16_t d = 0; d < depth; ++d) {
       double eval_best = -MATERIAL_KING;
+      move_t m_best = board::nomove;
       for(size_t i = 0; i < bestmoves.size(); ++i) {
-        auto &[eval, curdepth, m] = bestmoves[i];
-        if(d == 0) {
-          pline[m].premove(m);
-        }
+        auto &[eval, m] = bestmoves[i];
         str::pdebug("IDDFS:", d, "move:", _move_str(m), "pre-eval:", eval);
         {
-          volatile auto mscope = move_scope(m);
-          MoveLine mline = pline[m];
-          eval = -alpha_beta(-MATERIAL_KING, MATERIAL_KING, d, mline, ab_ttable);
-          ++curdepth;
-          const bool fail_low = (pline[m].full().size() < size_t(d) && !check_line_terminates(pline[m]));
-          if(!fail_low) {
+          volatile auto mscope = mline_scope(m, pline[m]);
+          const MoveLine mline = pline[m];
+          const double new_eval = -alpha_beta(-MATERIAL_KING, MATERIAL_KING, d, pline[m], ab_ttable);
+          const bool fail_low = (pline[m].size() < size_t(d) && !check_line_terminates(pline[m]));
+          if(fail_low) {
+            pline[m] = mline;
+          } else {
+            eval = new_eval;
             if(eval > eval_best) {
               eval_best = eval;
+              m_best = m;
             }
-            pline[m].replace_line(mline);
           }
           // front node must be m
-          assert(pline[m].full().front() == m);
         }
+        assert(pline[m].front() == m);
+        assert(m_best != board::nomove);
         {
-          const auto [_, d_best, m_best] = *std::max_element(std::begin(bestmoves), std::end(bestmoves));
           // check that search was successful
-          assert(pline[m_best].full().size() >= size_t(d) || check_line_terminates(pline[m_best]));
-          if(!callback_f(d_best, m_best, eval_best, pline[m_best].full(), m) || (score_is_mate(eval_best) && d > 1)) {
+          assert(pline[m_best].size() >= size_t(d) || check_line_terminates(pline[m_best]));
+          if(!callback_f(d+1, m_best, eval_best, pline[m_best], m) || (score_is_mate(eval_best) && d > 1)) {
             should_stop_iddfs = true;
             break;
           }
@@ -667,13 +664,12 @@ public:
       }
       std::sort(bestmoves.begin(), bestmoves.end());
       std::reverse(bestmoves.begin(), bestmoves.end());
-      const auto [_, curdepth, m_best] = *std::max_element(std::begin(bestmoves), std::end(bestmoves));
-      str::pdebug("depth:", curdepth, "pline:", _line_str(pline[m_best].full(), true), "size:", pline[m_best].full().size(), "eval", eval_best);
+      str::pdebug("depth:", d+1, "pline:", _line_str(pline[m_best].full(), true), "size:", pline[m_best].full().size(), "eval", eval_best);
       if(should_stop_iddfs)break;
     }
     if(bestmoves.empty())return std::make_tuple(-MATERIAL_KING, board::nomove);
-    const auto [eval, _, best_m] = bestmoves.front();
-    return std::make_tuple(eval, best_m);
+    const auto [best_eval, best_m] = bestmoves.front();
+    return std::make_tuple(best_eval, best_m);
   }
 
   void reset_planning() {

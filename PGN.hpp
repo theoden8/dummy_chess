@@ -163,9 +163,10 @@ struct PGN {
     ply.emplace_back(p);
   }
 
-  void handle_event(event_t ev) {
+  void handle_move(move_t m) {
+    const event_t ev = board.get_move_event(m);
     write_event(ev);
-    board.act_event(ev);
+    board.make_move(m);
     const COLOR c = board.activePlayer();
     const pos_t no_checks = board.get_attack_counts_to(board.pos_king[c], enemy_of(c));
     ending = "";
@@ -184,8 +185,8 @@ struct PGN {
     }
   }
 
-  void handle_move(move_t m) {
-    handle_event(board.get_move_event(m));
+  void handle_move(pos_t i, pos_t j) {
+    handle_move(bitmask::_pos_pair(i, j));
   }
 
   void retract_event() {
