@@ -444,7 +444,7 @@ public:
         if(overwrite) {
           if(ab_ttable[k].info.is_unset())++zb_occupied;
           ab_ttable[k] = { .info=info, .depth=depth, .eval=score, .lowerbound=score, .upperbound=DBL_MAX,
-                           .m=m, .subpline=pline, .age=tt_age };
+                           .m=m, .subpline=pline.get_future(), .age=tt_age };
         }
         return score;
       } else if(score > bestscore) {
@@ -459,11 +459,11 @@ public:
     if(overwrite && m_best != board::nomove) {
       if(ab_ttable[k].info.is_unset())++zb_occupied;
       if(bestscore <= alpha) {
-        ab_ttable[k] = { .info=info, .depth=depth, .eval=bestscore, .lowerbound=-DBL_MAX, .upperbound=bestscore, .m=m_best, .subpline=pline,
-                         .age=tt_age };
+        ab_ttable[k] = { .info=info, .depth=depth, .eval=bestscore, .lowerbound=-DBL_MAX, .upperbound=bestscore,
+                          .m=m_best, .subpline=pline.get_future(), .age=tt_age };
       } else {
         ab_ttable[k] = { .info=info, .depth=depth, .eval=bestscore, .lowerbound=bestscore, .upperbound=bestscore,
-                         .m=m_best, .subpline=pline, .age=tt_age };
+                         .m=m_best, .subpline=pline.get_future(), .age=tt_age };
       }
     }
     return bestscore;
@@ -563,7 +563,7 @@ public:
         if(overwrite) {
           if(ab_ttable[k].info.is_unset())++zb_occupied;
           ab_ttable[k] = { .info=info, .depth=depth, .eval=score, .lowerbound=score, .upperbound=DBL_MAX,
-                           .m=m, .subpline=pline, .age=tt_age };
+                           .m=m, .subpline=pline.get_future(), .age=tt_age };
         }
         return score;
       } else if(score > bestscore) {
@@ -580,10 +580,10 @@ public:
       if(ab_ttable[k].info.is_unset())++zb_occupied;
       if(bestscore < alpha) {
         ab_ttable[k] = { .info=info, .depth=depth, .eval=bestscore, .lowerbound=-DBL_MAX, .upperbound=bestscore,
-                         .m=m_best, .subpline=pline, .age=tt_age };
+                         .m=m_best, .subpline=pline.get_future(), .age=tt_age };
       } else {
         ab_ttable[k] = { .info=info, .depth=depth, .eval=bestscore, .lowerbound=bestscore, .upperbound=bestscore,
-                         .m=m_best, .subpline=pline, .age=tt_age };
+                         .m=m_best, .subpline=pline.get_future(), .age=tt_age };
       }
     }
     return bestscore;
@@ -618,10 +618,13 @@ public:
           MoveLine mline = pline[m];
           eval = -alpha_beta(-MATERIAL_KING, MATERIAL_KING, d, mline, ab_ttable);
           ++curdepth;
-          if((pline[m].full().size() >= size_t(d) || check_line_terminates(pline[m])) && eval > eval_best) {
-            eval_best = eval;
+          const bool fail_low = (pline[m].full().size() < size_t(d) && !check_line_terminates(pline[m]));
+          if(!fail_low) {
+            if(eval > eval_best) {
+              eval_best = eval;
+            }
+            pline[m].replace_line(mline);
           }
-          pline[m].replace_line(mline);
           // front node must be m
           assert(pline[m].full().front() == m);
         }
