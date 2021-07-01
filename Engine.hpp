@@ -369,6 +369,7 @@ public:
   {
     double score = -MATERIAL_KING;
     double bestscore = -MATERIAL_KING;
+
     const bool king_in_check = state_checkline[activePlayer()] != ~0ULL;
     if(!king_in_check) {
       score = evaluate();
@@ -409,7 +410,9 @@ public:
       alpha = std::max(alpha, zb.lowerbound);
       beta = std::min(beta, zb.upperbound);
     }
+
     const bool overwrite = (depth >= ab_ttable[k].depth || ab_ttable[k].is_inactive(tt_age));
+
     decltype(auto) quiescmoves = ab_get_quiesc_moves(depth, pline, delta, king_in_check);
     if(quiescmoves.empty() || delta <= 0) {
       ++nodes_searched;
@@ -446,7 +449,7 @@ public:
       if(score >= beta) {
         pline.replace_line(pline_alt);
         if(overwrite && (ab_ttable[k].is_inactive(tt_age) || ab_ttable[k].lowerbound != ab_ttable[k].upperbound)) {
-          if(ab_ttable[k].info.is_unset())++zb_occupied;
+          if(ab_ttable[k].is_inactive(tt_age))++zb_occupied;
           ab_ttable[k] = { .info=info, .depth=depth, .eval=score, .lowerbound=score, .upperbound=DBL_MAX,
                            .m=m, .subpline=pline.get_future(), .age=tt_age };
         }
@@ -463,7 +466,7 @@ public:
     if(overwrite && m_best != board::nomove) {
       if(bestscore <= alpha) {
         if(ab_ttable[k].is_inactive(tt_age) || ab_ttable[k].lowerbound != ab_ttable[k].upperbound) {
-          if(ab_ttable[k].info.is_unset())++zb_occupied;
+          if(ab_ttable[k].is_inactive(tt_age))++zb_occupied;
           ab_ttable[k] = { .info=info, .depth=depth, .eval=bestscore, .lowerbound=-DBL_MAX, .upperbound=bestscore,
                             .m=m_best, .subpline=pline.get_future(), .age=tt_age };
         }
