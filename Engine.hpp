@@ -383,6 +383,17 @@ public:
     const auto [zbscore, k, info] = get_ab_ttable_zobrist(depth, ab_ttable);
     if(zbscore.has_value()) {
       const auto &zb = ab_ttable[k];
+//      if(!debug_moveline.empty() && pline.get_past().startswith(debug_moveline)) {
+//        std::string tab=""s; for(int i=debug_depth;i>depth;--i)tab+=" ";
+//
+//        std::string actinfo = "memoized"s;
+//        MoveLine pline_alt = pline.branch_from_past();
+//        pline_alt.replace_line(zb.subpline);
+//        _printf("%sdepth=%d, %s, score=%.6f (%.6f, %.6f) %s -- %s (%.6f, %.6f)\n",
+//            tab.c_str(), depth, board::_move_str(zb.m).c_str(), zb.eval, alpha, beta,
+//            _line_str_full(pline_alt).c_str(), actinfo.c_str(),
+//            zb.lowerbound, zb.upperbound);
+//      }
       if(zb.lowerbound >= beta) {
         pline.replace_line(ab_ttable[k].subpline);
         return zb.lowerbound;
@@ -413,6 +424,18 @@ public:
         assert(pline_alt.empty());
         score = -score_decay(alpha_beta_quiescence(-beta, -alpha, depth - 1, pline_alt, ab_ttable, reduce_delta ? delta - 1 : delta));
         assert(check_valid_sequence(pline_alt));
+//        if(!debug_moveline.empty() && pline_alt.get_past().startswith(debug_moveline)) {
+//          std::string tab=""s; for(int i=0;i<debug_depth-depth;++i)tab+=" "s;
+//          std::string actinfo = "ignored"s;
+//          if(score >= beta) {
+//            actinfo = "beta-curoff"s;
+//          } else if(score > bestscore) {
+//            actinfo = "new best"s;
+//          }
+//          _printf("%sdepth=%d, %s, score=%.6f (%.6f, %.6f) %s -- %s\n",
+//            tab.c_str(), depth, board::_move_str(m).c_str(), score, beta, alpha,
+//            _line_str_full(pline_alt).c_str(), actinfo.c_str());
+//        }
         pline_alt.recall();
       }
       assert(check_pvline_score(pline_alt, score));
@@ -476,8 +499,23 @@ public:
 
     // zobrist
     const auto [zbscore, k, info] = get_ab_ttable_zobrist(depth, ab_ttable);
+//    if(info == debug_board_info) {
+//      str::pdebug(depth, "depth", "changed moveline", _line_str_full(pline), "("s, _beta, ", "s, _alpha, ")"s);
+//      debug_moveline = pline.full();
+//    }
     if(zbscore.has_value()) {
       const auto &zb = ab_ttable[k];
+//      if(!debug_moveline.empty() && pline.get_past().startswith(debug_moveline)) {
+//        std::string tab=""s; for(int i=debug_depth;i>depth;--i)tab+=" ";
+//
+//        std::string actinfo = "memoized"s;
+//        MoveLine pline_alt = pline.branch_from_past();
+//        pline_alt.replace_line(zb.subpline);
+//        _printf("%sdepth=%d, %s, score=%.6f (%.6f, %.6f) %s -- %s (%.6f, %.6f)\n",
+//            tab.c_str(), depth, board::_move_str(zb.m).c_str(), zb.eval, alpha, beta,
+//            _line_str_full(pline_alt).c_str(), actinfo.c_str(),
+//            zb.lowerbound, zb.upperbound);
+//      }
       if(zb.lowerbound >= beta) {
         pline.replace_line(ab_ttable[k].subpline);
         return zb.lowerbound;
@@ -504,6 +542,18 @@ public:
         pline_alt.premove(m);
         assert(pline_alt.empty());
         score = -score_decay(alpha_beta(-beta, -alpha, depth - 1, pline_alt, ab_ttable));
+//        if(!debug_moveline.empty() && pline_alt.get_past().startswith(debug_moveline)) {
+//          std::string tab=""s; for(int i=0;i<debug_depth-depth;++i)tab+=" "s;
+//          std::string actinfo = "ignored"s;
+//          if(score >= beta) {
+//            actinfo = "beta-curoff"s;
+//          } else if(score > bestscore) {
+//            actinfo = "new best"s;
+//          }
+//          _printf("%sdepth=%d, %s, score=%.6f (%.6f, %.6f) %s -- %s\n",
+//            tab.c_str(), depth, board::_move_str(m).c_str(), score, beta, alpha,
+//            _line_str_full(pline_alt).c_str(), actinfo.c_str());
+//        }
         pline_alt.recall();
       }
       assert(check_pvline_score(pline_alt, score));
@@ -568,7 +618,7 @@ public:
           MoveLine mline = pline[m];
           eval = -alpha_beta(-MATERIAL_KING, MATERIAL_KING, d, mline, ab_ttable);
           ++curdepth;
-          if(eval > eval_best) {
+          if((pline[m].full().size() >= size_t(d) || check_line_terminates(pline[m])) && eval > eval_best) {
             eval_best = eval;
           }
           pline[m].replace_line(mline);
@@ -578,7 +628,7 @@ public:
         {
           const auto [_, d_best, m_best] = *std::max_element(std::begin(bestmoves), std::end(bestmoves));
           // check that search was successful
-          assert(pline[m_best].size() >= size_t(d) || check_line_terminates(pline[m_best]));
+          assert(pline[m_best].full().size() >= size_t(d) || check_line_terminates(pline[m_best]));
           if(!callback_f(d_best, m_best, eval_best, pline[m_best].full(), m) || (score_is_mate(eval_best) && d > 1)) {
             should_stop_iddfs = true;
             break;
