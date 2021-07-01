@@ -246,8 +246,8 @@ public:
 
   piece_bitboard_t get_least_valuable_piece(piece_bitboard_t mask) const {
     // short-hands for bits
-    const piece_bitboard_t diag = self.bits_slid_diag, orth = self.bits_slid_orth;
-    const piece_bitboard_t kings = piece::pos_mask(pos_king[WHITE]) | piece::pos_mask(pos_king[BLACK]);
+    const piece_bitboard_t diag = self.bits_slid_diag,
+                           orth = self.bits_slid_orth;
     // get some piece that is minimal
     piece_bitboard_t found = 0x00ULL;
     for(const auto p : MATERIAL_PIECE_ORDERING) {
@@ -257,7 +257,7 @@ public:
         case BISHOP: if(mask & diag & ~orth) found = mask & diag & ~orth; break;
         case ROOK: if(mask & ~diag & orth) found = mask & ~diag & orth; break;
         case QUEEN: if(mask & diag & orth) found = mask & diag & orth; break;
-        case KING: if(mask & kings) found = mask & kings; break;
+        case KING: if(mask & get_king_bits()) found = mask & get_king_bits(); break;
         default: break;
       }
       if(found)break;
@@ -292,7 +292,7 @@ public:
       const COLOR c = self.color_at_pos((depth & 1) ? j : i);
       from_set = get_least_valuable_piece(attadef & bits[c]);
     } while(from_set);
-    int maxdepth = depth;
+//    int maxdepth = depth;
     while(--depth) {
       gain[depth - 1] = -std::max(-gain[depth - 1], gain[depth]);
     }
@@ -321,13 +321,16 @@ public:
   MoveLine debug_moveline = MoveLine(std::vector<move_t>{
   });
 
-  INLINE decltype(auto) ab_get_quiesc_moves(int16_t depth, MoveLine &pline, int8_t delta, bool king_in_check) {
+  INLINE decltype(auto) ab_get_quiesc_moves(int16_t depth, MoveLine &pline, int8_t delta, bool king_in_check, move_t firstmove=board::nomove) {
     std::vector<std::tuple<double, move_t, bool>> quiescmoves;
     quiescmoves.reserve(8);
     if(!king_in_check) {
       iter_quiesc_moves([&](pos_t i, pos_t j) mutable -> void {
         double val = move_heuristic(i, j);
         const move_t m = bitmask::_pos_pair(i, j);
+        if(m == firstmove) {
+          val += 1000.;
+        }
         bool reduce_delta = false;
         if(is_promotion_move(i, j) || is_enpassant_take_move(i, j) || material_of(self[i].value) <= material_of(self[j].value)) {
           ;
@@ -353,7 +356,9 @@ public:
       iter_moves([&](pos_t i, pos_t j) mutable -> void {
         double val = move_heuristic(i, j);
         const move_t m = bitmask::_pos_pair(i, j);
-        if(pline.find_in_mainline(m)) {
+        if(m == firstmove) {
+          val += 1000.;
+        } else if(pline.find_in_mainline(m)) {
           val += 10.;
         }
         quiescmoves.emplace_back(-val, m, false);
@@ -384,7 +389,7 @@ public:
       }
     }
 
-    // zobrist
+    move_t m_best = board::nomove;
     const auto [zbscore, k, info] = get_ab_ttable_zobrist(depth, ab_ttable);
     if(zbscore.has_value()) {
       const auto &zb = ab_ttable[k];
@@ -409,11 +414,15 @@ public:
       }
       alpha = std::max(alpha, zb.lowerbound);
       beta = std::min(beta, zb.upperbound);
+      m_best = zb.m;
     }
 
-    const bool overwrite = (depth >= ab_ttable[k].depth || ab_ttable[k].is_inactive(tt_age));
+    const bool overwrite = true;
+    const bool cache_inactive_entry = ab_ttable[k].is_inactive(tt_age);
+    const bool cache_replace_depth = cache_inactive_entry || depth >= ab_ttable[k].depth;
+    const bool cache_inexact_entry = cache_inactive_entry || ab_ttable[k].lowerbound != ab_ttable[k].upperbound;
 
-    decltype(auto) quiescmoves = ab_get_quiesc_moves(depth, pline, delta, king_in_check);
+    decltype(auto) quiescmoves = ab_get_quiesc_moves(depth, pline, delta, king_in_check, m_best);
     if(quiescmoves.empty() || delta <= 0) {
       ++nodes_searched;
       if(king_in_check) {
@@ -422,7 +431,6 @@ public:
       return score;
     }
     assert(pline.empty());
-    move_t m_best = board::nomove;
     for(const auto &[_, m, reduce_delta] : quiescmoves) {
       MoveLine pline_alt = pline.branch_from_past();
       {
@@ -448,8 +456,8 @@ public:
       assert(check_pvline_score(pline_alt, score));
       if(score >= beta) {
         pline.replace_line(pline_alt);
-        if(overwrite && (ab_ttable[k].is_inactive(tt_age) || ab_ttable[k].lowerbound != ab_ttable[k].upperbound)) {
-          if(ab_ttable[k].is_inactive(tt_age))++zb_occupied;
+        if(overwrite && cache_replace_depth && cache_inexact_entry) {
+          if(cache_inactive_entry)++zb_occupied;
           ab_ttable[k] = { .info=info, .depth=depth, .eval=score, .lowerbound=score, .upperbound=DBL_MAX,
                            .m=m, .subpline=pline.get_future(), .age=tt_age };
         }
@@ -464,14 +472,12 @@ public:
       }
     }
     if(overwrite && m_best != board::nomove) {
-      if(bestscore <= alpha) {
-        if(ab_ttable[k].is_inactive(tt_age) || ab_ttable[k].lowerbound != ab_ttable[k].upperbound) {
-          if(ab_ttable[k].is_inactive(tt_age))++zb_occupied;
-          ab_ttable[k] = { .info=info, .depth=depth, .eval=bestscore, .lowerbound=-DBL_MAX, .upperbound=bestscore,
-                            .m=m_best, .subpline=pline.get_future(), .age=tt_age };
-        }
-      } else {
-        if(ab_ttable[k].is_inactive(tt_age))++zb_occupied;
+      if((cache_replace_depth) && bestscore <= alpha) {
+        if(cache_inactive_entry)++zb_occupied;
+        ab_ttable[k] = { .info=info, .depth=depth, .eval=bestscore, .lowerbound=-DBL_MAX, .upperbound=bestscore,
+                          .m=m_best, .subpline=pline.get_future(), .age=tt_age };
+      } else if((cache_replace_depth || cache_inexact_entry) && bestscore > alpha) {
+        if(cache_inactive_entry)++zb_occupied;
         ab_ttable[k] = { .info=info, .depth=depth, .eval=bestscore, .lowerbound=bestscore, .upperbound=bestscore,
                          .m=m_best, .subpline=pline.get_future(), .age=tt_age };
       }
@@ -479,14 +485,16 @@ public:
     return bestscore;
   }
 
-  INLINE decltype(auto) ab_get_ordered_moves(MoveLine &pline) {
+  INLINE decltype(auto) ab_get_ordered_moves(const MoveLine &pline, move_t firstmove=board::nomove) {
     std::vector<std::pair<double, move_t>> moves;
     moves.reserve(16);
     iter_moves([&](pos_t i, pos_t j) mutable -> void {
       double val = move_heuristic(i, j);
       const move_t m = bitmask::_pos_pair(i, j);
       // principal variation move ordering
-      if(pline.front_in_mainline() == m) {
+      if(m == firstmove) {
+        val += 1000.;
+      } else if(pline.front_in_mainline() == m) {
         val += 100.;
       } else if(pline.find_in_mainline(m)) {
         val += 10.;
@@ -507,7 +515,7 @@ public:
       return score;
     }
 
-    // zobrist
+    move_t m_best = board::nomove;
     const auto [zbscore, k, info] = get_ab_ttable_zobrist(depth, ab_ttable);
 //    if(info == debug_board_info) {
 //      str::pdebug(depth, "depth", "changed moveline", _line_str_full(pline), "("s, _beta, ", "s, _alpha, ")"s);
@@ -537,14 +545,19 @@ public:
       }
       alpha = std::max(alpha, zb.lowerbound);
       beta = std::min(beta, zb.upperbound);
+      m_best = zb.m;
     }
-    const bool overwrite = (depth >= ab_ttable[k].depth || ab_ttable[k].is_inactive(tt_age));
-    decltype(auto) moves = ab_get_ordered_moves(pline);
+
+    const bool overwrite = true;
+    const bool cache_inactive_entry = ab_ttable[k].is_inactive(tt_age);
+    const bool cache_replace_depth = cache_inactive_entry || depth >= ab_ttable[k].depth;
+    const bool cache_inexact_entry = cache_inactive_entry || ab_ttable[k].lowerbound != ab_ttable[k].upperbound;
+
+    decltype(auto) moves = ab_get_ordered_moves(pline, m_best);
     if(moves.empty()) {
       ++nodes_searched;
       return evaluate();
     }
-    move_t m_best = board::nomove;
     double bestscore = -DBL_MAX;
     for(const auto [_, m] : moves) {
       MoveLine pline_alt = pline.branch_from_past();
@@ -572,8 +585,8 @@ public:
       if(score >= beta) {
         assert(pline_alt.size() >= size_t(depth) || check_line_terminates(pline_alt));
         pline.replace_line(pline_alt);
-        if(overwrite && (ab_ttable[k].is_inactive(tt_age) || ab_ttable[k].lowerbound != ab_ttable[k].upperbound)) {
-          if(ab_ttable[k].is_inactive(tt_age))++zb_occupied;
+        if(overwrite && cache_replace_depth && cache_inexact_entry) {
+          if(cache_inactive_entry)++zb_occupied;
           ab_ttable[k] = { .info=info, .depth=depth, .eval=score, .lowerbound=score, .upperbound=DBL_MAX,
                            .m=m, .subpline=pline.get_future(), .age=tt_age };
         }
@@ -589,14 +602,12 @@ public:
       }
     };
     if(overwrite && m_best != board::nomove) {
-      if(bestscore < alpha) {
-        if(ab_ttable[k].is_inactive(tt_age) || ab_ttable[k].lowerbound != ab_ttable[k].upperbound) {
-          if(ab_ttable[k].is_inactive(tt_age))++zb_occupied;
-          ab_ttable[k] = { .info=info, .depth=depth, .eval=bestscore, .lowerbound=-DBL_MAX, .upperbound=bestscore,
-                           .m=m_best, .subpline=pline.get_future(), .age=tt_age };
-        }
-      } else {
-        if(ab_ttable[k].is_inactive(tt_age))++zb_occupied;
+      if(bestscore <= alpha) {
+        if(cache_inactive_entry)++zb_occupied;
+        ab_ttable[k] = { .info=info, .depth=depth, .eval=bestscore, .lowerbound=-DBL_MAX, .upperbound=bestscore,
+                          .m=m_best, .subpline=pline.get_future(), .age=tt_age };
+      } else if(bestscore > alpha) {
+        if(cache_inactive_entry)++zb_occupied;
         ab_ttable[k] = { .info=info, .depth=depth, .eval=bestscore, .lowerbound=bestscore, .upperbound=bestscore,
                          .m=m_best, .subpline=pline.get_future(), .age=tt_age };
       }

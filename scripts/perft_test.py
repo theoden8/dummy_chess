@@ -49,7 +49,7 @@ def get_output_dummy_chess(depth=5, fen=startingpos) -> dict:
 
 
 def get_next_fen(fen, move):
-    s = get_output(f"(echo 'position fen {fen} moves {move}'; echo 'd') | {stockfish} | grep Fen")
+    s = get_output(f"(echo 'position fen {fen} moves {move}'; echo 'd') | stockfish | grep Fen")
     s = s.replace('Fen: ', '')
     return s.strip()
 

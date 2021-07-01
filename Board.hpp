@@ -318,9 +318,8 @@ public:
 //    unset_pos(i);
 //  }
 //
-  INLINE void move_pos(pos_t i, pos_t j) {
+  INLINE void move_pos_quiet(pos_t i, pos_t j) {
     assert(j <= board::MOVEMASK);
-    unset_pos(j);
     const piece_bitboard_t i_mask = piece::pos_mask(i);
     const COLOR c = self.color_at_pos(i);
     piece::move_pos(bits[c], i, j);
@@ -336,6 +335,12 @@ public:
         piece::move_pos(bits_slid_orth, i, j);
       }
     }
+  }
+
+  INLINE void move_pos(pos_t i, pos_t j) {
+    assert(j <= board::MOVEMASK);
+    unset_pos(j);
+    move_pos_quiet(i, j);
   }
 
   event_t ev_basic(pos_t i, pos_t j) const {
@@ -545,7 +550,11 @@ public:
             update_halfmoves();
           }
           update_castlings(i, j);
-          move_pos(i, j);
+          if(killwhat == event::killnothing) {
+            move_pos_quiet(i, j);
+          } else {
+            move_pos(i, j);
+          }
           update_state_pos(i);
           update_state_pos(j);
         }
@@ -559,10 +568,10 @@ public:
           const pos_t r_i = bitmask::first(r_m),
                       r_j = bitmask::second(r_m);
           update_castlings(i, j);
-          move_pos(i, j);
+          move_pos_quiet(i, j);
           update_state_pos(i);
           update_state_pos(j);
-          move_pos(r_i, r_j);
+          move_pos_quiet(r_i, r_j);
           update_state_pos(r_i);
           update_state_pos(r_j);
         }
@@ -575,7 +584,7 @@ public:
           const pos_t killwhere = event::extract_pos(ev);
           put_pos(killwhere, self.get_piece(EMPTY));
           update_state_pos(killwhere);
-          move_pos(i, j);
+          move_pos_quiet(i, j);
           update_state_pos(i);
           update_state_pos(j);
           update_halfmoves();
@@ -591,7 +600,7 @@ public:
           const pos_t killwhat = event::extract_piece_ind(ev);
           auto new_enpassant = event::extract_pos(ev);
           update_castlings(i, j);
-          put_pos(i, self.get_piece(EMPTY));
+          unset_pos(i);
           put_pos(j, self.pieces[Piece::get_piece_index(becomewhat, activePlayer())]);
           update_state_pos(i);
           update_state_pos(j);
@@ -621,7 +630,7 @@ public:
                       j = bitmask::second(m);
           const pos_t killwhat = event::extract_piece_ind(ev);
           auto new_enpassant = event::extract_byte(ev);
-          move_pos(j, i);
+          move_pos_quiet(j, i);
           //update_state_pos(i);
           if(killwhat != event::killnothing) {
             put_pos(j, self.pieces[killwhat]);
@@ -638,10 +647,10 @@ public:
           const move_t r_m = event::extract_move(ev);
           const pos_t r_i = bitmask::first(r_m),
                       r_j = bitmask::second(r_m);
-          move_pos(j, i);
+          move_pos_quiet(j, i);
           //update_state_pos(j);
           //update_state_pos(i);
-          move_pos(r_j, r_i);
+          move_pos_quiet(r_j, r_i);
           //update_state_pos(r_j);
           //update_state_pos(r_i);
         }
@@ -654,7 +663,7 @@ public:
           const pos_t killwhere = event::extract_pos(ev);
           put_pos(killwhere, self.get_piece(PAWN, enemy_of(self.color_at_pos(j))));
           //update_state_pos(killwhere);
-          move_pos(j, i);
+          move_pos_quiet(j, i);
           //update_state_pos(j);
           //update_state_pos(i);
         }
@@ -671,7 +680,7 @@ public:
           if(killwhat != event::killnothing) {
             put_pos(j, self.pieces[killwhat]);
           } else {
-            put_pos(j, self.get_piece(EMPTY));
+            unset_pos(j);
           }
           //update_state_pos(j);
           put_pos(i, self.get_piece(PAWN, c));
@@ -756,7 +765,6 @@ public:
 
   void init_update_state() {
     init_state_attacks();
-    init_state_checkline();
     init_state_moves();
     history_.reserve(100);
     halfmoves.reserve(piece::size(bits[WHITE] | bits[BLACK]) - 2);
@@ -789,7 +797,6 @@ public:
   std::vector<board_mailbox_t> state_hist_moves;
   std::vector<piece_bitboard_t> state_hist_checklines;
   void update_state_on_event() {
-    init_state_checkline();
     init_state_moves();
     state_hist_board_info.emplace_back(get_board_info_());
     if(state_hist_draw_repetitions > self.get_current_ply() && can_draw_repetition_(3)) {
@@ -925,7 +932,6 @@ public:
   std::array<piece_bitboard_t, NO_COLORS> state_checkline = {0x00,0x00};
 
   void init_state_checkline(COLOR c=NEUTRAL) {
-    if(c==NEUTRAL)c=activePlayer();
     const piece_bitboard_t occupied = bits[WHITE] | bits[BLACK];
     const piece_bitboard_t attackers = get_attacks_to(pos_king[c], enemy_of(c));
     if(!attackers) {
@@ -1017,8 +1023,9 @@ public:
     for(auto&m:state_moves)m=0x00;
     if(is_draw_halfmoves()||is_draw_material())return;
     const COLOR c = activePlayer();
-    // maybe do this as a loop for incremental updates
+
     {
+      init_state_checkline(c);
       const COLOR ec = enemy_of(c);
       const piece_bitboard_t friends = bits[c], foes = bits[ec],
                              attack_mask = get_attack_mask(ec);
