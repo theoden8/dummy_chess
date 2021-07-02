@@ -34,7 +34,7 @@ public:
   template <typename F>
   INLINE void iter_moves_from(pos_t i, F &&func) const {
     bitmask::foreach(get_moves_from(i), [&](pos_t j) mutable -> void {
-      if(is_promotion_move(i, j)) {
+      if(is_promotion_move(i, j & board::MOVEMASK)) {
         for(pos_t promotion : PROMOTION_PIECES) {
           func(i, j | promotion);
         }
@@ -49,10 +49,10 @@ public:
     const COLOR c = self.color_at_pos(i);
     const piece_bitboard_t foes = bits[enemy_of(c)];
     iter_moves_from(i, [&](pos_t i, pos_t j) mutable -> void {
-      if(is_promotion_move(i, j)
-          || is_enpassant_take_move(i, j)
-          || is_capture_move(i, j)
-          || is_naively_checking_move(i, j))
+      if(is_promotion_move(i, j & board::MOVEMASK)
+          || is_enpassant_take_move(i, j & board::MOVEMASK)
+          || is_capture_move(i, j & board::MOVEMASK)
+          || is_naively_checking_move(i, j & board::MOVEMASK))
       {
         func(i, j);
       }
@@ -180,9 +180,9 @@ public:
 
   INLINE double move_heuristic(pos_t i, pos_t j) const {
     double val = material_of(self[j & board::MOVEMASK].value);
-    if(is_enpassant_take_move(i, j)) {
+    if(is_enpassant_take_move(i, j & board::MOVEMASK)) {
       val += material_of(PAWN);
-    } else if(is_promotion_move(i, j)) {
+    } else if(is_promotion_move(i, j & board::MOVEMASK)) {
       val += material_of(board::get_promotion_as(j)) - material_of(PAWN);
     }
     if(!self.empty_at_pos(j & board::MOVEMASK)) {
@@ -327,6 +327,7 @@ public:
       iter_quiesc_moves([&](pos_t i, pos_t j) mutable -> void {
         double val = move_heuristic(i, j);
         const move_t m = bitmask::_pos_pair(i, j);
+        j &= board::MOVEMASK;
         if(m == firstmove) {
           val += 1000.;
         }
