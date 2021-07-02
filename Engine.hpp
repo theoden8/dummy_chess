@@ -5,7 +5,6 @@
 #include <algorithm>
 #include <list>
 #include <map>
-#include <optional>
 
 #include <FEN.hpp>
 #include <Board.hpp>
@@ -195,17 +194,16 @@ public:
   struct tt_ab_entry {
     board_info info;
     int16_t depth;
-    double eval;
     double lowerbound, upperbound;
     move_t m;
     MoveLine subpline;
-    size_t age;
+    ply_index_t age;
 
-    INLINE bool can_apply(const board_info &_info, int16_t _depth, size_t _age) const {
-      return info == _info && depth >= _depth && age == _age;
+    INLINE bool can_apply(const board_info &_info, int16_t _depth, ply_index_t _age) const {
+      return !is_inactive(_age) && depth >= _depth && info == _info;
     }
 
-    INLINE bool is_inactive(size_t cur_age) const {
+    INLINE bool is_inactive(ply_index_t cur_age) const {
       return info.is_unset() || cur_age != age;
     }
   };
@@ -244,7 +242,7 @@ public:
     return std::abs(score - get_pvline_score(pline)) < 1e-6;
   }
 
-  piece_bitboard_t get_least_valuable_piece(piece_bitboard_t mask) const {
+  decltype(auto) get_least_valuable_piece(piece_bitboard_t mask) const {
     // short-hands for bits
     const piece_bitboard_t diag = self.bits_slid_diag,
                            orth = self.bits_slid_orth;
@@ -260,9 +258,9 @@ public:
         case KING: if(mask & get_king_bits()) found = mask & get_king_bits(); break;
         default: break;
       }
-      if(found)break;
+      if(found)return std::make_pair(bitmask::highest_bit(found), p);
     }
-    return found ? bitmask::highest_bit(found) : found;
+    return std::make_pair(UINT64_C(0), EMPTY);
   }
 
   double static_exchange_evaluation(pos_t i, pos_t j) const {
@@ -275,10 +273,12 @@ public:
     piece_bitboard_t occupied = bits[WHITE] | bits[BLACK];
     piece_bitboard_t attadef = get_attacks_to(j, BOTH);
     gain[depth] = material_of(self[j].value);
+
+    PIECE curpiece = self[i].value;
     do {
-      const pos_t from = bitmask::log2_of_exp2(from_set);
+//      const pos_t from = bitmask::log2_of_exp2(from_set);
       ++depth;
-      gain[depth] = material_of(self[from].value) - gain[depth - 1];
+      gain[depth] = material_of(curpiece) - gain[depth - 1];
 //      str::pdebug("SEE: depth:", depth, "piece:", ""s + self[from].str(), "score:"s, gain[depth]);
       if(std::max(-gain[depth - 1], gain[depth]) < 0) {
 //        str::pdebug("SEE BREAK: max(", -gain[depth-1], ",", gain[depth], ") < 0");
@@ -290,7 +290,7 @@ public:
         attadef |= get_attacks_to(j, BOTH, occupied);
       }
       const COLOR c = self.color_at_pos((depth & 1) ? j : i);
-      from_set = get_least_valuable_piece(attadef & bits[c]);
+      std::tie(from_set, curpiece) = get_least_valuable_piece(attadef & bits[c]);
     } while(from_set);
 //    int maxdepth = depth;
     while(--depth) {
@@ -302,18 +302,17 @@ public:
     return gain[0];
   }
 
-  INLINE decltype(auto) get_ab_ttable_zobrist(int16_t depth, zobrist::ttable<tt_ab_entry> &ab_ttable) {
-    std::optional<double> maybe_score;
+  INLINE decltype(auto) ab_ttable_probe(int16_t depth, zobrist::ttable<tt_ab_entry> &ab_ttable) {
     const auto info = self.get_board_info();
     const zobrist::key_t k = self.zb_hash();
-    if(ab_ttable[k].can_apply(info, depth, tt_age)) {
+    const bool tt_has_entry = ab_ttable[k].can_apply(info, depth, tt_age);
+    if(tt_has_entry) {
       ++zb_hit;
       ++nodes_searched;
-      maybe_score.emplace(ab_ttable[k].eval);
     } else {
       ++zb_miss;
     }
-    return std::make_tuple(maybe_score, k, info);
+    return std::make_tuple(tt_has_entry, k, info);
   }
 
   int16_t debug_depth = -1;
@@ -390,8 +389,8 @@ public:
     }
 
     move_t m_best = board::nomove;
-    const auto [zbscore, k, info] = get_ab_ttable_zobrist(depth, ab_ttable);
-    if(zbscore.has_value()) {
+    const auto [tt_has_entry, k, info] = ab_ttable_probe(depth, ab_ttable);
+    if(tt_has_entry) {
       const auto &zb = ab_ttable[k];
 //      if(!debug_moveline.empty() && pline.get_past().startswith(debug_moveline)) {
 //        std::string tab=""s; for(int i=debug_depth;i>depth;--i)tab+=" ";
@@ -418,9 +417,9 @@ public:
     }
 
     const bool overwrite = true;
-    const bool cache_inactive_entry = ab_ttable[k].is_inactive(tt_age);
-    const bool cache_replace_depth = cache_inactive_entry || depth >= ab_ttable[k].depth;
-    const bool cache_inexact_entry = cache_inactive_entry || ab_ttable[k].lowerbound != ab_ttable[k].upperbound;
+    const bool tt_inactive_entry = ab_ttable[k].is_inactive(tt_age);
+    const bool tt_replace_depth = tt_inactive_entry || depth >= ab_ttable[k].depth;
+    const bool tt_inexact_entry = tt_inactive_entry || ab_ttable[k].lowerbound != ab_ttable[k].upperbound;
 
     decltype(auto) quiescmoves = ab_get_quiesc_moves(depth, pline, delta, king_in_check, m_best);
     if(quiescmoves.empty() || delta <= 0) {
@@ -454,9 +453,9 @@ public:
       assert(check_pvline_score(pline_alt, score));
       if(score >= beta) {
         pline.replace_line(pline_alt);
-        if(overwrite && cache_replace_depth && cache_inexact_entry) {
-          if(cache_inactive_entry)++zb_occupied;
-          ab_ttable[k] = { .info=info, .depth=depth, .eval=score, .lowerbound=score, .upperbound=DBL_MAX,
+        if(overwrite && tt_replace_depth && tt_inexact_entry) {
+          if(tt_inactive_entry)++zb_occupied;
+          ab_ttable[k] = { .info=info, .depth=depth, .lowerbound=score, .upperbound=DBL_MAX,
                            .m=m, .subpline=pline.get_future(), .age=tt_age };
         }
         return score;
@@ -470,13 +469,13 @@ public:
       }
     }
     if(overwrite && m_best != board::nomove) {
-      if((cache_replace_depth) && bestscore <= alpha) {
-        if(cache_inactive_entry)++zb_occupied;
-        ab_ttable[k] = { .info=info, .depth=depth, .eval=bestscore, .lowerbound=-DBL_MAX, .upperbound=bestscore,
+      if((tt_replace_depth) && bestscore <= alpha) {
+        if(tt_inactive_entry)++zb_occupied;
+        ab_ttable[k] = { .info=info, .depth=depth, .lowerbound=-DBL_MAX, .upperbound=bestscore,
                           .m=m_best, .subpline=pline.get_future(), .age=tt_age };
-      } else if((cache_replace_depth || cache_inexact_entry) && bestscore > alpha) {
-        if(cache_inactive_entry)++zb_occupied;
-        ab_ttable[k] = { .info=info, .depth=depth, .eval=bestscore, .lowerbound=bestscore, .upperbound=bestscore,
+      } else if((tt_replace_depth || tt_inexact_entry) && bestscore > alpha) {
+        if(tt_inactive_entry)++zb_occupied;
+        ab_ttable[k] = { .info=info, .depth=depth, .lowerbound=bestscore, .upperbound=bestscore,
                          .m=m_best, .subpline=pline.get_future(), .age=tt_age };
       }
     }
@@ -514,12 +513,12 @@ public:
     }
 
     move_t m_best = board::nomove;
-    const auto [zbscore, k, info] = get_ab_ttable_zobrist(depth, ab_ttable);
+    const auto [tt_has_entry, k, info] = ab_ttable_probe(depth, ab_ttable);
 //    if(info == debug_board_info) {
 //      str::pdebug(depth, "depth", "changed moveline", _line_str_full(pline), "("s, _beta, ", "s, _alpha, ")"s);
 //      debug_moveline = pline.full();
 //    }
-    if(zbscore.has_value()) {
+    if(tt_has_entry) {
       const auto &zb = ab_ttable[k];
 //      if(!debug_moveline.empty() && pline.get_past().startswith(debug_moveline)) {
 //        std::string tab=""s; for(int i=debug_depth;i>depth;--i)tab+=" ";
@@ -547,9 +546,9 @@ public:
     }
 
     const bool overwrite = true;
-    const bool cache_inactive_entry = ab_ttable[k].is_inactive(tt_age);
-    const bool cache_replace_depth = cache_inactive_entry || depth >= ab_ttable[k].depth;
-    const bool cache_inexact_entry = cache_inactive_entry || ab_ttable[k].lowerbound != ab_ttable[k].upperbound;
+    const bool tt_inactive_entry = ab_ttable[k].is_inactive(tt_age);
+    const bool tt_replace_depth = tt_inactive_entry || depth >= ab_ttable[k].depth;
+    const bool tt_inexact_entry = tt_inactive_entry || ab_ttable[k].lowerbound != ab_ttable[k].upperbound;
 
     decltype(auto) moves = ab_get_ordered_moves(pline, m_best);
     if(moves.empty()) {
@@ -582,9 +581,9 @@ public:
       if(score >= beta) {
         assert(pline_alt.size() >= size_t(depth) || check_line_terminates(pline_alt));
         pline.replace_line(pline_alt);
-        if(overwrite && cache_replace_depth && cache_inexact_entry) {
-          if(cache_inactive_entry)++zb_occupied;
-          ab_ttable[k] = { .info=info, .depth=depth, .eval=score, .lowerbound=score, .upperbound=DBL_MAX,
+        if(overwrite && tt_replace_depth && tt_inexact_entry) {
+          if(tt_inactive_entry)++zb_occupied;
+          ab_ttable[k] = { .info=info, .depth=depth, .lowerbound=score, .upperbound=DBL_MAX,
                            .m=m, .subpline=pline.get_future(), .age=tt_age };
         }
         return score;
@@ -600,12 +599,12 @@ public:
     };
     if(overwrite && m_best != board::nomove) {
       if(bestscore <= alpha) {
-        if(cache_inactive_entry)++zb_occupied;
-        ab_ttable[k] = { .info=info, .depth=depth, .eval=bestscore, .lowerbound=-DBL_MAX, .upperbound=bestscore,
+        if(tt_inactive_entry)++zb_occupied;
+        ab_ttable[k] = { .info=info, .depth=depth, .lowerbound=-DBL_MAX, .upperbound=bestscore,
                           .m=m_best, .subpline=pline.get_future(), .age=tt_age };
       } else if(bestscore > alpha) {
-        if(cache_inactive_entry)++zb_occupied;
-        ab_ttable[k] = { .info=info, .depth=depth, .eval=bestscore, .lowerbound=bestscore, .upperbound=bestscore,
+        if(tt_inactive_entry)++zb_occupied;
+        ab_ttable[k] = { .info=info, .depth=depth, .lowerbound=bestscore, .upperbound=bestscore,
                          .m=m_best, .subpline=pline.get_future(), .age=tt_age };
       }
     }
@@ -655,7 +654,7 @@ public:
         {
           // check that search was successful
           assert(pline[m_best].size() >= size_t(d) || check_line_terminates(pline[m_best]));
-          if(!callback_f(d+1, m_best, eval_best, pline[m_best], m) || (score_is_mate(eval_best) && d > 1)) {
+          if(!callback_f(d+1, m_best, eval_best, pline[m_best], m) || (score_is_mate(eval_best) && d > 0)) {
             should_stop_iddfs = true;
             break;
           }

@@ -76,7 +76,7 @@ struct Interface {
   }
 
   void nc_color_condition(COLOR c, int x, int y) {
-    const piece_bitboard_t pins = board.get_pins();
+    const piece_bitboard_t pins = board.get_pins(board.activePlayer());
     if(x==sel_x&&y==sel_y){
       attron(COLOR_PAIR(NC_COLOR_SELECTED));
       return;
@@ -95,7 +95,7 @@ struct Interface {
       // single-attacks
       //const piece_bitboard_t attacks = board.get_attacks_from(piece_pos);
       // single-moves
-      const piece_bitboard_t attacks = board.get_moves_from(piece_pos);
+      const piece_bitboard_t attacks = (board.color_at_pos(piece_pos) == board.activePlayer()) ? board.get_moves_from(piece_pos) : 0x00;
       //const piece_bitboard_t attacks = board.get_capture_moves_from(piece_pos);
       // multi-attacks
       //const auto &piece = board[piece_pos];
@@ -190,7 +190,7 @@ struct Interface {
     for(int mh = 0; mh < CELL_PMH; ++mh) {
       for(int x = 0; x < board::LEN; ++x) {
         addch(ACS_VLINE);
-        auto piece = board.at_pos(A+x, 1+y);
+        auto piece = board[board::_pos(A+x, 1+y)];
         COLOR cell_color = (x+y)&1?WHITE:BLACK;
         nc_draw_cell_margin_mid(cell_color,piece.color,x,y);
       }
@@ -202,9 +202,9 @@ struct Interface {
   void nc_draw_board_row_piece(int y, int &top, const int LEFT) {
     for(int x = 0; x < board::LEN; ++x) {
       addch(ACS_VLINE);
-      if(board.at_pos(A+x, 1+y).value != EMPTY) {
+      if(board[board::_pos(A+x, 1+y)].value != EMPTY) {
         nc_draw_cell_margin_side((x + y) & 1 ? WHITE : BLACK,x,y);
-        nc_draw_cell_piece_unicode(board.at_pos(A+x, 1+y),x,y);
+        nc_draw_cell_piece_unicode(board[board::_pos(A+x, 1+y)],x,y);
         nc_draw_cell_margin_side((x + y) & 1 ? WHITE : BLACK,x,y);
       } else {
         nc_draw_cell_margin_both((x + y) & 1 ? WHITE : BLACK,x,y);
@@ -370,9 +370,9 @@ struct Interface {
       case 10:
         if(sel_x==-1||sel_y==-1)sel_x=cursor_x,sel_y=cursor_y;
         else {
-          pos_t pos_from = board::_pos(A+sel_x, 1+sel_y);
-          pos_t pos_to = board::_pos(A+cursor_x, 1+cursor_y);
-          auto moves = board.get_moves_from(pos_from);
+          const pos_t pos_from = board::_pos(A+sel_x, 1+sel_y);
+          const pos_t pos_to = board::_pos(A+cursor_x, 1+cursor_y);
+          const piece_bitboard_t moves = (board[pos_from].color == board.activePlayer() ? board.get_moves_from(pos_from) : 0x00);
           if((1ULL << pos_to) & moves && board[pos_from].color == board.activePlayer()) {
             pgn.handle_move(pos_from, pos_to | board::PROMOTE_QUEEN);
             sel_x=-1,sel_y=-1;

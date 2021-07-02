@@ -18,7 +18,9 @@ struct MoveLine {
 
   explicit INLINE MoveLine(const std::vector<move_t> &line):
     line(line)
-  {}
+  {
+    this->line.reserve(16);
+  }
 
   INLINE size_t size() const {
     return line.size() - start;
@@ -145,20 +147,12 @@ struct MoveLine {
     return mline;
   }
 
-  MoveLine get_future() const {
-    MoveLine mline;
-    for(auto m : *this) {
-      mline.put(m);
-    }
-    return mline;
+  INLINE MoveLine get_future() const {
+    return MoveLine(std::vector<move_t>(begin(), end()));
   }
 
-  MoveLine get_past() const {
-    MoveLine mline = *this;
-    while(!mline.empty()) {
-      mline.pop_back();
-    }
-    return mline.full();
+  INLINE MoveLine get_past() const {
+    return MoveLine(std::vector<move_t>(line.begin(), begin()));
   }
 
   void clear() {

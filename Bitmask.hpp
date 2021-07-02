@@ -156,6 +156,21 @@ namespace bitmask {
     }
   }
 
+  // iterate set bits with a function F
+  template <typename F>
+  inline constexpr void foreach_early_stop(uint64_t mask, F &&func) {
+    if(!mask)return;
+    while(mask) {
+      const pos_t r = std::countr_zero(mask);
+      if(!func(r)) {
+        break;
+      }
+      // unset r-th bit
+      assert(mask & (1ULL << r));
+      mask &= ~(1LLU << r);
+    }
+  }
+
   std::vector<pos_t> as_vector(uint64_t mask) {
     std::vector<pos_t> v(0, count_bits(mask));
     foreach(mask, [&](pos_t i) mutable -> void {

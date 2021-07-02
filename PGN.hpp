@@ -96,6 +96,9 @@ struct PGN {
     std::string p;
     const uint8_t marker = event::extract_marker(ev);
     switch(marker) {
+      case event::NULLMOVE_MARKER:
+        p = "0000"s;
+      break;
       case event::BASIC_MARKER:
         {
           const move_t m = event::extract_move(ev);
