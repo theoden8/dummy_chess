@@ -287,25 +287,24 @@ public:
   INLINE bool is_castling_move(pos_t i, pos_t j) const {
     assert(j <= board::MOVEMASK);
     const COLOR c = self.color_at_pos(i);
-    if(c == NEUTRAL)return false;
-    if(pos_king[c] != i)return false;
-    return piece::is_king_castling_move(c, i, j);
+    assert(c != NEUTRAL);
+    return pos_king[c] == i && piece::is_king_castling_move(c, i, j);
   }
 
   INLINE bool is_doublepush_move(pos_t i, pos_t j) const {
-    j &= board::MOVEMASK;
+    assert(j <= board::MOVEMASK);
     if(~bits_pawns & piece::pos_mask(i))return false;
     const COLOR c = self.color_at_pos(i);
     return piece::is_pawn_double_push(c, i, j);
   }
 
   INLINE bool is_enpassant_take_move(pos_t i, pos_t j) const {
-    j &= board::MOVEMASK;
+    assert(j <= board::MOVEMASK);
     return (bits_pawns & piece::pos_mask(i)) && j == enpassant_trace() && j != event::enpassantnotrace;
   }
 
   INLINE bool is_promotion_move(pos_t i, pos_t j) const {
-    j &= board::MOVEMASK;
+    assert(j <= board::MOVEMASK);
     if(~bits_pawns & piece::pos_mask(i))return false;
     const COLOR c = self.color_at_pos(i);
     return piece::is_pawn_promotion_move(c, i, j);
@@ -321,7 +320,6 @@ public:
     const COLOR c = activePlayer();
     const pos_t target = pos_king[enemy_of(c)];
     const piece_bitboard_t occupied = (bits[WHITE] | bits[BLACK]) & ~piece::pos_mask(i);
-    const move_t m = bitmask::_pos_pair(i, j);
     if(bits_pawns & piece::pos_mask(i)) {
       return piece::get_pawn_attack(j, c) & piece::pos_mask(target);
     }
@@ -761,34 +759,36 @@ public:
   INLINE piece_bitboard_t get_attacks_from(pos_t pos) const { return state.attacks[pos]; }
 
   INLINE piece_bitboard_t get_sliding_diag_attacks_to(pos_t j, piece_bitboard_t occupied, COLOR c) const {
-    if(c==NEUTRAL)c=activePlayer();
+    assert(c == BOTH || c < NO_COLORS);
     const piece_bitboard_t colormask = (c == BOTH) ? occupied : occupied & bits[c];
     return piece::get_sliding_diag_attack(j,occupied) & bits_slid_diag & colormask;
   }
 
   INLINE piece_bitboard_t get_sliding_orth_attacks_to(pos_t j, piece_bitboard_t occupied, COLOR c) const {
-    if(c==NEUTRAL)c=activePlayer();
+    assert(c == BOTH || c < NO_COLORS);
     const piece_bitboard_t colormask = (c == BOTH) ? occupied : occupied & bits[c];
     return piece::get_sliding_orth_attack(j,occupied) & bits_slid_orth & colormask;
   }
 
   INLINE piece_bitboard_t get_sliding_attacks_to(pos_t j, piece_bitboard_t occupied, COLOR c) const {
+    assert(c == BOTH || c < NO_COLORS);
     return get_sliding_diag_attacks_to(j, occupied, c) | get_sliding_orth_attacks_to(j, occupied, c);
   }
 
   INLINE piece_bitboard_t get_pawn_attacks_to(pos_t j, COLOR c) const {
-    if(c==NEUTRAL)c=activePlayer();
+    assert(c == BOTH || c < NO_COLORS);
     if(c==BOTH)return get_pawn_attacks_to(j, WHITE) | get_pawn_attacks_to(j, BLACK);
     return piece::get_pawn_attack(j,enemy_of(c)) & (bits_pawns & bits[c]);
   }
 
   INLINE piece_bitboard_t get_king_attacks_to(pos_t j, COLOR c) const {
-    if(c==NEUTRAL)c=activePlayer();
+    assert(c == BOTH || c < NO_COLORS);
     const piece_bitboard_t kingmask = (c == BOTH) ? get_king_bits() : piece::pos_mask(pos_king[c]);
     return piece::get_king_attack(j) & kingmask;
   }
 
   INLINE piece_bitboard_t get_attacks_to(pos_t j, COLOR c, piece_bitboard_t occ_mask=~0ULL) const {
+    assert(c == BOTH || c < NO_COLORS);
     const piece_bitboard_t occupied = (bits[WHITE] | bits[BLACK]) & occ_mask;
     const piece_bitboard_t colormask = (c == BOTH) ? occupied : bits[c];
     return get_sliding_attacks_to(j, occupied, c)
@@ -982,14 +982,12 @@ public:
 
   INLINE piece_bitboard_t get_pins(COLOR c) const {
     assert(c < NO_COLORS);
-    if(c==NEUTRAL)c=activePlayer();
-    if(c==BOTH)return get_pins(WHITE)|get_pins(BLACK);
     return state.pins[c];
   }
 
   template <typename F>
   INLINE void iter_attacking_xrays(pos_t j, F &&func, COLOR c) const {
-    assert(c != NEUTRAL);
+    assert(c < NO_COLORS);
     const piece_bitboard_t dstbit = piece::pos_mask(j);
     const COLOR ec = enemy_of(c);
     const piece_bitboard_t friends = bits[c],
