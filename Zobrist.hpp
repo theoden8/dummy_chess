@@ -15,7 +15,7 @@
 
 
 #ifndef ZOBRIST_SIZE
-#define ZOBRIST_SIZE (1ULL << 22)
+#define ZOBRIST_SIZE (1ULL << 21)
 #endif
 
 namespace zobrist {
@@ -66,7 +66,7 @@ struct StoreScope {
   ttable_ptr<InnerObject> &zb_store;
   bool is_outer_scope;
 
-  explicit inline StoreScope(ttable_ptr<InnerObject> &scope_ptr):
+  explicit INLINE StoreScope(ttable_ptr<InnerObject> &scope_ptr):
     zb_store(scope_ptr),
     is_outer_scope(scope_ptr == nullptr)
   {
@@ -74,6 +74,20 @@ struct StoreScope {
       zb_store = new ttable<InnerObject>{};
       reset();
     }
+  }
+
+  explicit INLINE StoreScope(StoreScope<InnerObject> &other):
+    zb_store(other.zb_store),
+    is_outer_scope(other.is_outer_scope)
+  {
+    other.is_outer_scope = false;
+  }
+
+  explicit INLINE StoreScope(StoreScope<InnerObject> &&other):
+    zb_store(other.zb_store),
+    is_outer_scope(other.is_outer_scope)
+  {
+    other.is_outer_scope = false;
   }
 
   void reset() {
@@ -94,13 +108,13 @@ struct StoreScope {
     }
   }
 
-  inline ~StoreScope() {
+  INLINE ~StoreScope() {
     end_scope();
   }
 };
 
 template <typename InnerObject>
-decltype(auto) make_store_object_scope(ttable_ptr<InnerObject> &zb_store) {
+ALWAYS_INLINE decltype(auto) make_store_object_scope(ttable_ptr<InnerObject> &zb_store) {
   return StoreScope<InnerObject>(zb_store);
 }
 

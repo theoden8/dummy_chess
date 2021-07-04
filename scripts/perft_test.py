@@ -91,5 +91,6 @@ if __name__ == "__main__":
     compare_outputs(depth=5, fen='r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1')
     compare_outputs(depth=5, fen='rnbq1k1r/pp1Pbppp/2p5/8/2B5/8/PPP1NnPP/RNBQK2R w KQ - 1 8')
     compare_outputs(depth=5, fen='r4rk1/1pp1qppp/p1np1n2/2b1p1B1/2B1P1b1/P1NP1N2/1PP1QPPP/R4RK1 w - - 0 10')
-    compare_outputs(depth=2, fen='r2qk1nr/2pn2Pp/8/8/2P5/8/4PP1P/1Nb1KBNb w kq - 0 10')
-    compare_outputs(depth=2, fen='8/kp4P1/p3K3/4P3/3p1P2/4nr2/8/8 w - - 1 55')
+    compare_outputs(depth=5, fen='r2qk1nr/2pn2Pp/8/8/2P5/8/4PP1P/1Nb1KBNb w kq - 0 10')
+    compare_outputs(depth=5, fen='8/kp4P1/p3K3/4P3/3p1P2/4nr2/8/8 w - - 1 55')
+    compare_outputs(depth=4, fen='q2k2q1/2nqn2b/1n1P1n1b/2rnr2Q/1NQ1QN1Q/3Q3B/2RQR2B/Q2K2Q1 w - -')

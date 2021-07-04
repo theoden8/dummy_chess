@@ -76,14 +76,14 @@ struct Interface {
   }
 
   void nc_color_condition(COLOR c, int x, int y) {
-    const piece_bitboard_t pins = board.get_pins(board.activePlayer());
+    const piece_bitboard_t pins = board.state.pins[board.activePlayer()];
     if(x==sel_x&&y==sel_y){
       attron(COLOR_PAIR(NC_COLOR_SELECTED));
       return;
     } else if(x==cursor_x&&y==cursor_y) {
       attron(COLOR_PAIR(NC_COLOR_SELECTION));
       return;
-    } else if(board.enpassant_trace() != event::enpassantnotrace && board.enpassant_trace() == board::_pos(A+x,1+y)) {
+    } else if(board.enpassant_trace() != board::enpassantnotrace && board.enpassant_trace() == board::_pos(A+x,1+y)) {
       attron(COLOR_PAIR(NC_COLOR_ENPASSANT));
       return;
     }
@@ -93,9 +93,9 @@ struct Interface {
       else piece_pos = board::_pos(A+cursor_x, 1+cursor_y);
       pos_t hit_pos = board::_pos(A+x, 1+y);
       // single-attacks
-      //const piece_bitboard_t attacks = board.get_attacks_from(piece_pos);
+      //const piece_bitboard_t attacks = board.state.attacks[piece_pos];
       // single-moves
-      const piece_bitboard_t attacks = (board.color_at_pos(piece_pos) == board.activePlayer()) ? board.get_moves_from(piece_pos) : 0x00;
+      const piece_bitboard_t attacks = (board.color_at_pos(piece_pos) == board.activePlayer()) ? board.state.moves[piece_pos] : 0x00;
       //const piece_bitboard_t attacks = board.get_capture_moves_from(piece_pos);
       // multi-attacks
       //const auto &piece = board[piece_pos];
@@ -267,8 +267,8 @@ struct Interface {
     //set statusbar message
     //int len = printw("[ %s ]", activePlayer().c_str());
     //int len = printw("[ %s %hhu %hhu->%hhu ]", activePlayer().c_str(), fen::compress_castlings(board.get_castlings_mask()), from, to);
-    int len = printw("[ %s [%hu %hu %hu %hu]", activePlayer().c_str(), board.castlings[0], board.castlings[1],
-                                               board.castlings[2], board.castlings[3]);
+    int len = printw("[ %s [%hu %hu %hu %hu] %hu", activePlayer().c_str(), board.castlings[0], board.castlings[1],
+                                               board.castlings[2], board.castlings[3], board.enpassant_pawn());
     //int len = printw("[ %s %llx ]", activePlayer().c_str(), board.state_checkline);
     //int len = printw("[ %s %llx %llx %hhu ]", activePlayer().c_str(), board.state_checkline[c], board.state_checkline[enemy_of(c)], board.halfmoves_);
     nc_reset_color();
@@ -372,7 +372,7 @@ struct Interface {
         else {
           const pos_t pos_from = board::_pos(A+sel_x, 1+sel_y);
           const pos_t pos_to = board::_pos(A+cursor_x, 1+cursor_y);
-          const piece_bitboard_t moves = (board[pos_from].color == board.activePlayer() ? board.get_moves_from(pos_from) : 0x00);
+          const piece_bitboard_t moves = (board[pos_from].color == board.activePlayer() ? board.state.moves[pos_from] : 0x00);
           if((1ULL << pos_to) & moves && board[pos_from].color == board.activePlayer()) {
             pgn.handle_move(pos_from, pos_to | board::PROMOTE_QUEEN);
             sel_x=-1,sel_y=-1;
@@ -403,8 +403,7 @@ struct Interface {
         }
       break;
       case KEY_BACKSPACE:
-        board.retract_move();
-        pgn.retract_event();
+        pgn.retract_move();
       break;
     }
   }

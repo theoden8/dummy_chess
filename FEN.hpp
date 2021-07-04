@@ -5,7 +5,6 @@
 #include <strings.h>
 
 #include <Bitboard.hpp>
-#include <Event.hpp>
 #include <String.hpp>
 
 
@@ -23,8 +22,8 @@ namespace fen {
     inline bool operator==(const struct _FEN &other) const {
       return board == other.board && active_player == other.active_player &&
              castling_compressed == other.castling_compressed &&
-             enpassant == other.enpassant && halfmove_clock == other.halfmove_clock;
-             //&& fullmove == other.fullmove;
+             enpassant == other.enpassant && halfmove_clock == other.halfmove_clock
+             && fullmove == other.fullmove;
     }
 
     inline bool operator!=(const struct _FEN &other) const {
@@ -60,7 +59,7 @@ namespace fen {
       .board = std::string(),
       .active_player = WHITE,
       .castling_compressed = 0x00,
-      .enpassant = event::enpassantnotrace,
+      .enpassant = board::enpassantnotrace,
       .halfmove_clock = 0,
       .fullmove = 0,
     };
@@ -109,7 +108,7 @@ namespace fen {
       assert(index("12345678", y)!=nullptr);
       y -= '1';
       f.enpassant = board::_pos(A+x, 1+y);
-    } else f.enpassant = event::enpassantnotrace;
+    } else f.enpassant = board::enpassantnotrace;
     // skip space
     while(isspace(s[i]))++i;
     // half-moves
@@ -143,13 +142,13 @@ namespace fen {
   const FEN doublecheck_test_pos = fen::load_from_string("rnbqkbnr/pppp1ppp/8/8/4N3/5N2/PPPPQPPP/R1B1KB1R w KQkq - 8 8"s);
   const FEN check_test_pos = fen::load_from_string("rnbqkb1r/pppp1ppp/5n2/4N3/8/8/PPPPQPPP/RNB1KB1R w KQkq - 2 5"s);
   const FEN promotion_test_pos = fen::load_from_string("1k3n1n/4PPP1/8/8/8/8/1pp1PPPP/4K3 w - - 0 1"s);
+  const FEN search_explosion_pos = fen::load_from_string("q2k2q1/2nqn2b/1n1P1n1b/2rnr2Q/1NQ1QN1Q/3Q3B/2RQR2B/Q2K2Q1 w - -"s);
 
   FEN export_from_board(const Board &board);
 
   std::string export_as_string(const fen::FEN &f) {
     std::string s = ""s;
-    for(pos_t y_ = 0; y_ < board::LEN; ++y_) {
-      const pos_t y = board::LEN - y_ - 1;
+    for(pos_t y = 0; y < board::LEN; ++y) {
       pos_t emptycount = 0;
       for(pos_t x = 0; x < board::LEN; ++x) {
         const pos_t ind = board::_pos(A+x, 1+y);
@@ -167,7 +166,7 @@ namespace fen {
         s += std::to_string(emptycount);
         emptycount = 0;
       }
-      if(y != 0)s+="/";
+      if(y != board::LEN - 1)s+="/";
     }
     s += ' ';
     s += (f.active_player == WHITE) ? 'w' : 'b';
@@ -181,7 +180,7 @@ namespace fen {
       if(f.castling_compressed & (0x1 << 0))s+='q';
     }
     s += ' ';
-    s += (f.enpassant == event::enpassantnotrace) ? "-"s : board::_pos_str(f.enpassant);
+    s += (f.enpassant == board::enpassantnotrace) ? "-"s : board::_pos_str(f.enpassant);
     s += " "s + std::to_string(f.halfmove_clock) + " "s + std::to_string(f.fullmove);
     return s;
   }

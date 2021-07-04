@@ -4,8 +4,8 @@
 #include <string>
 #include <vector>
 
-#include <Event.hpp>
 #include <Board.hpp>
+#include <MoveLine.hpp>
 
 
 namespace pgn {
@@ -66,9 +66,9 @@ struct PGN {
     } else if(board.bits_slid_diag & board.bits_slid_orth & piece::pos_mask(i)) {
       mask = board.bits_slid_diag & board.bits_slid_orth;
     } else if(board.bits_slid_diag & piece::pos_mask(i)) {
-      mask = board.bits_slid_diag;
+      mask = board.bits_slid_diag & ~board.bits_slid_orth;
     } else if(board.bits_slid_orth & piece::pos_mask(i)) {
-      mask = board.bits_slid_orth;
+      mask = board.bits_slid_orth & ~board.bits_slid_diag;
     } else if(i == board.pos_king[c]) {
       mask = piece::pos_mask(i);
     } else {
@@ -79,7 +79,7 @@ struct PGN {
     bitmask::foreach(mask, [&](pos_t k) mutable -> void {
       if(rank_resolved && file_resolved)return;
       if(!(imask & (1ULL << k)))return;
-      if(board.get_moves_from(k) & jmask) {
+      if(board.state.moves[k] & jmask) {
         if(!file_resolved && board::_x(k) != board::_x(i)) {
           resolve += name_of_file(i);
           file_resolved = true;
@@ -92,83 +92,66 @@ struct PGN {
     return resolve;
   }
 
-  void write_event(event_t ev) {
+  void write_move(pos_t i, pos_t j) {
+    const pos_t promote_as = j & ~board::MOVEMASK;
+    j &= board::MOVEMASK;
     std::string p;
-    const uint8_t marker = event::extract_marker(ev);
-    switch(marker) {
-      case event::NULLMOVE_MARKER:
-        p = "0000"s;
-      break;
-      case event::BASIC_MARKER:
-        {
-          const move_t m = event::extract_move(ev);
-          const pos_t i = bitmask::first(m),
-                      j = bitmask::second(m);
-          const pos_t killwhat = event::extract_piece_ind(ev);
-          p = "";
-          // pawn takes pawn (not en-passant)
-          if(board[i].value==PAWN && board[j].value==PAWN && killwhat!=event::killnothing && !LICHESS_COMPATIBILITY) {
-            p += resolve_ambiguity(i, j);
-            p += name_of_file(j);
-          } else {
-            p += piece_name(board[i]);
-            p += resolve_ambiguity(i, j);
-            if(killwhat!=event::killnothing)p+='x';
-            p += board::_pos_str(j);
-          }
-        }
-      break;
-      case event::CASTLING_MARKER:
-        {
-          const move_t m = event::extract_move(ev);
-          const pos_t i = bitmask::first(m),
-                      j = bitmask::second(m);
-          if(board::_x(j) == C) {
-            p = "O-O-O"s;
-          } else {
-            p = "O-O"s;
-          }
-        }
-      break;
-      case event::ENPASSANT_MARKER:
-        {
-          const move_t m = event::extract_move(ev);
-          const pos_t i = bitmask::first(m),
-                      j = bitmask::second(m);
-          p += resolve_ambiguity(i, j, true);
-          if(LICHESS_COMPATIBILITY) {
-            p += 'x';
-            p += board::_pos_str(j);
-          } else {
-            p += name_of_file(j);
-          }
-        }
-      break;
-      case event::PROMOTION_MARKER:
-        {
-          const move_t m = event::extract_move(ev);
-          const pos_t i = bitmask::first(m),
-                      to_byte = bitmask::second(m);
-            const pos_t j = to_byte & board::MOVEMASK;
-            const PIECE becomewhat = board::get_promotion_as(to_byte);
-          const pos_t killwhat = event::extract_piece_ind(ev);
-          if(killwhat != event::killnothing) {
-            p += resolve_ambiguity(i, j);
-            p += 'x';
-          }
-          p += board::_pos_str(j);
-          p += '=';
-          p += toupper(board.pieces[Piece::get_piece_index(becomewhat, board.activePlayer())].str());
-        }
-      break;
+    if(bitmask::_pos_pair(i, j) == board::nomove) {
+      p = "0000"s;
+    } else if(board.is_castling_move(i, j)) {
+      const COLOR c = board.color_at_pos(i);
+      const move_t rookmove = piece::get_king_castle_rook_move(c, i, j);
+      const pos_t r_i = bitmask::first(rookmove),
+                  r_j = bitmask::second(rookmove);
+      if(board::_x(j) == C) {
+        p = "O-O-O"s;
+      } else {
+        p = "O-O"s;
+      }
+    } else if(board.is_enpassant_take_move(i, j)) {
+      const pos_t killwhere = board.enpassant_pawn();
+      p += resolve_ambiguity(i, j, true);
+      if(LICHESS_COMPATIBILITY) {
+        p += 'x';
+        p += board::_pos_str(j);
+      } else {
+        p += name_of_file(j);
+      }
+    } else if(board.is_promotion_move(i, j)) {
+      const PIECE becomewhat = board::get_promotion_as(promote_as);
+      const bool killmove = !board.empty_at_pos(j);
+      if(killmove) {
+        p += resolve_ambiguity(i, j);
+        p += 'x';
+      }
+      p += board::_pos_str(j);
+      p += '=';
+      p += toupper(board.pieces[Piece::get_piece_index(becomewhat, board.activePlayer())].str());
+    } else {
+      const bool killmove = !board.empty_at_pos(j);
+      p = "";
+      // pawn takes pawn (not en-passant)
+      if(board[i].value==PAWN && board[j].value==PAWN && killmove && !LICHESS_COMPATIBILITY) {
+        p += resolve_ambiguity(i, j);
+        p += name_of_file(j);
+      } else {
+        p += piece_name(board[i]);
+        p += resolve_ambiguity(i, j);
+        if(killmove)p+='x';
+        p += board::_pos_str(j);
+      }
     }
     ++cur_ply;
     ply.emplace_back(p);
   }
 
+  INLINE void write_move(move_t m) {
+    write_move(bitmask::first(m), bitmask::second(m));
+  }
+
   void handle_move(move_t m) {
-    const event_t ev = board.get_move_event(m);
-    write_event(ev);
+    assert(board.check_valid_move(m));
+    write_move(m);
     board.make_move(m);
     const COLOR c = board.activePlayer();
     const pos_t no_checks = board.get_attack_counts_to(board.pos_king[c], enemy_of(c));
@@ -185,6 +168,8 @@ struct PGN {
     } else if(no_checks > 0) {
       ply.back()+='+';
       if(no_checks>1)ply.back()+='+';
+    } else if(board.can_draw_repetition()) {
+      ending = "1/2 - 1/2 (repetitions)";
     }
   }
 
@@ -192,15 +177,16 @@ struct PGN {
     handle_move(bitmask::_pos_pair(i, j));
   }
 
-  void retract_event() {
+  void retract_move() {
     if(cur_ply != 0) {
+      board.retract_move();
       --cur_ply;
       ply.pop_back();
       ending = ""s;
     }
   }
 
-  std::string str() const {
+  NEVER_INLINE std::string str() const {
     std::string s;
     if(startfen != fen::starting_pos) {
       s += "[FEN] \""s + fen::export_as_string(startfen) + "\"]\n\n";
@@ -215,5 +201,43 @@ struct PGN {
     return s;
   }
 };
+
+std::string _move_str(Board &b, move_t m) {
+  assert(b.check_valid_move(m));
+  pgn::PGN pgn(b);
+  pgn.handle_move(m);
+  std::string s = pgn.ply.front();
+  pgn.retract_move();
+  return s;
+}
+
+NEVER_INLINE std::string _line_str(Board &b, const MoveLine &mline) {
+  assert(b.check_valid_sequence(mline));
+  pgn::PGN pgn(b);
+  for(auto m : mline) {
+    pgn.handle_move(m);
+  }
+  std::string s = str::join(pgn.ply, " "s);
+  for(auto m : mline) {
+    pgn.retract_move();
+  }
+  return s;
+}
+
+NEVER_INLINE std::string _line_str_full(Board &b, const MoveLine &mline) {
+  assert(b.check_valid_sequence(mline));
+  pgn::PGN pgn(b);
+  for(auto m : mline.get_past()) {
+    b.retract_move();
+  }
+  for(auto m : mline.get_past()) {
+    pgn.handle_move(m);
+  }
+  std::string s = "["s + str::join(pgn.ply, " "s) + "]"s;
+  if(!mline.empty()) {
+    s += " "s + _line_str(b, mline.get_future());
+  }
+  return s;
+}
 
 } // namespace pgn

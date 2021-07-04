@@ -6,13 +6,12 @@
 using namespace std::chrono;
 
 int main(int argc, char *argv[]) {
-  int depth = (argc >= 2) ? atoi(argv[1]) : 7;
+  int depth = (argc >= 2) ? atoi(argv[1]) : 8;
   fen::FEN f = (argc >= 3) ? fen::load_from_string(argv[2]) : fen::starting_pos;
   Engine e(f);
   printf("Alpha-beta\n");
   {
-    decltype(auto) store_scope = e.get_zobrist_alphabeta_scope();
-    store_scope.reset();
+    decltype(auto) store_scopes = e.get_zobrist_alphabeta_scope();
     auto start = system_clock::now();
     move_t m = e.get_fixed_depth_move(depth);
     size_t nds = e.nodes_searched;

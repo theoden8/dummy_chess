@@ -18,7 +18,8 @@ using namespace std::chrono;
 
 struct UCI {
   Engine *engine = nullptr;
-  zobrist::StoreScope<Engine::tt_ab_entry> *engine_ttable_owner = nullptr;
+  zobrist::StoreScope<Engine::tt_ab_entry> *engine_ab_ttable_owner = nullptr;
+  zobrist::StoreScope<Engine::tt_eval_entry> *engine_e_ttable_owner = nullptr;
 
   std::atomic<bool> debug_mode = false;
   std::atomic<bool> should_quit = false;
@@ -37,7 +38,9 @@ struct UCI {
     destroy();
     _printf("init\n");
     engine = new Engine(f);
-    engine_ttable_owner = new std::remove_reference_t<decltype(*engine_ttable_owner)>(engine->get_zobrist_alphabeta_scope());
+    decltype(auto) obj = engine->get_zobrist_alphabeta_scope();
+    engine_ab_ttable_owner = new zobrist::StoreScope<Engine::tt_ab_entry>(std::get<0>(obj));
+    engine_e_ttable_owner = new zobrist::StoreScope<Engine::tt_eval_entry>(std::get<1>(obj));
   }
 
   void destroy() {
@@ -46,8 +49,10 @@ struct UCI {
       _printf("destroy\n");
       delete engine;
       engine = nullptr;
-      delete engine_ttable_owner;
-      engine_ttable_owner = nullptr;
+      delete engine_ab_ttable_owner;
+      delete engine_e_ttable_owner;
+      engine_ab_ttable_owner = nullptr;
+      engine_e_ttable_owner = nullptr;
     }
   }
 
@@ -60,6 +65,7 @@ struct UCI {
     CMD_REGISTER,
     CMD_UCINEWGAME,
     CMD_POSITION,
+    CMD_DISPLAY,
     CMD_GO,
     CMD_STOP,
     CMD_PONDERHIT,
@@ -75,6 +81,7 @@ struct UCI {
     {"register"s,  CMD_REGISTER},
     {"ucinewgame"s,CMD_UCINEWGAME},
     {"position"s,  CMD_POSITION},
+    {"display"s,   CMD_DISPLAY},
     {"go"s,        CMD_GO},
     {"stop"s,      CMD_STOP},
     {"ponderhit"s, CMD_PONDERHIT},
@@ -88,6 +95,7 @@ struct UCI {
     RESP_BESTMOVE,
     RESP_COPYPROTECTION,
     RESP_REGISTRATION,
+    RESP_DISPLAY,
     RESP_INFO,
     RESP_OPTION,
     NO_RESPONSES
@@ -100,6 +108,7 @@ struct UCI {
     {RESP_BESTMOVE,       "bestmove"s},
     {RESP_COPYPROTECTION, "copyprotection"s},
     {RESP_REGISTRATION,   "registration"s},
+    {RESP_DISPLAY,        "display"s},
     {RESP_INFO,           "info"s},
     {RESP_OPTION,         "option"s},
   };
@@ -179,15 +188,7 @@ struct UCI {
   }
 
   std::string to_string(const std::vector<std::string> &cmd) {
-    std::string s = "{"s;
-    for(size_t i=0;i<cmd.size();++i) {
-      s += "\""s + cmd[i] + "\""s;
-      if(i != cmd.size() - 1) {
-        s += ", "s;
-      }
-    }
-    s += "}"s;
-    return s;
+    return "{"s + str::join(cmd, ", "s) + "}"s;
   }
 
   void process_cmd(std::vector<std::string> cmd) {
@@ -259,6 +260,14 @@ struct UCI {
         }
         str::pdebug("position set");
         //engine->print();
+      }
+      return;
+      case CMD_DISPLAY:
+      {
+        lock_guard guard(engine_mtx);
+        join_engine_thread();
+        const fen::FEN f = engine->export_as_fen();
+        respond(RESP_DISPLAY, "fen"s, fen::export_as_string(f));
       }
       return;
       case CMD_GO:
@@ -450,7 +459,6 @@ struct UCI {
       decltype(auto) store_scope = engine->get_zobrist_perft_scope();
       engine->iter_moves([&](pos_t i, pos_t j) mutable -> void {
         const move_t m = bitmask::_pos_pair(i, j);
-        event_t ev = engine->get_move_event(i, j);
         std::string sm = engine->_move_str(m);
         engine->make_move(m);
         size_t nds = 0;
