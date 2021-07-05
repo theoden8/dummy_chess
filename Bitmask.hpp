@@ -65,6 +65,11 @@ namespace bitmask {
     return std::bit_width(t) - 1;
   }
 
+  template <typename T>
+  inline constexpr pos_t log2_msb(T t) {
+    return std::countr_zero(t);
+  }
+
   // https://www.chessprogramming.org/BitScan#DeBruijnMultiplation
   inline constexpr uint64_t lowest_bit(uint64_t v) {
     return 1ULL << std::countr_zero(v);
@@ -104,7 +109,7 @@ namespace bitmask {
   inline constexpr void foreach(uint64_t mask, F &&func) {
     if(!mask)return;
     while(mask) {
-      const pos_t r = std::countr_zero(mask);
+      const pos_t r = bitmask::log2_msb(mask);
       func(r);
       // unset r-th bit
       assert(mask & (1ULL << r));
@@ -117,7 +122,7 @@ namespace bitmask {
   inline constexpr void foreach_early_stop(uint64_t mask, F &&func) {
     if(!mask)return;
     while(mask) {
-      const pos_t r = std::countr_zero(mask);
+      const pos_t r = bitmask::log2_msb(mask);
       if(!func(r)) {
         break;
       }

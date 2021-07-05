@@ -171,11 +171,16 @@ public:
     for(pos_t f = B; f <= G; ++f) {
       const piece_bitboard_t pawns_file = piece::file_mask(f) & bits_pawns & bits[c];
       if(!pawns_file)continue;
-      const piece_bitboard_t ahead = (piece::file_mask(f - 1) | piece::file_mask(f) | piece::file_mask(f + 1));
+      const piece_bitboard_t furthest_pawn = (c == WHITE) ? bitmask::highest_bit(pawns_file) : bitmask::lowest_bit(pawns_file);
+      const pos_t pawnr = (c == WHITE) ? board::_y(bitmask::log2(pawns_file))
+                                       : board::_y(bitmask::log2_msb(pawns_file));
+      const piece_bitboard_t adjacent_files = (piece::file_mask(f - 1) | piece::file_mask(f) | piece::file_mask(f + 1));
+      const piece_bitboard_t ahead = (c == WHITE) ? adjacent_files << (board::LEN * (1+pawnr))
+                                                  : adjacent_files >> (board::LEN * (8-pawnr));
+      assert(~ahead & furthest_pawn);
       if((ahead & bits_pawns & ~bits[c]))continue;
-      const pos_t pawnr = (c == WHITE) ? board::_y(bitmask::highest_bit(pawns_file))
-                                       : 7 - board::_y(bitmask::lowest_bit(pawns_file));
-      h += .001 * (1 + float(pawnr) * float(pawnr));
+      const float pawnr_abs = ((c == WHITE) ? pawnr : 7 - pawnr);
+      h += .001 * pawnr_abs * pawnr_abs;
     }
     h += .03 * piece::size(piece::get_pawn_attacks(bits_pawns & bits[c], c) & bits[c]);
     return h;
