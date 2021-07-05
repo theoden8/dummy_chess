@@ -771,6 +771,7 @@ public:
             if(eval_best - MATERIAL_ROOK > eval && d-2 > razoring_depth)++razoring_depth;
             if(eval_best - MATERIAL_QUEEN > eval && d-2 > razoring_depth)++razoring_depth;
           }
+          if(should_stop_iddfs)break;
         }
         if(should_stop_iddfs)break;
       }

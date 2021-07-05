@@ -97,6 +97,10 @@ struct MoveLine {
     return f;
   }
 
+  void set_mainline(const MoveLine *other) {
+    mainline = other;
+  }
+
   void replace_line(const MoveLine &other) {
     resize(other.size());
     for(size_t i = 0; i < other.size(); ++i) {
