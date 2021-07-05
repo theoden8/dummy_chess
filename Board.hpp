@@ -83,9 +83,9 @@ public:
   };
 public:
   Board &self = *this;
-  std::vector<std::pair<ply_index_t, pos_t>> enpassants;
+  std::vector<std::pair<ply_index_t, pos_t>> state_hist_enpassants;
   std::array<ply_index_t, 4> castlings = {board::nocastlings, board::nocastlings, board::nocastlings, board::nocastlings};
-  std::vector<ply_index_t> halfmoves;
+  std::vector<ply_index_t> state_hist_halfmoves;
 
   std::array<piece_bitboard_t, 2> bits = {0x00, 0x00};
   piece_bitboard_t
@@ -117,7 +117,8 @@ public:
   };
   explicit Board(const fen::FEN &f):
     activePlayer_(f.active_player),
-    halfmoves({f.halfmove_clock})
+    current_ply_(f.fullmove * 2 - (f.active_player == WHITE ? 1 : 0)),
+    state_hist_halfmoves({f.halfmove_clock})
   {
     if(!initialized_) {
       M42::init();
@@ -358,8 +359,8 @@ public:
   }
 
   INLINE pos_t enpassant_trace() const {
-    if(enpassants.empty())return board::enpassantnotrace;
-    const auto [ply, e] = enpassants.back();
+    if(state_hist_enpassants.empty())return board::enpassantnotrace;
+    const auto [ply, e] = state_hist_enpassants.back();
     if(ply == get_current_ply()) {
       return e;
     }
@@ -374,16 +375,12 @@ public:
 
   INLINE void set_enpassant(pos_t e) {
     if(e != board::enpassantnotrace) {
-      enpassants.emplace_back(get_current_ply(), e);
+      state_hist_enpassants.emplace_back(get_current_ply(), e);
     }
   }
 
   INLINE pos_t get_halfmoves() const {
-    return get_current_ply() - halfmoves.back();
-  }
-
-  INLINE void update_halfmoves() {
-    halfmoves.emplace_back(get_current_ply());
+    return get_current_ply() - state_hist_halfmoves.back();
   }
 
   INLINE bool is_castling(COLOR c, CASTLING_SIDE side) const {
@@ -508,8 +505,7 @@ public:
     _backup_on_event();
     state_hist.emplace_back(state);
     assert(m == board::nomove || check_valid_move(bitmask::_pos_pair(i, j)));
-    if(bitmask::_pos_pair(i, j) == board::nomove) {
-      update_halfmoves();
+    if(m == board::nomove) {
     } else if(is_castling) {
       const COLOR c = activePlayer();
       const move_t rookmove = piece::get_king_castle_rook_move(c, i, j);
@@ -542,7 +538,7 @@ public:
       update_state_attacks_pos(i);
       update_state_attacks_pos(j);
       _update_pos_change(i, j);
-      update_halfmoves();
+      state_hist_halfmoves.emplace_back(get_current_ply());
     } else if(is_promotion_move(i, j)) {
       const PIECE becomewhat = board::get_promotion_as(promote_as);
       update_castlings(i, j);
@@ -551,7 +547,7 @@ public:
       update_state_attacks_pos(i);
       update_state_attacks_pos(j);
       _update_pos_change(i, j);
-      update_halfmoves();
+      state_hist_halfmoves.emplace_back(get_current_ply());
     } else {
       const bool killmove = !self.empty_at_pos(j);
       pos_t new_enpassant = board::enpassantnotrace;
@@ -560,7 +556,7 @@ public:
         new_enpassant = piece::get_pawn_enpassant_trace(c, i, j);
       }
       if(killmove || bits_pawns & piece::pos_mask(i)) {
-        update_halfmoves();
+        state_hist_halfmoves.emplace_back(get_current_ply());
       }
       set_enpassant(new_enpassant);
       update_castlings(i, j);
@@ -599,8 +595,8 @@ public:
     activePlayer_ = enemy_of(activePlayer());
     --current_ply_;
     //enpassants
-    while(!enpassants.empty() && enpassants.back().first > get_current_ply()) {
-      enpassants.pop_back();
+    while(!state_hist_enpassants.empty() && state_hist_enpassants.back().first > get_current_ply()) {
+      state_hist_enpassants.pop_back();
     }
     // castlings
     for(pos_t cstl = 0; cstl < castlings.size(); ++cstl) {
@@ -609,9 +605,9 @@ public:
       }
     }
     // halfmoves
-    if(halfmoves.size() > 1) {
-      while(halfmoves.back() > get_current_ply()) {
-        halfmoves.pop_back();
+    if(state_hist_halfmoves.size() > 1) {
+      while(state_hist_halfmoves.back() > get_current_ply()) {
+        state_hist_halfmoves.pop_back();
       }
     }
     // state
@@ -665,8 +661,8 @@ public:
   INLINE void init_update_state() {
     init_state_attacks();
     init_state_moves();
-    halfmoves.reserve(piece::size(bits[WHITE] | bits[BLACK]) - 2);
-    enpassants.reserve(16);
+    state_hist_halfmoves.reserve(piece::size(bits[WHITE] | bits[BLACK]) - 2);
+    state_hist_enpassants.reserve(16);
     state_hist.reserve(100);
     update_state_info();
   }
@@ -1030,7 +1026,7 @@ public:
       .castling_compressed = fen::compress_castlings(get_castlings_mask()),
       .enpassant = enpassant_trace(),
       .halfmove_clock = get_halfmoves(),
-      .fullmove = uint16_t((get_current_ply() / 2) + 1),
+      .fullmove = uint16_t(((get_current_ply() - 1) / 2) + 1),
     };
     for(pos_t y = 0; y < board::LEN; ++y) {
       for(pos_t x = 0; x < board::LEN; ++x) {

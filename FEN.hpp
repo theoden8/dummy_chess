@@ -108,19 +108,20 @@ namespace fen {
       assert(index("12345678", y)!=nullptr);
       y -= '1';
       f.enpassant = board::_pos(A+x, 1+y);
-    } else f.enpassant = board::enpassantnotrace;
+    } else {
+      f.enpassant = board::enpassantnotrace;
+      ++i;
+    }
     // skip space
     while(isspace(s[i]))++i;
-    // half-moves
+    // half-moves, fullmoves
+    if(s[i] == '\0') {
+      f.halfmove_clock = 0;
+      f.fullmove = 1;
+      return f;
+    }
     int sc;
-    sc = sscanf(&s[i], "%hhu", &f.halfmove_clock);
-    assert(sc != -1);
-    i += sc;
-    // skip space
-    while(isspace(s[i]))++i;
-    // fullmoves
-    // TODO fix
-    sc = sscanf(&s[i], "%hu", &f.fullmove);
+    sc = sscanf(&s[i], "%hhu %hu", &f.halfmove_clock, &f.fullmove);
     assert(sc != -1);
     i += sc;
     // done

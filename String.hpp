@@ -66,6 +66,10 @@ int _add_to_vector(std::vector<std::string> &v, const std::string &s) {
   return 1;
 }
 
+int _add_to_vector(std::vector<std::string> &v, char *c) {
+  return _add_to_vector(v, std::string(c));
+}
+
 int _add_to_vector(std::vector<std::string> &v, const char *c) {
   return _add_to_vector(v, std::string(c));
 }
