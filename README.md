@@ -8,8 +8,9 @@ $ make
 
 ## features
 
-* alpha-beta with iterative deepening (dfs)
 * transposition tables for alpha-beta including exact and lower/upper bounds
+* principal variation search with iddfs
+* basic razoring
 * uci partially supported
 
 ## tools

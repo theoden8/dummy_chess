@@ -191,7 +191,7 @@ public:
     h += h_material(c);
     h += h_pawn_structure(c);
 //    h -= count_material(state.pins[c]) * 1e-4;
-    h += h_mobility(c) * 1e-4;
+//    h += h_mobility(c) * 1e-4;
     h += h_attack_cells(c) * 1e-4;
     return h;
   }
@@ -502,7 +502,8 @@ public:
     }
     assert(pline.empty());
     bool repetitions = false;
-    for(const auto &[_, m, reduce_nchecks] : quiescmoves) {
+    for(size_t move_index = 0; move_index < quiescmoves.size(); ++move_index) {
+      const auto &[_, m, reduce_nchecks] = quiescmoves[move_index];
       MoveLine pline_alt = pline.branch_from_past();
       {
         auto mscope = mline_scope(m, pline_alt);
@@ -516,7 +517,7 @@ public:
         }
       }
       debug.update(depth, alpha, beta, bestscore, score, m, pline, pline_alt);
-//      debug.check_score(depth, score, pline_alt);
+      debug.check_score(depth, score, pline_alt);
       if(score >= beta) {
         pline.replace_line(pline_alt);
         if(overwrite && tt_replace_depth && tt_inexact_entry && !repetitions) {
@@ -675,12 +676,11 @@ public:
       }
     };
     if(overwrite && m_best != board::nomove && !repetitions) {
-//      if(bestscore <= alpha) {
-//        if(tt_inactive_entry)++zb_occupied;
-//        ab_ttable[k] = { .info=state.info, .depth=depth, .lowerbound=-FLT_MAX, .upperbound=bestscore,
-//                          .m=m_best, .subpline=pline.get_future(), .age=tt_age };
-//      } else
-      if(bestscore > alpha) {
+      if(bestscore <= alpha) {
+        if(tt_inactive_entry)++zb_occupied;
+        ab_ttable[k] = { .info=state.info, .depth=depth, .lowerbound=-FLT_MAX, .upperbound=bestscore,
+                          .m=m_best, .subpline=pline.get_future(), .age=tt_age };
+      } else if(bestscore > alpha) {
         if(tt_inactive_entry)++zb_occupied;
         ab_ttable[k] = { .info=state.info, .depth=depth, .lowerbound=bestscore, .upperbound=bestscore,
                          .m=m_best, .subpline=pline.get_future(), .age=tt_age };

@@ -511,24 +511,34 @@ public:
     if(bitmask::_pos_pair(i, j) == board::nomove) {
       update_halfmoves();
     } else if(is_castling) {
-      const COLOR c = self.color_at_pos(i);
+      const COLOR c = activePlayer();
       const move_t rookmove = piece::get_king_castle_rook_move(c, i, j);
       const pos_t r_i = bitmask::first(rookmove),
                   r_j = bitmask::second(rookmove);
       update_castlings(i, j);
-      move_pos_quiet(i, j);
+      {
+        piece::move_pos(bits[c], i, j);
+        pos_king[c] = j;
+      }
       update_state_attacks_pos(i);
       update_state_attacks_pos(j);
       _update_pos_change(i, j);
-      move_pos_quiet(r_i, r_j);
+      {
+        piece::move_pos(bits[c], r_i, r_j);
+        piece::move_pos(bits_slid_orth, r_i, r_j);
+      }
       update_state_attacks_pos(r_i);
       update_state_attacks_pos(r_j);
       _update_pos_change(r_i, r_j);
     } else if(is_enpassant_take) {
+      const COLOR c = activePlayer();
       const pos_t killwhere = epawn;
       unset_pos(killwhere);
       update_state_attacks_pos(killwhere);
-      move_pos_quiet(i, j);
+      {
+        piece::move_pos(bits[c], i, j);
+        piece::move_pos(bits_pawns, i, j);
+      }
       update_state_attacks_pos(i);
       update_state_attacks_pos(j);
       _update_pos_change(i, j);
@@ -546,7 +556,7 @@ public:
       const bool killmove = !self.empty_at_pos(j);
       pos_t new_enpassant = board::enpassantnotrace;
       if(is_doublepush_move(i, j)) {
-        const COLOR c = self.color_at_pos(i);
+        const COLOR c = activePlayer();
         new_enpassant = piece::get_pawn_enpassant_trace(c, i, j);
       }
       if(killmove || bits_pawns & piece::pos_mask(i)) {

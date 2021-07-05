@@ -19,7 +19,11 @@ struct DebugTracer {
   DebugTracer(EngineT &engine):
     engine(engine)
   {
-    debug_board_info = engine.get_info_from_line(debug_moveline);
+    if(!debug_moveline.empty()) {
+      debug_board_info = engine.get_info_from_line(debug_moveline);
+    } else {
+      debug_board_info.unset();
+    }
   }
 
   void set_depth(int16_t depth) {
