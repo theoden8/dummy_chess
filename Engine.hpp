@@ -182,7 +182,7 @@ public:
       const float pawnr_abs = ((c == WHITE) ? pawnr : 7 - pawnr);
       h += .001 * pawnr_abs * pawnr_abs;
     }
-    h += .03 * piece::size(piece::get_pawn_attacks(bits_pawns & bits[c], c) & bits[c]);
+    h += .005 * piece::size(piece::get_pawn_attacks(bits_pawns & bits[c], c) & bits[c]);
     return h;
   }
 
@@ -369,15 +369,14 @@ public:
   };
 
   INLINE float e_ttable_probe(zobrist::ttable<tt_eval_entry> &e_ttable) {
-    const auto info = self.get_board_info();
     const zobrist::key_t k = self.zb_hash();
-    if(e_ttable[k].info == info) {
+    if(e_ttable[k].info == state.info) {
       return e_ttable[k].eval;
     }
     const float eval = evaluate();
     const bool overwrite = true;
     if(overwrite) {
-      e_ttable[k] = { .info=info, .eval=eval };
+      e_ttable[k] = { .info=state.info, .eval=eval };
     }
     return eval;
   }
@@ -400,16 +399,15 @@ public:
   };
 
   INLINE decltype(auto) ab_ttable_probe(int16_t depth, const zobrist::ttable<tt_ab_entry> &ab_ttable) {
-    const auto info = self.get_board_info();
     const zobrist::key_t k = self.zb_hash();
-    const bool tt_has_entry = ab_ttable[k].can_apply(info, depth, tt_age);
+    const bool tt_has_entry = ab_ttable[k].can_apply(state.info, depth, tt_age);
     if(tt_has_entry) {
       ++zb_hit;
       ++nodes_searched;
     } else {
       ++zb_miss;
     }
-    return std::make_tuple(tt_has_entry, k, info);
+    return std::make_tuple(tt_has_entry, k);
   }
 
   decltype(auto) ab_get_quiesc_moves(int16_t depth, MoveLine &pline, int8_t nchecks, bool king_in_check, move_t firstmove=board::nomove) {
@@ -458,6 +456,7 @@ public:
     const bool king_in_check = state.checkline[activePlayer()] != ~0ULL;
     if(!king_in_check) {
       score = e_ttable_probe(e_ttable);
+      debug.update_standpat(depth, alpha, beta, score, pline, nchecks);
       if(score >= beta || nchecks <= 0) {
         ++nodes_searched;
         return score;
@@ -470,7 +469,8 @@ public:
     }
 
     move_t m_best = board::nomove;
-    const auto [tt_has_entry, k, info] = ab_ttable_probe(depth, ab_ttable);
+    const auto [tt_has_entry, k] = ab_ttable_probe(depth, ab_ttable);
+    debug.update_line(depth, alpha, beta, pline);
     if(tt_has_entry) {
       const auto &zb = ab_ttable[k];
       debug.update_mem(depth, alpha, beta, zb, pline);
@@ -487,7 +487,7 @@ public:
       m_best = zb.m;
     }
 
-    const bool overwrite = true;
+    constexpr bool overwrite = true;
     const bool tt_inactive_entry = ab_ttable[k].is_inactive(tt_age);
     const bool tt_replace_depth = tt_inactive_entry || depth >= ab_ttable[k].depth;
     const bool tt_inexact_entry = tt_inactive_entry || ab_ttable[k].lowerbound != ab_ttable[k].upperbound;
@@ -521,7 +521,7 @@ public:
         pline.replace_line(pline_alt);
         if(overwrite && tt_replace_depth && tt_inexact_entry && !repetitions) {
           if(tt_inactive_entry)++zb_occupied;
-          ab_ttable[k] = { .info=info, .depth=depth, .lowerbound=score, .upperbound=FLT_MAX,
+          ab_ttable[k] = { .info=state.info, .depth=depth, .lowerbound=score, .upperbound=FLT_MAX,
                            .m=m, .subpline=pline.get_future(), .age=tt_age };
         }
         return score;
@@ -537,11 +537,11 @@ public:
     if(overwrite && m_best != board::nomove && !repetitions) {
       if((tt_replace_depth) && bestscore <= alpha) {
         if(tt_inactive_entry)++zb_occupied;
-        ab_ttable[k] = { .info=info, .depth=depth, .lowerbound=-FLT_MAX, .upperbound=bestscore,
+        ab_ttable[k] = { .info=state.info, .depth=depth, .lowerbound=-FLT_MAX, .upperbound=bestscore,
                           .m=m_best, .subpline=pline.get_future(), .age=tt_age };
       } else if((tt_replace_depth || tt_inexact_entry) && bestscore > alpha) {
         if(tt_inactive_entry)++zb_occupied;
-        ab_ttable[k] = { .info=info, .depth=depth, .lowerbound=bestscore, .upperbound=bestscore,
+        ab_ttable[k] = { .info=state.info, .depth=depth, .lowerbound=bestscore, .upperbound=bestscore,
                          .m=m_best, .subpline=pline.get_future(), .age=tt_age };
       }
     }
@@ -575,7 +575,7 @@ public:
     }
 
     move_t m_best = board::nomove;
-    const auto [tt_has_entry, k, info] = ab_ttable_probe(depth, ab_ttable);
+    const auto [tt_has_entry, k] = ab_ttable_probe(depth, ab_ttable);
     debug.update_line(depth, alpha, beta, pline);
     if(tt_has_entry) {
       const auto &zb = ab_ttable[k];
@@ -594,7 +594,7 @@ public:
       m_best = zb.m;
     }
 
-    const bool overwrite = true;
+    constexpr bool overwrite = true;
     const bool tt_inactive_entry = ab_ttable[k].is_inactive(tt_age);
     const bool tt_replace_depth = tt_inactive_entry || depth >= ab_ttable[k].depth;
     const bool tt_inexact_entry = tt_inactive_entry || ab_ttable[k].lowerbound != ab_ttable[k].upperbound;
@@ -610,55 +610,79 @@ public:
       const auto [_, m] = moves[move_index];
       MoveLine pline_alt = pline.branch_from_past();
       float score;
-//      if(move_index == 0)
-      {
-        auto mscope = mline_scope(m, pline_alt);
-        assert(pline_alt.empty());
-        repetitions = can_draw_repetition();
-        if(repetitions) {
-          ++nodes_searched;
-          score = -1e-4;
-        } else {
-          score = -score_decay(alpha_beta(-beta, -alpha, depth - 1, pline_alt, ab_ttable, e_ttable));
-        }
-//      } else {
-//        auto mscope = mline_scope(m, pline_alt);
-//        assert(pline_alt.empty());
-//        score = -score_decay(alpha_beta(-alpha-1, -alpha, depth - 1, pline_alt, ab_ttable));
-//        if(score > alpha && score <= beta) {
-//          pline_alt.clear();
-//          score = -score_decay(alpha_beta(-beta, -alpha, depth - 1, pline_alt, ab_ttable));
-//        }
-      }
-      debug.update(depth, alpha, beta, bestscore, score, m, pline, pline_alt);
-//      debug.check_score(depth, score, pline_alt);
-      if(score >= beta) {
-        debug.check_length(depth, pline_alt);
-        pline.replace_line(pline_alt);
-        if(overwrite && tt_replace_depth && tt_inexact_entry && !repetitions) {
-          if(tt_inactive_entry)++zb_occupied;
-          ab_ttable[k] = { .info=info, .depth=depth, .lowerbound=score, .upperbound=FLT_MAX,
-                           .m=m, .subpline=pline.get_future(), .age=tt_age };
-        }
-        return score;
-      } else if(score > bestscore && !repetitions) {
-        debug.check_length(depth, pline_alt);
-        m_best = m;
-        pline.replace_line(pline_alt);
+      if(move_index == 0) {
+        { // move scope
+          auto mscope = mline_scope(m, pline_alt);
+          assert(pline_alt.empty());
+          repetitions = can_draw_repetition();
+          if(repetitions) {
+            ++nodes_searched;
+            score = -1e-4;
+          } else {
+            score = -score_decay(alpha_beta(-beta, -alpha, depth - 1, pline_alt, ab_ttable, e_ttable));
+          }
+        } // end move scope
+        debug.update(depth, alpha, beta, bestscore, score, m, pline, pline_alt, "firstmove"s);
+        debug.check_score(depth, score, pline_alt);
         bestscore = score;
-        if(score > alpha) {
-          alpha = score;
+        pline.replace_line(pline_alt);
+        if(bestscore > alpha) {
+          if(bestscore >= beta) {
+						if(overwrite && tt_replace_depth && tt_inexact_entry && !repetitions) {
+							if(tt_inactive_entry)++zb_occupied;
+							ab_ttable[k] = { .info=state.info, .depth=depth, .lowerbound=score, .upperbound=FLT_MAX,
+															 .m=m, .subpline=pline.get_future(), .age=tt_age };
+						}
+            return bestscore;
+          }
+          alpha = bestscore;
+        }
+      } else {
+        { // move scope
+          auto mscope = mline_scope(m, pline_alt);
+          assert(pline_alt.empty());
+          if(repetitions) {
+            ++nodes_searched;
+            score = -1e-4;
+            if(score > alpha) {
+              alpha = score;
+            }
+          } else {
+            score = -score_decay(alpha_beta(-alpha-1e-7, -alpha, depth - 1, pline_alt, ab_ttable, e_ttable));
+            if(score > alpha && score < beta) {
+              pline_alt.clear();
+              score = -score_decay(alpha_beta(-beta, -alpha, depth - 1, pline_alt, ab_ttable, e_ttable));
+              if(score > alpha) {
+                alpha = score;
+              }
+            }
+          }
+        } // end move scope
+        debug.update(depth, alpha, beta, bestscore, score, m, pline, pline_alt);
+        debug.check_score(depth, score, pline_alt);
+        if(score > bestscore) {
+          pline.replace_line(pline_alt);
+          if(score >= beta) {
+						if(overwrite && tt_replace_depth && tt_inexact_entry && !repetitions) {
+							if(tt_inactive_entry)++zb_occupied;
+							ab_ttable[k] = { .info=state.info, .depth=depth, .lowerbound=score, .upperbound=FLT_MAX,
+															 .m=m, .subpline=pline.get_future(), .age=tt_age };
+						}
+            return score;
+          }
+          bestscore = score;
         }
       }
     };
     if(overwrite && m_best != board::nomove && !repetitions) {
-      if(bestscore <= alpha) {
+//      if(bestscore <= alpha) {
+//        if(tt_inactive_entry)++zb_occupied;
+//        ab_ttable[k] = { .info=state.info, .depth=depth, .lowerbound=-FLT_MAX, .upperbound=bestscore,
+//                          .m=m_best, .subpline=pline.get_future(), .age=tt_age };
+//      } else
+      if(bestscore > alpha) {
         if(tt_inactive_entry)++zb_occupied;
-        ab_ttable[k] = { .info=info, .depth=depth, .lowerbound=-FLT_MAX, .upperbound=bestscore,
-                          .m=m_best, .subpline=pline.get_future(), .age=tt_age };
-      } else if(bestscore > alpha) {
-        if(tt_inactive_entry)++zb_occupied;
-        ab_ttable[k] = { .info=info, .depth=depth, .lowerbound=bestscore, .upperbound=bestscore,
+        ab_ttable[k] = { .info=state.info, .depth=depth, .lowerbound=bestscore, .upperbound=bestscore,
                          .m=m_best, .subpline=pline.get_future(), .age=tt_age };
       }
     }
@@ -702,7 +726,7 @@ public:
         int16_t target_depth = d - razoring_depth;
         for(; _d <= d - razoring_depth; ++_d) {
           {
-            debug.debug_depth = _d + 1;
+            debug.set_depth(_d + 1);
             auto mscope = mline_scope(m, pline[m]);
             const MoveLine mline = pline[m];
             float new_eval = .0;
@@ -724,7 +748,7 @@ public:
             }
           }
           debug.check_score(_d+1, eval, pline[m]);
-          str::pdebug("IDDFS:", _d, "move:", pgn::_move_str(self, m), "eval:", eval);
+          str::pdebug("IDDFS:", _d+1, "move:", pgn::_move_str(self, m), "eval:", eval, pgn::_line_str_full(self, pline[m]));
           assert(pline[m].front() == m && m_best != board::nomove);
           //if(d+1==depth)str::pdebug("eval:", eval, "move:", _move_str(m), "pvline", _line_str(pline[m]));
           {
@@ -806,8 +830,9 @@ public:
     reset_planning();
     auto &&[ab_store_scope, e_store_scope] = get_zobrist_alphabeta_scope();
     assert(ab_ttable != nullptr && e_ttable != nullptr);
-    debug.debug_depth = depth;
-    auto [_, m] = iterative_deepening_dfs(depth, searchmoves, ab_store_scope.get_object(), e_store_scope.get_object(), std::forward<F>(callback_f));
+    debug.set_depth(depth);
+    const auto [_, m] = iterative_deepening_dfs(depth, searchmoves, ab_store_scope.get_object(), e_store_scope.get_object(),
+                                                std::forward<F>(callback_f));
     evaluation = _;
     return m;
   }
@@ -821,8 +846,9 @@ public:
     reset_planning();
     auto [ab_store_scope, e_store_scope] = get_zobrist_alphabeta_scope();
     MoveLine pline;
-    debug.debug_depth = depth;
-    evaluation = alpha_beta(-MATERIAL_KING, MATERIAL_KING, depth, pline, ab_store_scope.get_object(), e_store_scope.get_object());
+    debug.set_depth(depth);
+    evaluation = alpha_beta(-MATERIAL_KING, MATERIAL_KING, depth, pline,
+                            ab_store_scope.get_object(), e_store_scope.get_object());
     move_t m = get_random_move();
     if(!pline.full().empty()) {
       m = pline.full().front();
@@ -852,8 +878,7 @@ public:
     }
     // look-up:
     zobrist::key_t k = self.zb_hash();
-    board_info info = get_board_info();
-    if(perft_ttable[k].info == info && perft_ttable[k].depth == depth) {
+    if(perft_ttable[k].info == state.info && perft_ttable[k].depth == depth) {
       ++zb_hit;
       return perft_ttable[k].nodes;
     } else {
@@ -869,7 +894,7 @@ public:
       nodes += _perft(depth - 1, perft_ttable);
     });
     if(overwrite) {
-      perft_ttable[k] = { .info=info, .depth=depth, .nodes=nodes };
+      perft_ttable[k] = { .info=state.info, .depth=depth, .nodes=nodes };
     }
     return nodes;
   }

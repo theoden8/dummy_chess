@@ -12,16 +12,6 @@ struct DebugTracer {
 
   EngineT &engine;
   MoveLine debug_moveline = MoveLine(std::vector<move_t>{
-//    bitmask::_pos_pair(G1, H3),
-//    bitmask::_pos_pair(D7, D5),
-//    bitmask::_pos_pair(D2, D4),
-//    bitmask::_pos_pair(D8, D6),
-//    bitmask::_pos_pair(D1, D3),
-//    bitmask::_pos_pair(C8, H3),
-//    bitmask::_pos_pair(D3, H3),
-//    bitmask::_pos_pair(D6, B4),
-//    bitmask::_pos_pair(B1, D2),
-//    bitmask::_pos_pair(B4, D4),
   });
   board_info debug_board_info;
   int16_t debug_depth = 0;
@@ -32,6 +22,10 @@ struct DebugTracer {
     debug_board_info = engine.get_info_from_line(debug_moveline);
   }
 
+  void set_depth(int16_t depth) {
+    debug_depth = depth;
+  }
+
   std::string tab(int16_t depth) const {
     std::string tab = ""s; for(int16_t i=0; i<debug_depth-depth;++i)tab+=" "s;
     return tab;
@@ -39,7 +33,7 @@ struct DebugTracer {
 
   std::string actinfo(double alpha, double beta, double bestscore, double score) const {
     if(score >= beta) {
-      return "beta cut-off"s;
+      return "beta-cutoff"s;
     } else if(score > bestscore) {
       return "new-best"s;
     }
@@ -47,32 +41,59 @@ struct DebugTracer {
   }
 
   std::string actinfo_mem(double alpha, double beta, const tt_ab_entry &zb) const {
-    std::string actinfo = "mem"s;
     if(zb.lowerbound >= beta) {
-      actinfo += "-beta-cutoff"s;
+      return "mem-beta-cutoff"s;
     } else if(zb.upperbound <= alpha) {
-      actinfo += "-new-best"s;
+      return "mem-best"s;
     }
-    return actinfo;
+    return "mem"s;
+  }
+
+  std::string actinfo_standpat(double alpha, double beta, double score, int nchecks) const {
+    if(score >= beta) {
+      return "q-beta-cutoff"s;
+    } else if(nchecks < 0) {
+      return "q-checks"s;
+    } else if(score > alpha) {
+      return "q-new-best"s;
+    }
+    return "q-continue"s;
+  }
+
+  std::string _line_str_full(const MoveLine &mline) const {
+    if(!engine.check_valid_sequence(mline)) {
+      return "[invalid "s + engine._line_str_full(mline) + "]"s;
+    }
+    return pgn::_line_str_full(engine, mline);
   }
 
   void update_line(int16_t depth, double alpha, double beta, const MoveLine &pline) {
     #ifndef NDEBUG
-    if(!debug_moveline.empty() && engine.state.info == debug_board_info) {
-      _printf("%sdepth=%d changed moveline %s (%.6f, %.6f)\n",
-              tab(depth).c_str(), depth, pgn::_line_str_full(engine, pline).c_str(), alpha, beta);
+    if(!debug_moveline.empty() && engine.state.info == debug_board_info && !pline.startswith(debug_moveline)) {
+      _printf("%s depth=%d <changed moveline> %s (%.6f, %.6f) from %s\n",
+              tab(depth).c_str(), depth, _line_str_full(pline).c_str(), alpha, beta,
+              _line_str_full(debug_moveline.as_past()).c_str());
       debug_moveline = pline.get_past();
     }
     #endif
   }
 
+  bool filter_moveline(const MoveLine &pline_alt) {
+    return (!debug_moveline.empty() && pline_alt.full().startswith(debug_moveline))
+      || engine.state.info == debug_board_info;
+  }
+
   void update(int16_t depth, double alpha, double beta, double bestscore, double score, move_t m,
-              const MoveLine &pline, const MoveLine &pline_alt) {
+              const MoveLine &pline, const MoveLine &pline_alt, std::string extra_inf=""s)
+  {
     #ifndef NDEBUG
-    if(!debug_moveline.empty() && pline_alt.full().startswith(debug_moveline)) {
-      _printf("%sdepth=%d, %s, score=%.6f (%.6f, %.6f) %s -- %s\n",
-        tab(depth).c_str(), depth, pgn::_move_str(engine, m).c_str(), score, beta, alpha,
-        pgn::_line_str_full(engine, pline_alt).c_str(), actinfo(alpha, beta, bestscore, score).c_str());
+    if(filter_moveline(pline_alt)) {
+      const char ast = (pline_alt.full().startswith(debug_moveline)) ? ' ' : '*';
+      _printf("%s%cdepth=%d, %s, score=%.6f (%.6f, %.6f) %s -- %s %s\n",
+        tab(depth).c_str(), ast, depth, pgn::_move_str(engine, m).c_str(), score, beta, alpha,
+        _line_str_full(pline_alt).c_str(), actinfo(alpha, beta, bestscore, score).c_str(),
+        extra_inf.c_str());
+      update_line(depth, alpha, beta, pline_alt);
     }
     assert(engine.check_valid_sequence(pline_alt));
     #endif
@@ -82,20 +103,34 @@ struct DebugTracer {
     #ifndef NDEBUG
     MoveLine pline_alt = pline.branch_from_past();
     pline_alt.replace_line(zb.subpline);
-    if(!debug_moveline.empty() && pline.full().startswith(debug_moveline)) {
+    if(filter_moveline(pline_alt)) {
       _printf("%sdepth=%d, %s (%.6f, %.6f) %s -- %s (%.6f, %.6f)\n",
           tab(depth).c_str(), depth, pgn::_move_str(engine, zb.m).c_str(), alpha, beta,
-          pgn::_line_str_full(engine, pline_alt).c_str(), actinfo_mem(alpha, beta, zb).c_str(),
+          _line_str_full(pline_alt).c_str(), actinfo_mem(alpha, beta, zb).c_str(),
           zb.lowerbound, zb.upperbound);
+      update_line(depth, alpha, beta, pline_alt);
     }
     assert(engine.check_valid_sequence(pline_alt));
+    #endif
+  }
+
+  void update_standpat(int16_t depth, double alpha, double beta, double score, const MoveLine &pline, int nchecks) {
+    #ifndef NDEBUG
+    if(filter_moveline(pline)) {
+      const char ast = (pline.full().startswith(debug_moveline)) ? ' ' : '*';
+      _printf("%s%cdepth=%d, score=%.6f (%.6f, %.6f) %s -- %s\n",
+        tab(depth).c_str(), ast, depth, score, beta, alpha,
+        _line_str_full(pline).c_str(), actinfo_standpat(alpha, beta, score, nchecks).c_str());
+      update_line(depth, alpha, beta, pline);
+    }
+    assert(engine.check_valid_sequence(pline));
     #endif
   }
 
   void check_score(int16_t depth, double score, const MoveLine &pline) {
     #ifndef NDEBUG
     if(!engine.check_pvline_score(pline, score)) {
-      str::pdebug(tab(depth), "pvline", pgn::_line_str_full(engine, pline));
+      str::pdebug(tab(depth), "pvline", _line_str_full(pline));
       str::pdebug(tab(depth), "score", score);
       str::pdebug(tab(depth), "pvscore", engine.get_pvline_score(pline));
       abort();

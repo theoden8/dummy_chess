@@ -9,9 +9,8 @@ int main(int argc, char *argv[]) {
   const fen::FEN f = (argc >= 2) ? fen::load_from_string(argv[1]) : fen::starting_pos;
 #if 1
   constexpr uint64_t shannon_number[] = { 20, 400, 8902, 197281, 4865609, 119060324, 3195901860, 84998978956, 2439530234167 };
-  printf("perft benchmarks\n");
-  printf("\n");
-  printf("starting position\n");
+  str::print("perft benchmarks");
+  str::print("position", fen::export_as_string(f));
   {
     Engine e(f);
     decltype(auto) store_scope = e.get_zobrist_perft_scope();
@@ -33,9 +32,8 @@ int main(int argc, char *argv[]) {
   printf("\n");
 #endif
 #if 1
-  printf("alpha-beta benchmarks\n");
-  printf("\n");
-  printf("starting position\n");
+  str::print("alpha-beta benchmarks\n");
+  str::print("position", fen::export_as_string(f));
   {
     Engine e(f);
     auto [ab_store_scope, e_store_scope] = e.get_zobrist_alphabeta_scope();

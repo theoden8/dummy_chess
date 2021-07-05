@@ -233,7 +233,10 @@ NEVER_INLINE std::string _line_str_full(Board &b, const MoveLine &mline) {
   for(auto m : mline.get_past()) {
     pgn.handle_move(m);
   }
-  std::string s = "["s + str::join(pgn.ply, " "s) + "]"s;
+  std::string s = ""s;
+  if(mline.start > 0) {
+    s += "["s + str::join(pgn.ply, " "s) + "]"s;
+  }
   if(!mline.empty()) {
     s += " "s + _line_str(b, mline.get_future());
   }

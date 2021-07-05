@@ -219,10 +219,6 @@ public:
     };
   }
 
-  INLINE board_info get_board_info() const {
-    return state.info;
-  }
-
   INLINE piece_bitboard_t get_king_bits() const {
     return piece::pos_mask(pos_king[WHITE]) | piece::pos_mask(pos_king[BLACK]);
   }

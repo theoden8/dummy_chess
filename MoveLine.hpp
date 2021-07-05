@@ -149,6 +149,12 @@ struct MoveLine {
     return MoveLine(std::vector<move_t>(line.begin(), begin()), get_mainline());
   }
 
+  INLINE MoveLine as_past() const {
+    MoveLine mline = *this;
+    mline.start = line.size();
+    return mline;
+  }
+
   INLINE MoveLine branch_from_past() const {
     MoveLine mline = get_past();
     mline.start = start;
