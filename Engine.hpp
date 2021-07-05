@@ -145,14 +145,14 @@ public:
     float h = .0;
     bitmask::foreach(bits[c], [&](pos_t i) mutable -> void {
       auto a = state.attacks[i];
-      h += std::sqrt(piece::size(a & occupied) + piece::size(a));
+      h += float(piece::size(a & occupied) + piece::size(a)) / material_of(self[i].value);
     });
     return h;
   }
 
   INLINE float h_mobility(COLOR c) const {
     float h = .0;
-    bitmask::foreach(bits[c], [&](pos_t i) mutable -> void {
+    bitmask::foreach(bits[c] & ~bits_pawns, [&](pos_t i) mutable -> void {
       h += std::sqrt(piece::size(state.moves[i]));
     });
     return h;
@@ -163,9 +163,9 @@ public:
     for(pos_t f = 0; f < board::LEN; ++f) {
       const piece_bitboard_t pawns_file = piece::file_mask(f) & bits_pawns & bits[c];
       if(!pawns_file) {
-        h -= 1.;
+        h -= .02;
       } else {
-        h += 1. - piece::size(pawns_file);
+        h += .01 * (2. - piece::size(pawns_file));
       }
     }
     for(pos_t f = B; f <= G; ++f) {
@@ -173,17 +173,18 @@ public:
       if(!pawns_file)continue;
       const piece_bitboard_t ahead = (piece::file_mask(f - 1) | piece::file_mask(f) | piece::file_mask(f + 1));
       if((ahead & bits_pawns & ~bits[c]))continue;
-      const pos_t pawn = (c == WHITE) ? bitmask::highest_bit(pawns_file) : bitmask::lowest_bit(pawns_file);
-      h += .2 * (1 + ((c == WHITE) ? board::_y(pawn) : 7-board::_y(pawn)));
+      const pos_t pawnr = (c == WHITE) ? board::_y(bitmask::highest_bit(pawns_file))
+                                       : 7 - board::_y(bitmask::lowest_bit(pawns_file));
+      h += .001 * (1 + float(pawnr) * float(pawnr));
     }
-    h += .3 * piece::size(piece::get_pawn_attacks(bits_pawns & bits[c], c) & bits[c]);
+    h += .03 * piece::size(piece::get_pawn_attacks(bits_pawns & bits[c], c) & bits[c]);
     return h;
   }
 
   INLINE float heuristic_of(COLOR c) const {
     float h = .0;
     h += h_material(c);
-    h += h_pawn_structure(c) * 1e-1;
+    h += h_pawn_structure(c);
 //    h -= count_material(state.pins[c]) * 1e-4;
     h += h_mobility(c) * 1e-4;
     h += h_attack_cells(c) * 1e-4;
@@ -406,15 +407,15 @@ public:
     return std::make_tuple(tt_has_entry, k, info);
   }
 
-  decltype(auto) ab_get_quiesc_moves(int16_t depth, MoveLine &pline, int8_t delta, bool king_in_check, move_t firstmove=board::nomove) {
+  decltype(auto) ab_get_quiesc_moves(int16_t depth, MoveLine &pline, int8_t nchecks, bool king_in_check, move_t firstmove=board::nomove) {
     std::vector<std::tuple<float, move_t, bool>> quiescmoves;
     quiescmoves.reserve(8);
     iter_moves([&](pos_t i, pos_t j) mutable -> void {
       float val = .0;
       const move_t m = bitmask::_pos_pair(i, j);
       j &= board::MOVEMASK;
-      bool reduce_delta = false;
-      const bool allow_checking = (delta > 0 && -depth < 5);
+      bool reduce_nchecks = false;
+      const bool allow_checking = (nchecks > 0 && -depth < 5);
       if(king_in_check) {
         val = move_heuristic_mvv_lva(i, j);
       } else if(is_promotion_move(i, j) || is_enpassant_take_move(i, j)
@@ -426,7 +427,7 @@ public:
         if(val < -1e-9)return;
       } else if((allow_checking && is_naively_checking_move(i, j)) || m == firstmove) {
         // captures and checks
-        reduce_delta = (m != firstmove);
+        reduce_nchecks = (m != firstmove);
         val = .5;
       } else {
         return;
@@ -434,7 +435,7 @@ public:
       if(val > -.75) {
         val += move_heuristic_pv(m, pline, firstmove);
       }
-      quiescmoves.emplace_back(-val, m, reduce_delta);
+      quiescmoves.emplace_back(-val, m, reduce_nchecks);
     });
     std::sort(quiescmoves.begin(), quiescmoves.end());
     // no need for reverse sort: values are already negated
@@ -444,7 +445,7 @@ public:
   float alpha_beta_quiescence(float alpha, float beta, int16_t depth, MoveLine &pline,
                                zobrist::ttable<tt_ab_entry> &ab_ttable,
                                zobrist::ttable<tt_eval_entry> &e_ttable,
-                               int8_t delta)
+                               int8_t nchecks)
   {
     float score = -MATERIAL_KING;
     float bestscore = -MATERIAL_KING;
@@ -452,7 +453,7 @@ public:
     const bool king_in_check = state.checkline[activePlayer()] != ~0ULL;
     if(!king_in_check) {
       score = e_ttable_probe(e_ttable);
-      if(score >= beta || delta <= 0) {
+      if(score >= beta || nchecks <= 0) {
         ++nodes_searched;
         return score;
       } else if(score > bestscore) {
@@ -486,7 +487,7 @@ public:
     const bool tt_replace_depth = tt_inactive_entry || depth >= ab_ttable[k].depth;
     const bool tt_inexact_entry = tt_inactive_entry || ab_ttable[k].lowerbound != ab_ttable[k].upperbound;
 
-    decltype(auto) quiescmoves = ab_get_quiesc_moves(depth, pline, delta, king_in_check, m_best);
+    decltype(auto) quiescmoves = ab_get_quiesc_moves(depth, pline, nchecks, king_in_check, m_best);
     if(quiescmoves.empty()) {
       ++nodes_searched;
       if(king_in_check) {
@@ -496,7 +497,7 @@ public:
     }
     assert(pline.empty());
     bool repetitions = false;
-    for(const auto &[_, m, reduce_delta] : quiescmoves) {
+    for(const auto &[_, m, reduce_nchecks] : quiescmoves) {
       MoveLine pline_alt = pline.branch_from_past();
       {
         auto mscope = mline_scope(m, pline_alt);
@@ -506,7 +507,7 @@ public:
           ++nodes_searched;
           score = 1e-4;
         } else {
-          score = -score_decay(alpha_beta_quiescence(-beta, -alpha, depth - 1, pline_alt, ab_ttable, e_ttable, reduce_delta ? delta - 1 : delta));
+          score = -score_decay(alpha_beta_quiescence(-beta, -alpha, depth - 1, pline_alt, ab_ttable, e_ttable, reduce_nchecks ? nchecks - 1 : nchecks));
         }
       }
       debug.update(depth, alpha, beta, bestscore, score, m, pline, pline_alt);
@@ -564,8 +565,8 @@ public:
   {
     if(depth == 0) {
       assert(pline.empty());
-      const int delta = 1;
-      return alpha_beta_quiescence(alpha, beta, depth, pline, ab_ttable, e_ttable, delta);
+      const int nchecks = 1;
+      return alpha_beta_quiescence(alpha, beta, depth, pline, ab_ttable, e_ttable, nchecks);
     }
 
     move_t m_best = board::nomove;
@@ -666,59 +667,103 @@ public:
                                                     F &&callback_f)
   {
     if(depth == 0)return std::make_tuple(MATERIAL_KING, board::nomove);
-    std::vector<std::tuple<float, move_t>> bestmoves;
+    std::vector<std::tuple<float, move_t, int16_t>> bestmoves;
     iter_moves([&](pos_t i, pos_t j) mutable -> void {
       float val = move_heuristic_see(i, j);
       const move_t m = bitmask::_pos_pair(i, j);
       if(searchmoves.empty() || searchmoves.find(m) != std::end(searchmoves)) {
-        bestmoves.emplace_back(-val,m);
+        bestmoves.emplace_back(-val,m,0);
       }
     });
     std::sort(bestmoves.begin(), bestmoves.end());
     std::map<move_t, MoveLine> pline;
     bool should_stop_iddfs = false;
     for(int16_t d = 0; d < depth; ++d) {
-      debug.debug_depth = d + 1;
       float eval_best = -MATERIAL_KING;
       move_t m_best = board::nomove;
-      for(size_t i = 0; i < bestmoves.size(); ++i) {
-        auto &[eval, m] = bestmoves[i];
-        {
-          auto mscope = mline_scope(m, pline[m]);
-          const MoveLine mline = pline[m];
-          const float new_eval = -score_decay(alpha_beta(-MATERIAL_KING, MATERIAL_KING, d, pline[m], ab_ttable, e_ttable));
-          const bool fail_low = (pline[m].size() < size_t(d) && !check_line_terminates(pline[m]));
-          if(fail_low) {
-            pline[m] = mline;
-          } else {
-            eval = new_eval;
-            if(eval > eval_best) {
-              eval_best = eval;
-              m_best = m;
+      for(size_t i = 0; i < bestmoves.size() && !should_stop_iddfs; ++i) {
+        auto &[eval, m, _d] = bestmoves[i];
+        if(check_line_terminates(pline[m]) && int(pline[m].size()) <= _d) {
+          eval = get_pvline_score(pline[m]);
+          continue;
+        }
+        int16_t razoring_depth = 0;
+        if(!score_is_mate(eval)) {
+          if(eval_best - MATERIAL_PAWN > eval && d-2 > razoring_depth)++razoring_depth;
+          if(eval_best - MATERIAL_BISHOP > eval && d-2 > razoring_depth)++razoring_depth;
+          if(eval_best - MATERIAL_ROOK > eval && d-2 > razoring_depth)++razoring_depth;
+          if(eval_best - MATERIAL_QUEEN > eval && d-2 > razoring_depth)++razoring_depth;
+        }
+        int16_t target_depth = d - razoring_depth;
+        for(; _d <= d - razoring_depth; ++_d) {
+          {
+            debug.debug_depth = _d + 1;
+            auto mscope = mline_scope(m, pline[m]);
+            const MoveLine mline = pline[m];
+            float new_eval = .0;
+            if(can_draw_repetition()) {
+              str::print("can draw repetition");
+              new_eval = -1e-4;
+            } else {
+              new_eval = -score_decay(alpha_beta(-MATERIAL_KING, MATERIAL_KING, _d, pline[m], ab_ttable, e_ttable));
+            }
+            const bool fail_low = (pline[m].size() < size_t(_d) && !check_line_terminates(pline[m]));
+            if(fail_low) {
+              pline[m] = mline;
+            } else {
+              eval = new_eval;
+              if(eval > eval_best) {
+                eval_best = eval;
+                m_best = m;
+              }
             }
           }
-          // front node must be m
-        }
-        str::pdebug("IDDFS:", d+1, "move:", pgn::_move_str(self, m), "eval:", eval);
-        assert(pline[m].front() == m);
-        assert(m_best != board::nomove);
-        {
-          // check that search was successful
-          assert(pline[m_best].size() >= size_t(d) || check_line_terminates(pline[m_best]));
-          if(!callback_f(d+1, m_best, eval_best, pline[m_best], m) || (score_is_mate(eval_best) && d > 0)) {
-            should_stop_iddfs = true;
-            break;
+          debug.check_score(_d+1, eval, pline[m]);
+          str::pdebug("IDDFS:", _d, "move:", pgn::_move_str(self, m), "eval:", eval);
+          assert(pline[m].front() == m && m_best != board::nomove);
+          //if(d+1==depth)str::pdebug("eval:", eval, "move:", _move_str(m), "pvline", _line_str(pline[m]));
+          {
+            // check that search was successful
+            auto [best_eval, best_m, best_d] = *std::max_element(bestmoves.begin(), bestmoves.end());
+            if(best_m == m)++best_d;
+            assert(pline[best_m].size() >= size_t(best_d) || check_line_terminates(pline[best_m]));
+            if(!callback_f(best_d, best_m, best_eval, pline[best_m], m)
+                || (score_is_mate(best_eval) && best_d > 0 && int(pline[best_m].size()) <= best_d))
+            {
+              ++_d;
+              should_stop_iddfs = true;
+              break;
+            }
+          }
+          razoring_depth = 0;
+          if(!score_is_mate(eval)) {
+            if(eval_best - MATERIAL_PAWN > eval && d-2 > razoring_depth)++razoring_depth;
+            if(eval_best - MATERIAL_BISHOP > eval && d-2 > razoring_depth)++razoring_depth;
+            if(eval_best - MATERIAL_ROOK > eval && d-2 > razoring_depth)++razoring_depth;
+            if(eval_best - MATERIAL_QUEEN > eval && d-2 > razoring_depth)++razoring_depth;
           }
         }
-        //if(d+1==depth)str::pdebug("eval:", eval, "move:", _move_str(m), "pvline", _line_str(pline[m]));
+        if(should_stop_iddfs)break;
+      }
+      {
+        // check that search was successful
+        auto [best_eval, best_m, best_d] = *std::max_element(bestmoves.begin(), bestmoves.end());
+        assert(pline[m_best].size() >= size_t(best_d) || check_line_terminates(pline[m_best]));
+        callback_f(best_d, best_m, best_eval, pline[best_m], best_m);
       }
       std::sort(bestmoves.begin(), bestmoves.end());
       std::reverse(bestmoves.begin(), bestmoves.end());
-      str::pdebug("depth:", d+1, "pline:", pgn::_line_str(self, pline[m_best]), "size:", pline[m_best].size(), "eval", eval_best);
+      const auto &[best_eval, best_m, best_d] = *std::max_element(bestmoves.begin(), bestmoves.end());
+      str::pdebug("depth:", best_d+1, "pline:", pgn::_line_str(self, pline[best_m]), "size:", pline[best_m].size(), "eval", best_eval);
       if(should_stop_iddfs)break;
     }
+    {
+      // check that search was successful
+      const auto &[best_eval, best_m, best_d] = *std::max_element(bestmoves.begin(), bestmoves.end());
+      callback_f(best_d, best_m, best_eval, pline[best_m], best_m);
+    }
     if(bestmoves.empty())return std::make_tuple(-MATERIAL_KING, board::nomove);
-    const auto [best_eval, best_m] = bestmoves.front();
+    const auto [best_eval, best_m, best_d] = bestmoves.front();
     return std::make_tuple(best_eval, best_m);
   }
 

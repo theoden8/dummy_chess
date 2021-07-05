@@ -11,7 +11,7 @@ struct DebugTracer {
   using tt_ab_entry = typename EngineT::tt_ab_entry;
 
   EngineT &engine;
-  MoveLine debug_moveline = {
+  MoveLine debug_moveline = MoveLine(std::vector<move_t>{
 //    bitmask::_pos_pair(G1, H3),
 //    bitmask::_pos_pair(D7, D5),
 //    bitmask::_pos_pair(D2, D4),
@@ -22,7 +22,7 @@ struct DebugTracer {
 //    bitmask::_pos_pair(D6, B4),
 //    bitmask::_pos_pair(B1, D2),
 //    bitmask::_pos_pair(B4, D4),
-  };
+  });
   board_info debug_board_info;
   int16_t debug_depth = 0;
 
