@@ -28,7 +28,7 @@ def get_output(command):
 startingpos = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
 def get_output_uci(uci_exec, depth: int, fen=startingpos) -> dict:
     start = time.time()
-    s = get_output(f"(echo 'position fen {fen}'; echo 'go perft {depth}') | {uci_exec}")
+    s = get_output(f"(echo 'setoption name UCI_Chess960 value true'; echo 'position fen {fen}'; echo 'go perft {depth}') | {uci_exec}")
     dur = time.time() - start
     print(f'{uci_exec + " " * (30 - len(uci_exec))}: {dur:.3f}s')
     turnmaps = {}
@@ -65,7 +65,7 @@ def compare_outputs(depth=5, fen=startingpos, path=[]):
         return path == []
     if sfmaps['total'] == dcmaps['total']:
         return path == []
-    assert sfmaps['total'] == dcmaps['total'], "different results"
+    # assert sfmaps['total'] == dcmaps['total'], f"different results ({sfmaps['total']}, {dcmaps['total']})"
     flag_exit = False
     for k in sfmaps.keys():
         if k not in dcmaps:
@@ -99,17 +99,11 @@ def check_traditional():
     compare_outputs(depth=4, fen='q2k2q1/2nqn2b/1n1P1n1b/2rnr2Q/1NQ1QN1Q/3Q3B/2RQR2B/Q2K2Q1 w - -')
 
 
-def check_total(depth: int, fen: str, total: int):
-    dcmaps = get_output_dummy_chess(depth, fen)
-    dctotal = int(dcmaps['total'])
-    assert dctotal == total, f"totals don't match!, {dctotal} != {total}"
-
-
 def check_chess960():
     # https://www.chessprogramming.org/Chess960_Perft_Results
     # stockfish seg-faults in this case
-    # compare_outputs(depth=5, fen='4k3/8/8/8/8/8/8/rR2K1N1 w Q - 0 1')
-    check_total(depth=1, fen='4k3/8/8/8/8/8/8/rR2K1N1 w Q - 0 1', total=11)
+    compare_outputs(depth=1, fen='4k3/8/8/8/8/8/8/rR2K1N1 w Q - 0 1')
+    compare_outputs(depth=5, fen='r2k2rB/ppp2b1p/3n3b/3p1pp1/4p3/P2P2P1/1PP1PPBP/RN3RKQ b kq - 0 11')
     # 0
     compare_outputs(depth=5, fen='bqnb1rkr/pp3ppp/3ppn2/2p5/5P2/P2P4/NPP1P1PP/BQ1BNRKR w HFhf - 2 9')
     compare_outputs(depth=5, fen='2nnrbkr/p1qppppp/8/1ppb4/6PP/3PP3/PPP2P2/BQNNRBKR w HEhe - 1 9')
