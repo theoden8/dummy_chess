@@ -866,7 +866,6 @@ public:
   }
 
   INLINE void update_state_repetitions() {
-    str::print("state_hist_repetitions", state_hist_repetitions);
     if(state_hist_repetitions <= self.get_current_ply()) {
       state_hist_repetitions = get_current_ply();
       return;
