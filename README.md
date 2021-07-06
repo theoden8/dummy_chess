@@ -12,6 +12,9 @@ $ make
 * principal variation search with iddfs
 * basic razoring
 * uci partially supported
+* variants:
+    - standard
+    - chess960
 
 ## tools
 
