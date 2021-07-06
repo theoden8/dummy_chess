@@ -71,8 +71,9 @@ namespace bitmask {
   }
 
   // https://www.chessprogramming.org/BitScan#DeBruijnMultiplation
-  inline constexpr uint64_t lowest_bit(uint64_t v) {
-    return 1ULL << std::countr_zero(v);
+  template <typename T>
+  inline constexpr uint64_t lowest_bit(T v) {
+    return T(1) << std::countr_zero(v);
   }
 
   template <typename T>
@@ -104,22 +105,36 @@ namespace bitmask {
     return ones_after_eq_bit(v << 1);
   }
 
+  inline constexpr uint64_t ones_between(pos_t a, pos_t b) {
+    assert(a <= b);
+    return bitmask::ones_after_bit(1ULL<<a) & bitmask::ones_before_bit(1ULL<<b);
+  }
+
+  inline constexpr uint64_t ones_between_eq(pos_t a, pos_t b) {
+    assert(a <= b);
+    return bitmask::ones_after_eq_bit(1ULL<<a) & bitmask::ones_before_eq_bit(1ULL<<b);
+  }
+
+  inline constexpr uint64_t ones_between_eq_symm(pos_t a, pos_t b) {
+    return (a <= b) ? ones_between_eq(a, b) : ones_between_eq(b, a);
+  }
+
   // iterate set bits with a function F
-  template <typename F>
-  inline constexpr void foreach(uint64_t mask, F &&func) {
+  template <typename T, typename F>
+  inline constexpr void foreach(T mask, F &&func) {
     if(!mask)return;
     while(mask) {
       const pos_t r = bitmask::log2_msb(mask);
       func(r);
       // unset r-th bit
-      assert(mask & (1ULL << r));
-      mask &= ~(1LLU << r);
+      assert(mask & (T(1) << r));
+      mask &= ~(T(1) << r);
     }
   }
 
   // iterate set bits with a function F
-  template <typename F>
-  inline constexpr void foreach_early_stop(uint64_t mask, F &&func) {
+  template <typename T, typename F>
+  inline constexpr void foreach_early_stop(T mask, F &&func) {
     if(!mask)return;
     while(mask) {
       const pos_t r = bitmask::log2_msb(mask);
@@ -127,8 +142,8 @@ namespace bitmask {
         break;
       }
       // unset r-th bit
-      assert(mask & (1ULL << r));
-      mask &= ~(1LLU << r);
+      assert(mask & (T(1) << r));
+      mask &= ~(T(1) << r);
     }
   }
 

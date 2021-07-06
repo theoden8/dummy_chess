@@ -12,7 +12,7 @@ typedef enum { PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING, EMPTY, NO_PIECES=EMPTY }
 
 // two bytes, one for each move; second byte may contain information about promotion (2 bits)
 typedef pos_pair_t move_t;
-typedef uint16_t ply_index_t;
+typedef int16_t ply_index_t;
 
 // type alias: bitboard (as a mask)
 typedef uint64_t piece_bitboard_t;
@@ -55,7 +55,7 @@ namespace board {
                   PROMOTE_ROOK = 2<<6,
                   PROMOTE_QUEEN = 3<<6;
   constexpr move_t nomove = bitmask::_pos_pair(0xff, 0xff);
-  constexpr ply_index_t nocastlings = ~ply_index_t(0);
+  constexpr ply_index_t nocastlings = INT16_MAX;
   constexpr pos_t CASTLING_K_WHITE = 0,
                   CASTLING_Q_WHITE = 1,
                   CASTLING_K_BLACK = 2,

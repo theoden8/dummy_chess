@@ -3,6 +3,7 @@
 
 #include <vector>
 #include <list>
+#include <bitset>
 
 #include <String.hpp>
 #include <Piece.hpp>
@@ -19,11 +20,14 @@ protected:
   static bool initialized_;
   COLOR activePlayer_;
   size_t current_ply_ = 0;
-
 public:
+  bool traditional;
+  pos_t kcastlrook[NO_COLORS] = {0xff, 0xff};
+  pos_t qcastlrook[NO_COLORS] = {0xff, 0xff};
   struct board_info {
     COLOR active_player = NEUTRAL;
-    pos_t enpassant_castlings;
+    pos_t enpassant;
+    pos_pair_t castlings;
     piece_bitboard_t whites, blacks, diag_slid, orth_slid, pawns;
 
     INLINE bool operator==(board_info other) const noexcept {
@@ -31,7 +35,8 @@ public:
              pawns == other.pawns &&
              whites == other.whites && blacks == other.blacks &&
              diag_slid == other.diag_slid && orth_slid == other.orth_slid &&
-             enpassant_castlings == other.enpassant_castlings;
+             castlings == other.castlings &&
+             enpassant == other.enpassant;
     }
 
     INLINE void unset() {
@@ -42,30 +47,8 @@ public:
       return active_player == NEUTRAL;
     }
 
-    static board_info import_dbg(const std::string &s) {
-      auto vs = str::split(s, "|"s);
-      return (board_info){
-        .active_player=COLOR(std::stoi(vs[6])),
-        .enpassant_castlings=pos_t(std::stoi(vs[0])),
-        .whites=std::stoull(vs[2]),
-        .blacks=std::stoull(vs[3]),
-        .diag_slid=std::stoull(vs[4]),
-        .orth_slid=std::stoull(vs[5]),
-        .pawns=std::stoull(vs[1]),
-      };
-    }
-
-    std::string export_dbg() const {
-      std::string s = std::to_string(enpassant_castlings) + "|"s;
-      for(uint64_t it : {pawns, whites, blacks, diag_slid, orth_slid}) {
-        s += std::to_string(it) + "|"s;
-      }
-      s += std::to_string(active_player);
-      return s;
-    }
-
     INLINE pos_t pos_king(COLOR c) const {
-      assert(c == WHITE || c == BLACK);
+      assert(c < NO_COLORS);
       if(c == WHITE) {
         return pos_t(pawns);
       } else {
@@ -75,10 +58,6 @@ public:
 
     INLINE piece_bitboard_t pawn_bits() const {
       return pawns & ((bitmask::full >> (board::LEN * 2)) << board::LEN);
-    }
-
-    INLINE pos_t etrace() const {
-      return enpassant_castlings >> 4;
     }
   };
 public:
@@ -103,8 +82,8 @@ public:
   board_state state;
   std::vector<board_state> state_hist;
 
-  std::array<pos_t, 2> pos_king = {piece::uninitialized_king, piece::uninitialized_king};
-  ply_index_t state_hist_repetitions = ~ply_index_t(0);
+  std::array<pos_t, 2> pos_king = {piece::uninitialized_pos, piece::uninitialized_pos};
+  ply_index_t state_hist_repetitions = INT16_MAX;
 
   const std::array<Piece, 2*6+1>  pieces = {
     Piece(PAWN, WHITE), Piece(PAWN, BLACK),
@@ -118,8 +97,9 @@ public:
   explicit Board(const fen::FEN &f):
     activePlayer_(f.active_player),
     current_ply_(f.fullmove * 2 - (f.active_player == WHITE ? 1 : 0)),
-    state_hist_halfmoves({f.halfmove_clock})
+    traditional(f.traditional)
   {
+    state_hist_halfmoves.emplace_back(current_ply_ - f.halfmove_clock);
     if(!initialized_) {
       M42::init();
       zobrist::init();
@@ -144,10 +124,45 @@ public:
                   y = board::LEN - board::_y(i) - 1;
       put_pos(board::_pos(A+x, 1+y), get_piece(p, c));
     }
-    if(!(f.castling_compressed & (1 << 0)))unset_castling(BLACK,QUEEN_SIDE);
-    if(!(f.castling_compressed & (1 << 1)))unset_castling(BLACK,KING_SIDE);
-    if(!(f.castling_compressed & (1 << 2)))unset_castling(WHITE,QUEEN_SIDE);
-    if(!(f.castling_compressed & (1 << 3)))unset_castling(WHITE,KING_SIDE);
+//    std::cout << "castlings: " << std::bitset<16>(f.castlings) << std::endl;
+    if(bitmask::first(f.castlings)) {
+      const pos_t wcastlmask = bitmask::first(f.castlings);
+      if(bitmask::log2_msb(wcastlmask) < board::_x(pos_king[WHITE])) {
+        qcastlrook[WHITE] = bitmask::log2_msb(wcastlmask);
+      } else {
+        unset_castling(WHITE, QUEEN_SIDE);
+      }
+      if(bitmask::log2(wcastlmask) > board::_x(pos_king[WHITE])) {
+        kcastlrook[WHITE] = bitmask::log2(wcastlmask);
+      } else {
+        unset_castling(WHITE, KING_SIDE);
+      }
+    } else {
+      unset_castling(WHITE, KING_SIDE);
+      unset_castling(WHITE, QUEEN_SIDE);
+    }
+    if(bitmask::second(f.castlings)) {
+      const pos_t bcastlmask = bitmask::second(f.castlings);
+      if(bitmask::log2_msb(bcastlmask) < board::_x(pos_king[BLACK])) {
+        qcastlrook[BLACK] = bitmask::log2_msb(bcastlmask);
+      } else {
+        unset_castling(BLACK, QUEEN_SIDE);
+      }
+      if(bitmask::log2(bcastlmask) > board::_x(pos_king[BLACK])) {
+        kcastlrook[BLACK] = bitmask::log2(bcastlmask);
+      } else {
+        unset_castling(BLACK, KING_SIDE);
+      }
+    } else {
+      unset_castling(BLACK, KING_SIDE);
+      unset_castling(BLACK, QUEEN_SIDE);
+    }
+//    str::print(
+//      is_castling(WHITE, KING_SIDE),
+//      is_castling(WHITE, QUEEN_SIDE),
+//      is_castling(BLACK, KING_SIDE),
+//      is_castling(BLACK, QUEEN_SIDE)
+//    );
     set_enpassant(f.enpassant);
     init_update_state();
   }
@@ -204,12 +219,10 @@ public:
   }
 
   INLINE void update_state_info() {
-    const pos_t etrace = enpassant_trace();
-    uint8_t enpassant_castlings = (etrace == board::enpassantnotrace) ? 0x0f : board::_x(etrace);
-    enpassant_castlings |= get_castlings_compressed() << 4;
     state.info = (board_info){
       .active_player=activePlayer(),
-      .enpassant_castlings=enpassant_castlings,
+      .enpassant=enpassant_trace(),
+      .castlings=get_castlings_rook_mask(),
       .whites=bits[WHITE],
       .blacks=bits[BLACK],
       .diag_slid=bits_slid_diag,
@@ -233,12 +246,12 @@ public:
     if(bits[WHITE] & i_mask) {
       piece::unset_pos(bits[WHITE], i);
 //      if(self[i].value == KING && pos_king[WHITE] == i) {
-//        pos_king[WHITE] = piece::uninitialized_king;
+//        pos_king[WHITE] = piece::uninitialized_pos;
 //      }
     } else if(bits[BLACK] & i_mask) {
       piece::unset_pos(bits[BLACK], i);
 //      if(self[i].value == KING && pos_king[BLACK] == i) {
-//        pos_king[BLACK] = piece::uninitialized_king;
+//        pos_king[BLACK] = piece::uninitialized_pos;
 //      }
     }
     if(bits_pawns & i_mask) {
@@ -283,7 +296,13 @@ public:
   INLINE bool is_castling_move(pos_t i, pos_t j) const {
     assert(j <= board::MOVEMASK);
     const COLOR c = self.color_at_pos(i);
-    return pos_king[c] == i && piece::is_king_castling_move(c, i, j);
+    const pos_t castlrank = (c == WHITE) ? 1 : 8;
+    if(traditional) {
+      return (i == pos_king[c]) && (i == board::_pos(E, castlrank))
+          && (j == board::_pos(C, castlrank) || j == board::_pos(G, castlrank));
+    } else {
+      return (i == pos_king[c]) && (bits_slid_orth & ~bits_slid_diag & bits[c] & piece::pos_mask(j));
+    }
   }
 
   INLINE bool is_doublepush_move(pos_t i, pos_t j) const {
@@ -393,44 +412,40 @@ public:
 
   INLINE void unset_castling(COLOR c, CASTLING_SIDE side) {
     if(castlings[board::_castling_index(c, side)] >= get_current_ply()) {
-      castlings[board::_castling_index(c, side)] = get_current_ply();
+       castlings[board::_castling_index(c, side)] = get_current_ply();
     }
   }
 
-  INLINE piece_bitboard_t get_castlings_mask() const {
-    piece_bitboard_t mask = 0x00;
-    if(is_castling(WHITE, KING_SIDE))mask|=0x40ULL;
-    if(is_castling(WHITE, QUEEN_SIDE))mask|=0x04ULL;
-    if(is_castling(BLACK, KING_SIDE))mask|=0x40ULL<<(board::SIZE-board::LEN);
-    if(is_castling(BLACK, QUEEN_SIDE))mask|=0x04ULL<<(board::SIZE-board::LEN);
-    return mask;
-  }
-
-  INLINE pos_t get_castlings_compressed() const {
-    return fen::compress_castlings(get_castlings_mask());
+  INLINE pos_pair_t get_castlings_rook_mask() const {
+    pos_t wcastl=0x00, bcastl=0x00;
+    if(is_castling(WHITE, KING_SIDE)) wcastl|=piece::pos_mask(kcastlrook[WHITE]);
+    if(is_castling(WHITE, QUEEN_SIDE))wcastl|=piece::pos_mask(qcastlrook[WHITE]);
+    if(is_castling(BLACK, KING_SIDE)) bcastl|=piece::pos_mask(kcastlrook[BLACK]);
+    if(is_castling(BLACK, QUEEN_SIDE))bcastl|=piece::pos_mask(qcastlrook[BLACK]);
+    return bitmask::_pos_pair(wcastl, bcastl);
   }
 
   void update_castlings(pos_t i, pos_t j) {
     const COLOR c = self.color_at_pos(i);
-    const pos_t castlrank = (c == WHITE) ? 1 : 8;
     const piece_bitboard_t rooks = bits_slid_orth & ~bits_slid_diag;
     if(pos_king[c] == i) {
       unset_castling(c, KING_SIDE);
       unset_castling(c, QUEEN_SIDE);
-    } else if(rooks & piece::pos_mask(i)) {
-      if(is_castling(c, QUEEN_SIDE) && i == board::_pos(A, castlrank)) {
+    } else if(rooks & bits[c] & piece::pos_mask(i)) {
+      const pos_t castlrank = (c == WHITE) ? 1 : 8;
+      if(is_castling(c, QUEEN_SIDE) && i == board::_pos(qcastlrook[c], castlrank)) {
         unset_castling(c, QUEEN_SIDE);
-      } else if(is_castling(c, KING_SIDE) && i == board::_pos(H, castlrank)) {
+      } else if(is_castling(c, KING_SIDE) && i == board::_pos(kcastlrook[c], castlrank)) {
         unset_castling(c, KING_SIDE);
       }
     }
 
-    if(rooks & piece::pos_mask(j)) {
-      const COLOR ec = enemy_of(c);
-      const pos_t ecastlrank = (c == BLACK) ? 1 : 8;
-      if(is_castling(ec, QUEEN_SIDE) && j == board::_pos(A, ecastlrank)) {
+    const COLOR ec = enemy_of(c);
+    if(rooks & bits[ec] & piece::pos_mask(j)) {
+      const pos_t ecastlrank = (ec == WHITE) ? 1 : 8;
+      if(is_castling(ec, QUEEN_SIDE) && j == board::_pos(qcastlrook[ec], ecastlrank)) {
         unset_castling(ec, QUEEN_SIDE);
-      } else if(is_castling(ec, KING_SIDE) && j == board::_pos(H, ecastlrank)) {
+      } else if(is_castling(ec, KING_SIDE) && j == board::_pos(kcastlrook[ec], ecastlrank)) {
         unset_castling(ec, KING_SIDE);
       }
     }
@@ -482,9 +497,9 @@ public:
   }
 
   INLINE bool check_valid_move(pos_t i, pos_t j) const {
-    return i == (i & board::MOVEMASK) &&
-           (bits[activePlayer()] & piece::pos_mask(i)) &&
-           state.moves[i] & piece::pos_mask(j & board::MOVEMASK);
+    return i == (i & board::MOVEMASK)
+           && (bits[activePlayer()] & piece::pos_mask(i))
+           && (state.moves[i] & piece::pos_mask(j & board::MOVEMASK));
   }
 
   virtual void _backup_on_event() {}
@@ -499,33 +514,50 @@ public:
     const bool is_castling = is_castling_move(i, j);
     const bool is_enpassant_take = is_enpassant_take_move(i, j);
     const pos_t epawn = enpassant_pawn();
-    assert(fen::decompress_castlings(fen::compress_castlings(get_castlings_mask())) == get_castlings_mask());
 
     ++current_ply_;
     _backup_on_event();
     state_hist.emplace_back(state);
-    assert(m == board::nomove || check_valid_move(bitmask::_pos_pair(i, j)));
+    assert(m == board::nomove || check_valid_move(m));
     if(m == board::nomove) {
     } else if(is_castling) {
+      const piece_bitboard_t knights = get_knight_bits();
       const COLOR c = activePlayer();
-      const move_t rookmove = piece::get_king_castle_rook_move(c, i, j);
+      const pos_t castlrank = (c == WHITE) ? 1 : 8;
+      pos_t k_j = j;
+      if(!traditional) {
+        if(j == board::_pos(qcastlrook[c], castlrank)) {
+          k_j = board::_pos(C, castlrank);
+        } else if(j == board::_pos(kcastlrook[c], castlrank)) {
+          k_j = board::_pos(G, castlrank);
+        } else {
+          abort();
+        }
+      }
+      const move_t rookmove = piece::get_king_castle_rook_move(c, i, k_j, qcastlrook[c], kcastlrook[c]);
       const pos_t r_i = bitmask::first(rookmove),
                   r_j = bitmask::second(rookmove);
       update_castlings(i, j);
       {
-        piece::move_pos(bits[c], i, j);
-        pos_king[c] = j;
+        if(k_j != r_i) {
+          piece::move_pos(bits[c], i, k_j);
+        }
+        pos_king[c] = k_j;
       }
       update_state_attacks_pos(i);
-      update_state_attacks_pos(j);
-      _update_pos_change(i, j);
+      update_state_attacks_pos(k_j);
+      _update_pos_change(i, k_j);
       {
-        piece::move_pos(bits[c], r_i, r_j);
+        if(k_j != r_i) {
+          piece::move_pos(bits[c], r_i, r_j);
+        }
         piece::move_pos(bits_slid_orth, r_i, r_j);
       }
       update_state_attacks_pos(r_i);
       update_state_attacks_pos(r_j);
       _update_pos_change(r_i, r_j);
+      const COLOR ec = enemy_of(c);
+      assert((bits[c] | bits[ec]) == (bits_pawns | bits_slid_diag | bits_slid_orth | get_king_bits() | knights));
     } else if(is_enpassant_take) {
       const COLOR c = activePlayer();
       const pos_t killwhere = epawn;
@@ -573,7 +605,7 @@ public:
     init_state_moves();
     update_state_info();
     if(state_hist_repetitions > self.get_current_ply()) {
-      update_state_repetitions(3);
+      update_state_repetitions();
     }
     _update_change();
   }
@@ -614,7 +646,7 @@ public:
     state = state_hist.back();
     state_hist.pop_back();
     if(self.get_current_ply() < state_hist_repetitions) {
-      state_hist_repetitions = ~ply_index_t(0);
+      state_hist_repetitions = INT16_MAX;
     }
     _restore_on_event();
   }
@@ -833,17 +865,18 @@ public:
     return is_draw_halfmoves() || is_draw_material() || is_draw_stalemate();
   }
 
-  INLINE void update_state_repetitions(int no_times=3) {
-    if(no_times >= 3 && state_hist_repetitions <= self.get_current_ply()) {
-      state_hist_repetitions = self.get_current_ply();
+  INLINE void update_state_repetitions() {
+    str::print("state_hist_repetitions", state_hist_repetitions);
+    if(state_hist_repetitions <= self.get_current_ply()) {
+      state_hist_repetitions = get_current_ply();
       return;
     }
     int repetitions = 1;
-    for(ply_index_t i = 0; i < get_halfmoves(); ++i) {
+    for(ply_index_t i = 0; i < std::min<ply_index_t>(state_hist.size(), get_halfmoves()); ++i) {
       if(state.info == state_hist[state_hist.size() - i - 1].info) {
         ++repetitions;
-        if(repetitions >= no_times) {
-          state_hist_repetitions = self.get_current_ply();
+        if(repetitions >= 3) {
+          state_hist_repetitions = get_current_ply();
           return;
         }
       }
@@ -855,11 +888,11 @@ public:
     return state_hist_repetitions <= self.get_current_ply();
   }
 
-  ALWAYS_UNROLL void init_state_moves() {
+  void init_state_moves() {
     for(auto&m:state.moves)m=0x00;
     if(is_draw_halfmoves()||is_draw_material())return;
     // for efficiency set c = activePlayer()
-    for(COLOR c : {WHITE, BLACK}) {
+    for(const COLOR c : {WHITE, BLACK}) {
 //    const COLOR c = activePlayer(); {
       init_state_checkline(c);
       const COLOR ec = enemy_of(c);
@@ -867,9 +900,10 @@ public:
                              attack_mask = get_attack_mask(ec);
       const bool doublecheck = (state.checkline[c] == 0x00);
       if(!doublecheck) {
+        const pos_t etrace = enpassant_trace();
         piece_bitboard_t foes_pawn = foes;
-        if(enpassant_trace() != board::enpassantnotrace) {
-          foes_pawn |= piece::pos_mask(enpassant_trace());
+        if(etrace != board::enpassantnotrace && c == activePlayer()) {
+          foes_pawn |= piece::pos_mask(etrace);
         }
         bitmask::foreach(bits_pawns & bits[c], [&](pos_t pos) mutable noexcept -> void {
           state.moves[pos] = state.attacks[pos] & foes_pawn;
@@ -881,10 +915,20 @@ public:
         });
       }
       state.moves[pos_king[c]] = state.attacks[pos_king[c]] & ~friends & ~attack_mask;
-      state.moves[pos_king[c]] |= piece::get_king_castling_moves(c, pos_king[c], friends|foes, attack_mask, get_castlings_mask());
+      if(state.checkline[c] == bitmask::full && (is_castling(c, QUEEN_SIDE) || is_castling(c, KING_SIDE))) {
+        state.moves[pos_king[c]] |= piece::get_king_castling_moves(c, pos_king[c], friends|foes, attack_mask,
+                                                                   is_castling(c, QUEEN_SIDE), is_castling(c, KING_SIDE),
+                                                                   qcastlrook[c], kcastlrook[c], traditional);
+      }
     }
     init_state_moves_checkline_enpassant_takes();
     init_state_pins();
+    if(!traditional) {
+      for(const COLOR c : {WHITE, BLACK}) {
+//      const COLOR c = activePlayer(); {
+        state.moves[pos_king[c]] &= ~state.pins[c];
+      }
+    }
   }
 
   void init_state_moves_checkline_enpassant_takes() {
@@ -1021,12 +1065,13 @@ public:
 
   fen::FEN export_as_fen() const {
     fen::FEN f = {
-      .board = std::string(),
-      .active_player = activePlayer(),
-      .castling_compressed = fen::compress_castlings(get_castlings_mask()),
-      .enpassant = enpassant_trace(),
-      .halfmove_clock = get_halfmoves(),
-      .fullmove = uint16_t(((get_current_ply() - 1) / 2) + 1),
+      .board=""s,
+      .active_player=activePlayer(),
+      .castlings=get_castlings_rook_mask(),
+      .enpassant=enpassant_trace(),
+      .halfmove_clock=get_halfmoves(),
+      .fullmove=ply_index_t(((get_current_ply() - 1) / 2) + 1),
+      .traditional=traditional
     };
     for(pos_t y = 0; y < board::LEN; ++y) {
       for(pos_t x = 0; x < board::LEN; ++x) {

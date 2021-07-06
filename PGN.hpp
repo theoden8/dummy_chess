@@ -100,10 +100,21 @@ struct PGN {
       p = "0000"s;
     } else if(board.is_castling_move(i, j)) {
       const COLOR c = board.color_at_pos(i);
-      const move_t rookmove = piece::get_king_castle_rook_move(c, i, j);
+      const pos_t castlrank = (c == WHITE) ? 1 : 8;
+      pos_t k_j = j;
+      if(!board.traditional) {
+        if(j == board::_pos(board.qcastlrook[c], castlrank)) {
+          k_j = board::_pos(C, castlrank);
+        } else if(j == board::_pos(board.kcastlrook[c], castlrank)) {
+          k_j = board::_pos(G, castlrank);
+        } else {
+          abort();
+        }
+      }
+      const move_t rookmove = piece::get_king_castle_rook_move(c, i, k_j, board.qcastlrook[c], board.kcastlrook[c]);
       const pos_t r_i = bitmask::first(rookmove),
                   r_j = bitmask::second(rookmove);
-      if(board::_x(j) == C) {
+      if(board::_x(r_i) == board.qcastlrook[c]) {
         p = "O-O-O"s;
       } else {
         p = "O-O"s;

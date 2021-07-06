@@ -200,53 +200,58 @@ namespace piece {
   }
 
 
-  constexpr pos_t uninitialized_king = 0xff;
+  constexpr pos_t uninitialized_pos = 0xff;
   INLINE piece_bitboard_t get_king_attack(pos_t pos) {
     return M42::king_attacks(pos);
   }
 
-  INLINE constexpr piece_bitboard_t get_king_castling_moves(COLOR c, pos_t i, piece_bitboard_t occupied, piece_bitboard_t attack_mask,
-                                                              piece_bitboard_t castlings)
+  INLINE piece_bitboard_t get_king_castling_moves(COLOR c, pos_t kingpos, piece_bitboard_t occupied, piece_bitboard_t attack_mask,
+                                                  bool queen_side, bool king_side, pos_t qcastlrook, pos_t kcastlrook, bool traditional)
   {
-    const pos_t shift = (c == WHITE) ? 0 : (board::SIZE-board::LEN);
-    castlings &= bitmask::hline << shift;
+    assert(qcastlrook != 0xff || !queen_side);
+    assert(kcastlrook != 0xff || !king_side);
     piece_bitboard_t castlemoves = 0x00;
-    if(castlings) {
+    if((queen_side || king_side) && !piece::is_set(attack_mask, kingpos)) {
       // can't castle when checked
-      if(attack_mask & piece::pos_mask(i))castlings=0x00;
-      const piece_bitboard_t castleleft = 0x04ULL << shift;
-      const piece_bitboard_t castleleftcheck = 0x0CULL << shift;
-      const piece_bitboard_t castleleftcheckocc = 0x0EULL << shift;
-      const piece_bitboard_t castleright = 0x40ULL << shift;
-      const piece_bitboard_t castlerightcheck = 0x60ULL << shift;
-      const piece_bitboard_t castlerightcheckocc = 0x60ULL << shift;
-      if((castlings & castleleft)
-          && !(attack_mask & castleleftcheck)
-          && !(occupied & castleleftcheckocc))
-        castlemoves|=castleleft;
-      if((castlings & castleright)
-          && !(attack_mask & castlerightcheck)
-          && !(occupied & castlerightcheckocc))
-        castlemoves|=castleright;
+      const pos_t castlrank = (c == WHITE) ? 1 : 8;
+      const pos_t castleleft = board::_pos(C, castlrank);
+      const pos_t castleright = board::_pos(G, castlrank);
+      if(queen_side) {
+        const pos_t qrook = board::_pos(qcastlrook, castlrank);
+        const piece_bitboard_t castleleftcheck = bitmask::ones_between_eq_symm(castleleft, kingpos);
+        const piece_bitboard_t castleleftcheckocc = castleleftcheck | bitmask::ones_between_eq_symm(qrook, board::_pos(D, castlrank));
+        const piece_bitboard_t exclude = piece::pos_mask(kingpos) | piece::pos_mask(qrook);
+        if(!(attack_mask & castleleftcheck) && !(occupied & ~exclude & castleleftcheckocc)) {
+          if(traditional) {
+            castlemoves |= piece::pos_mask(castleleft);
+          } else {
+            castlemoves |= piece::pos_mask(qrook);
+          }
+        }
+      }
+      if(king_side) {
+        const pos_t krook = board::_pos(kcastlrook, castlrank);
+        const piece_bitboard_t castlerightcheck = bitmask::ones_between_eq_symm(kingpos, castleright);
+        const piece_bitboard_t castlerightcheckocc = castlerightcheck | bitmask::ones_between_eq_symm(board::_pos(F, castlrank), krook);
+        const piece_bitboard_t exclude = piece::pos_mask(kingpos) | piece::pos_mask(krook);
+        if(!(attack_mask & castlerightcheck) && !(occupied & ~exclude & castlerightcheckocc)) {
+          if(traditional) {
+            castlemoves |= piece::pos_mask(castleright);
+          } else {
+            castlemoves |= piece::pos_mask(krook);
+          }
+        }
+      }
     }
     return castlemoves;
   }
 
-  INLINE bool is_king_castling_move(COLOR c, pos_t i, pos_t j) {
-    const pos_t shift = (c == WHITE) ? 0 : (board::SIZE-board::LEN);
-    const piece_bitboard_t castlings = 0x44ULL << shift;
-    const pos_t kingpos = board::_pos(E, 1) + shift;
-    return (i == kingpos) && (piece::pos_mask(j) & castlings);
-  }
-
-  INLINE pos_pair_t get_king_castle_rook_move(COLOR c, pos_t i, pos_t j) {
-    const pos_t castling_rank = (c == WHITE) ? 1 : 8;
-    const pos_t castleleft = board::_pos(C, castling_rank);
-    const pos_t castleright = board::_pos(G, castling_rank);
-    if(j == castleleft) return bitmask::_pos_pair(board::_pos(A, castling_rank), board::_pos(D, castling_rank));
-    if(j == castleright)return bitmask::_pos_pair(board::_pos(H, castling_rank), board::_pos(F, castling_rank));
+  INLINE pos_pair_t get_king_castle_rook_move(COLOR c, pos_t i, pos_t k_j, pos_t qcastlrook, pos_t kcastlrook) {
+    const pos_t castlrank = (c == WHITE) ? 1 : 8;
+    if(k_j == board::_pos(C, castlrank))return bitmask::_pos_pair(board::_pos(qcastlrook, castlrank), board::_pos(D, castlrank));
+    if(k_j == board::_pos(G, castlrank))return bitmask::_pos_pair(board::_pos(kcastlrook, castlrank), board::_pos(F, castlrank));
     abort();
-    return 0x00;
+    return board::nomove;
   }
 
   void print(piece_bitboard_t mask) {

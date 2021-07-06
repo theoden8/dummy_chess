@@ -267,8 +267,8 @@ struct Interface {
     //set statusbar message
     //int len = printw("[ %s ]", activePlayer().c_str());
     //int len = printw("[ %s %hhu %hhu->%hhu ]", activePlayer().c_str(), fen::compress_castlings(board.get_castlings_mask()), from, to);
-    int len = printw("[ %s [%hu %hu %hu %hu] %hu", activePlayer().c_str(), board.castlings[0], board.castlings[1],
-                                               board.castlings[2], board.castlings[3], board.enpassant_pawn());
+    int len = printw("[ %s [%hu %hu %hu %hu] %hu", activePlayer().c_str(), board.is_castling(WHITE, QUEEN_SIDE), board.is_castling(WHITE, KING_SIDE),
+                                                   board.is_castling(BLACK, QUEEN_SIDE), board.is_castling(BLACK, KING_SIDE), board.enpassant_pawn());
     //int len = printw("[ %s %llx ]", activePlayer().c_str(), board.state_checkline);
     //int len = printw("[ %s %llx %llx %hhu ]", activePlayer().c_str(), board.state_checkline[c], board.state_checkline[enemy_of(c)], board.halfmoves_);
     nc_reset_color();

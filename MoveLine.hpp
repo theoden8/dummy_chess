@@ -162,6 +162,11 @@ struct MoveLine {
   INLINE MoveLine branch_from_past() const {
     MoveLine mline = get_past();
     mline.start = start;
+    if(get_mainline() != nullptr) {
+      mline.mainline = get_mainline();
+    } else {
+      mline.mainline = this;
+    }
     return mline;
   }
 

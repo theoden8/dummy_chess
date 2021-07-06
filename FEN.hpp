@@ -5,24 +5,28 @@
 #include <strings.h>
 
 #include <Bitboard.hpp>
+#include <Piece.hpp>
 #include <String.hpp>
 
 
 class Board;
 
+// shredder-fen
+// https://www.chessprogramming.org/Forsyth-Edwards_Notation#Shredder-FEN
 namespace fen {
   typedef struct _FEN {
     std::string board;
     COLOR active_player : 2;
-    pos_t castling_compressed : 4;
+    pos_pair_t castlings;
     pos_t enpassant;
     pos_t halfmove_clock;
-    uint16_t fullmove;
+    ply_index_t fullmove;
+    bool traditional;
 
     inline bool operator==(const struct _FEN &other) const {
-      return board == other.board && active_player == other.active_player &&
-             castling_compressed == other.castling_compressed &&
-             enpassant == other.enpassant && halfmove_clock == other.halfmove_clock
+      return board == other.board && active_player == other.active_player
+             && castlings == other.castlings
+             && enpassant == other.enpassant && halfmove_clock == other.halfmove_clock
              && fullmove == other.fullmove;
     }
 
@@ -31,47 +35,76 @@ namespace fen {
     }
   } FEN;
 
-  constexpr inline pos_t compress_castlings(piece_bitboard_t castlings) {
-    pos_t comp = 0;
-    comp |= (castlings & 0x04LLU) ? 1 : 0; comp <<= 1;
-    comp |= (castlings & 0x40LLU) ? 1 : 0; comp <<= 1;
-    comp |= (castlings & (0x04LLU << (board::SIZE-board::LEN))) ? 1 : 0; comp <<= 1;
-    comp |= (castlings & (0x40LLU << (board::SIZE-board::LEN))) ? 1 : 0;
-    return comp;
-  }
-
-  constexpr inline piece_bitboard_t decompress_castlings(pos_t comp) {
-    piece_bitboard_t castlings = 0x00;
-    if(comp&1)castlings|=(0x40LLU << (board::SIZE-board::LEN));
-    comp>>=1;
-    if(comp&1)castlings|=(0x04LLU << (board::SIZE-board::LEN));
-    comp>>=1;
-    if(comp&1)castlings|=(0x40LLU);
-    comp>>=1;
-    if(comp&1)castlings|=(0x04LLU);
-    comp>>=1;
-    return castlings;
-  }
-
   FEN load_from_string(std::string s) {
     size_t i = 0;
     FEN f = {
-      .board = std::string(),
-      .active_player = WHITE,
-      .castling_compressed = 0x00,
-      .enpassant = board::enpassantnotrace,
-      .halfmove_clock = 0,
-      .fullmove = 0,
+      .board=""s,
+      .active_player=WHITE,
+      .castlings=0x00,
+      .enpassant=board::enpassantnotrace,
+      .halfmove_clock=0,
+      .fullmove=0,
+      .traditional=true
     };
     // board
+    pos_t kingpos[2] = {piece::uninitialized_pos, piece::uninitialized_pos};
+    pos_t qrook[2] = {piece::uninitialized_pos, piece::uninitialized_pos};
+    pos_t krook[2] = {piece::uninitialized_pos, piece::uninitialized_pos};
+    pos_t board_index = 0;
+//    str::pdebug("FEN", s);
     for(const char *c = s.c_str(); *c != '\0' && *c != ' '; ++c, ++i) {
       if(*c == '/')continue;
       if(isdigit(*c)) {
-        for(int j=0;j<*c-'0';++j)f.board+=' ';
-      } else {
-        f.board += *c;
+        for(int j=0;j<*c-'0';++j, ++board_index)f.board+=' ';
+        continue;
       }
+      const pos_t ind = board::_pos(board::_x(board_index), 8 - board::_y(board_index));
+      f.board += *c;
+      switch(*c) {
+        case 'K':
+        {
+          kingpos[WHITE]=board::_x(ind);
+//          const char ch[] = {char('A' + kingpos[WHITE]), '\0'};
+//          str::pdebug("kingpos[WHITE]", ch);
+        }
+        break;
+        case 'k':
+        {
+          kingpos[BLACK]=board::_x(ind);
+//          const char ch[] = {char('A' + kingpos[BLACK]), '\0'};
+//          str::pdebug("kingpos[BLACK]", ch);
+        }
+        break;
+        case 'R':
+        if(board::_y(ind) == -1+1) {
+          if(kingpos[WHITE]==piece::uninitialized_pos) {
+            qrook[WHITE] = board::_x(ind);
+//            const char ch[] = {char('A' + qrook[WHITE]), '\0'};
+//            str::pdebug("qrook[WHITE]", ch);
+          } else {
+            krook[WHITE] = board::_x(ind);
+//            const char ch[] = {char('A' + krook[WHITE]), '\0'};
+//            str::pdebug("krook[WHITE]", ch);
+          }
+        }
+        break;
+        case 'r':
+        if(board::_y(ind) == -1+8) {
+          if(kingpos[BLACK]==piece::uninitialized_pos) {
+            qrook[BLACK] = board::_x(ind);
+//            const char ch[] = {char('A' + qrook[BLACK]), '\0'};
+//            str::pdebug("qrook[BLACK]", ch);
+          } else {
+            krook[BLACK] = board::_x(ind);
+//            const char ch[] = {char('A' + krook[BLACK]), '\0'};
+//            str::pdebug("krook[BLACK]", ch);
+          }
+        }
+        break;
+      }
+      ++board_index;
     }
+    assert(board_index == board::SIZE);
     assert(f.board.length() <= board::SIZE);
     // skip space
     while(isspace(s[i]))++i;
@@ -82,20 +115,63 @@ namespace fen {
     // skip space
     while(isspace(s[i]))++i;
     // castlings
-    piece_bitboard_t castlings = 0x00;
     while(!isspace(s[i])) {
-      assert(index("KkQqAHah-", s[i]) != nullptr);
-      pos_t blackline = board::SIZE-board::LEN;
+      assert(index("KkQqabcdefghABCDEFGH-", s[i]) != nullptr);
+      char c = s[i];
       switch(s[i]) {
-        case 'K':case 'H': castlings|=0x40ULL; break;
-        case 'Q':case 'A': castlings|=0x04ULL; break;
-        case 'k':case 'h': castlings|=0x40ULL<<blackline; break;
-        case 'q':case 'a': castlings|=0x04ULL<<blackline; break;
+        case 'K':
+          c='A'+krook[WHITE];
+//          {
+//            const char ch[2] = {char(c), '\0'};
+//            str::pdebug("convert K", ch);
+//          }
+          assert(krook[WHITE] != piece::uninitialized_pos);
+        break;
+        case 'Q':
+          c='A'+qrook[WHITE];
+//          {
+//            const char ch[2] = {char(c), '\0'};
+//            str::pdebug("convert Q", ch);
+//          }
+          assert(qrook[WHITE] != piece::uninitialized_pos);
+        break;
+        case 'k':
+          c='a'+krook[BLACK];
+//          {
+//            const char ch[2] = {char(c), '\0'};
+//            str::pdebug("convert k", ch);
+//          }
+          assert(krook[BLACK] != piece::uninitialized_pos);
+        break;
+        case 'q':
+          c='a'+qrook[BLACK];
+//          {
+//            const char ch[2] = {char(c), '\0'};
+//            str::pdebug("convert q", ch);
+//          }
+          assert(qrook[BLACK] != piece::uninitialized_pos);
+        break;
         case '-':break;
+        default:;break;
+      }
+      if(isupper(c)) {
+        const pos_t castlfile = c - 'A';
+        assert(castlfile == qrook[WHITE] || castlfile == krook[WHITE]);
+        if(kingpos[WHITE] != E || (castlfile != A && castlfile != H)) {
+          f.traditional = false;
+        }
+        f.castlings |= bitmask::_pos_pair(1u << (c - 'A'), 0x00);
+      } else if(c != '-') {
+        const pos_t castlfile = c - 'a';
+        assert(castlfile == qrook[BLACK] || castlfile == krook[BLACK]);
+        if(kingpos[BLACK] != E || (castlfile != A && castlfile != H)) {
+          f.traditional = false;
+        }
+        f.castlings |= bitmask::_pos_pair(0x00, 1u << (c - 'a'));
       }
       ++i;
     }
-    f.castling_compressed = fen::compress_castlings(castlings);
+//    str::pdebug("traditional", f.traditional);
     // skip space
     while(isspace(s[i]))++i;
     // enpassant
@@ -122,6 +198,7 @@ namespace fen {
     }
     int sc;
     sc = sscanf(&s[i], "%hhu %hu", &f.halfmove_clock, &f.fullmove);
+    if(f.fullmove == 0)++f.fullmove;
     assert(sc != -1);
     i += sc;
     // done
@@ -149,6 +226,7 @@ namespace fen {
 
   std::string export_as_string(const fen::FEN &f) {
     std::string s = ""s;
+    pos_t kingpos[2] = {piece::uninitialized_pos, piece::uninitialized_pos};
     for(pos_t y = 0; y < board::LEN; ++y) {
       pos_t emptycount = 0;
       for(pos_t x = 0; x < board::LEN; ++x) {
@@ -162,6 +240,11 @@ namespace fen {
           emptycount = 0;
         }
         s += f.board[ind];
+        if(f.board[ind] == 'K') {
+          kingpos[WHITE] = ind;
+        } else if(f.board[ind] == 'k') {
+          kingpos[BLACK] = ind;
+        }
       }
       if(emptycount > 0) {
         s += std::to_string(emptycount);
@@ -172,13 +255,28 @@ namespace fen {
     s += ' ';
     s += (f.active_player == WHITE) ? 'w' : 'b';
     s += ' ';
-    if(!f.castling_compressed) {
+    if(!f.castlings) {
       s += '-';
     } else {
-      if(f.castling_compressed & (0x1 << 3))s+='K';
-      if(f.castling_compressed & (0x1 << 2))s+='Q';
-      if(f.castling_compressed & (0x1 << 1))s+='k';
-      if(f.castling_compressed & (0x1 << 0))s+='q';
+      for(COLOR color : {WHITE, BLACK}) {
+        const pos_t mask = (color == WHITE) ? bitmask::first(f.castlings) : bitmask::second(f.castlings);
+        for(pos_t _c = 0; _c < board::LEN; ++_c) {
+          const pos_t c = board::LEN - _c - 1;
+          if(mask & (1 << c)) {
+            char ch = ((color == WHITE) ? 'A' : 'a') + c;
+            if(f.traditional) {
+              switch(ch) {
+                case 'H':ch='K';break;
+                case 'A':ch='Q';break;
+                case 'h':ch='k';break;
+                case 'a':ch='q';break;
+                default:break;
+              }
+            }
+            s += ch;
+          }
+        }
+      }
     }
     s += ' ';
     s += (f.enpassant == board::enpassantnotrace) ? "-"s : board::_pos_str(f.enpassant);
@@ -188,7 +286,6 @@ namespace fen {
 
   std::string export_as_string(const Board &board) {
     std::string s = export_as_string(export_from_board(board));
-    assert(s == export_as_string(fen::load_from_string(s)));
     return s;
   }
 } // namespace fen
