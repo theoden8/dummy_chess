@@ -83,7 +83,7 @@ struct Interface {
     } else if(x==cursor_x&&y==cursor_y) {
       attron(COLOR_PAIR(NC_COLOR_SELECTION));
       return;
-    } else if(board.enpassant_trace() != board::enpassantnotrace && board.enpassant_trace() == board::_pos(A+x,1+y)) {
+    } else if(board.enpassant_trace() != board::nopos && board.enpassant_trace() == board::_pos(A+x,1+y)) {
       attron(COLOR_PAIR(NC_COLOR_ENPASSANT));
       return;
     }

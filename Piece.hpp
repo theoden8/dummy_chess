@@ -200,7 +200,6 @@ namespace piece {
   }
 
 
-  constexpr pos_t uninitialized_pos = 0xff;
   INLINE piece_bitboard_t get_king_attack(pos_t pos) {
     return M42::king_attacks(pos);
   }

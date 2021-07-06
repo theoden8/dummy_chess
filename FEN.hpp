@@ -41,15 +41,15 @@ namespace fen {
       .board=""s,
       .active_player=WHITE,
       .castlings=0x00,
-      .enpassant=board::enpassantnotrace,
+      .enpassant=board::nopos,
       .halfmove_clock=0,
       .fullmove=0,
       .traditional=true
     };
     // board
-    pos_t kingpos[2] = {piece::uninitialized_pos, piece::uninitialized_pos};
-    pos_t qrook[2] = {piece::uninitialized_pos, piece::uninitialized_pos};
-    pos_t krook[2] = {piece::uninitialized_pos, piece::uninitialized_pos};
+    pos_t kingpos[2] = {board::nopos, board::nopos};
+    pos_t qrook[2] = {board::nopos, board::nopos};
+    pos_t krook[2] = {board::nopos, board::nopos};
     pos_t board_index = 0;
 //    str::pdebug("FEN", s);
     for(const char *c = s.c_str(); *c != '\0' && *c != ' '; ++c, ++i) {
@@ -77,7 +77,7 @@ namespace fen {
         break;
         case 'R':
         if(board::_y(ind) == -1+1) {
-          if(kingpos[WHITE]==piece::uninitialized_pos) {
+          if(kingpos[WHITE]==board::nopos) {
             qrook[WHITE] = board::_x(ind);
 //            const char ch[] = {char('A' + qrook[WHITE]), '\0'};
 //            str::pdebug("qrook[WHITE]", ch);
@@ -90,7 +90,7 @@ namespace fen {
         break;
         case 'r':
         if(board::_y(ind) == -1+8) {
-          if(kingpos[BLACK]==piece::uninitialized_pos) {
+          if(kingpos[BLACK]==board::nopos) {
             qrook[BLACK] = board::_x(ind);
 //            const char ch[] = {char('A' + qrook[BLACK]), '\0'};
 //            str::pdebug("qrook[BLACK]", ch);
@@ -125,7 +125,7 @@ namespace fen {
 //            const char ch[2] = {char(c), '\0'};
 //            str::pdebug("convert K", ch);
 //          }
-          assert(krook[WHITE] != piece::uninitialized_pos);
+          assert(krook[WHITE] != board::nopos);
         break;
         case 'Q':
           c='A'+qrook[WHITE];
@@ -133,7 +133,7 @@ namespace fen {
 //            const char ch[2] = {char(c), '\0'};
 //            str::pdebug("convert Q", ch);
 //          }
-          assert(qrook[WHITE] != piece::uninitialized_pos);
+          assert(qrook[WHITE] != board::nopos);
         break;
         case 'k':
           c='a'+krook[BLACK];
@@ -141,7 +141,7 @@ namespace fen {
 //            const char ch[2] = {char(c), '\0'};
 //            str::pdebug("convert k", ch);
 //          }
-          assert(krook[BLACK] != piece::uninitialized_pos);
+          assert(krook[BLACK] != board::nopos);
         break;
         case 'q':
           c='a'+qrook[BLACK];
@@ -149,7 +149,7 @@ namespace fen {
 //            const char ch[2] = {char(c), '\0'};
 //            str::pdebug("convert q", ch);
 //          }
-          assert(qrook[BLACK] != piece::uninitialized_pos);
+          assert(qrook[BLACK] != board::nopos);
         break;
         case '-':break;
         default:;break;
@@ -185,7 +185,7 @@ namespace fen {
       y -= '1';
       f.enpassant = board::_pos(A+x, 1+y);
     } else {
-      f.enpassant = board::enpassantnotrace;
+      f.enpassant = board::nopos;
       ++i;
     }
     // skip space
@@ -226,7 +226,7 @@ namespace fen {
 
   std::string export_as_string(const fen::FEN &f) {
     std::string s = ""s;
-    pos_t kingpos[2] = {piece::uninitialized_pos, piece::uninitialized_pos};
+    pos_t kingpos[2] = {board::nopos, board::nopos};
     for(pos_t y = 0; y < board::LEN; ++y) {
       pos_t emptycount = 0;
       for(pos_t x = 0; x < board::LEN; ++x) {
@@ -279,7 +279,7 @@ namespace fen {
       }
     }
     s += ' ';
-    s += (f.enpassant == board::enpassantnotrace) ? "-"s : board::_pos_str(f.enpassant);
+    s += (f.enpassant == board::nopos) ? "-"s : board::_pos_str(f.enpassant);
     s += " "s + std::to_string(f.halfmove_clock) + " "s + std::to_string(f.fullmove);
     return s;
   }

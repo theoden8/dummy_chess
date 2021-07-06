@@ -27,14 +27,8 @@ inline constexpr COLOR enemy_of(COLOR c) {
 
 typedef enum : pos_t { KING_SIDE, QUEEN_SIDE } CASTLING_SIDE;
 
-enum {
-  A,B,C,D,E,F,G,H
-} BOARD_FILE;
+enum { A,B,C,D,E,F,G,H } BOARD_FILE;
 
-/*! \enum
- *
- *  Detailed description
- */
 typedef enum : pos_t {
   A1, B1, C1, D1, E1, F1, G1, H1,
   A2, B2, C2, D2, E2, F2, G2, H2,
@@ -54,14 +48,14 @@ namespace board {
                   PROMOTE_BISHOP = 1<<6,
                   PROMOTE_ROOK = 2<<6,
                   PROMOTE_QUEEN = 3<<6;
-  constexpr move_t nomove = bitmask::_pos_pair(0xff, 0xff);
+  constexpr pos_t nopos = 0xff;
+  constexpr move_t nomove = bitmask::_pos_pair(nopos, nopos);
   constexpr ply_index_t nocastlings = INT16_MAX;
   constexpr pos_t CASTLING_K_WHITE = 0,
                   CASTLING_Q_WHITE = 1,
                   CASTLING_K_BLACK = 2,
                   CASTLING_Q_BLACK = 3;
   constexpr pos_t NO_PIECE_INDICES = int(NO_PIECES)*int(NO_COLORS) + 1;
-  constexpr pos_t enpassantnotrace = (1 << 6) - 1;
 
   INLINE PIECE get_promotion_as(pos_t j) {
     switch(j & ~board::MOVEMASK) {

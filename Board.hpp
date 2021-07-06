@@ -82,7 +82,7 @@ public:
   board_state state;
   std::vector<board_state> state_hist;
 
-  std::array<pos_t, 2> pos_king = {piece::uninitialized_pos, piece::uninitialized_pos};
+  std::array<pos_t, 2> pos_king = {board::nopos, board::nopos};
   ply_index_t state_hist_repetitions = INT16_MAX;
 
   const std::array<Piece, 2*6+1>  pieces = {
@@ -246,12 +246,12 @@ public:
     if(bits[WHITE] & i_mask) {
       piece::unset_pos(bits[WHITE], i);
 //      if(self[i].value == KING && pos_king[WHITE] == i) {
-//        pos_king[WHITE] = piece::uninitialized_pos;
+//        pos_king[WHITE] = board::nopos;
 //      }
     } else if(bits[BLACK] & i_mask) {
       piece::unset_pos(bits[BLACK], i);
 //      if(self[i].value == KING && pos_king[BLACK] == i) {
-//        pos_king[BLACK] = piece::uninitialized_pos;
+//        pos_king[BLACK] = board::nopos;
 //      }
     }
     if(bits_pawns & i_mask) {
@@ -314,7 +314,7 @@ public:
 
   INLINE bool is_enpassant_take_move(pos_t i, pos_t j) const {
     assert(j <= board::MOVEMASK);
-    return (bits_pawns & piece::pos_mask(i)) && j == enpassant_trace() && j != board::enpassantnotrace;
+    return (bits_pawns & piece::pos_mask(i)) && j == enpassant_trace();
   }
 
   INLINE bool is_promotion_move(pos_t i, pos_t j) const {
@@ -378,22 +378,22 @@ public:
   }
 
   INLINE pos_t enpassant_trace() const {
-    if(state_hist_enpassants.empty())return board::enpassantnotrace;
+    if(state_hist_enpassants.empty())return board::nopos;
     const auto [ply, e] = state_hist_enpassants.back();
     if(ply == get_current_ply()) {
       return e;
     }
-    return board::enpassantnotrace;
+    return board::nopos;
   }
 
   INLINE pos_t enpassant_pawn() const {
-    if(enpassant_trace() == board::enpassantnotrace)return 0xFF;
+    if(enpassant_trace() == board::nopos)return 0xFF;
     const pos_t x = board::_x(enpassant_trace());
     return board::_y(enpassant_trace()) == 3-1 ? board::_pos(A+x, 4) : board::_pos(A+x, 5);
   }
 
   INLINE void set_enpassant(pos_t e) {
-    if(e != board::enpassantnotrace) {
+    if(e != board::nopos) {
       state_hist_enpassants.emplace_back(get_current_ply(), e);
     }
   }
@@ -483,7 +483,7 @@ public:
     if(is_castling(WHITE,KING_SIDE) )zb^=zobrist::rnd_hashes[zobrist::rnd_start_castlings + 1];
     if(is_castling(BLACK,QUEEN_SIDE))zb^=zobrist::rnd_hashes[zobrist::rnd_start_castlings + 2];
     if(is_castling(BLACK,KING_SIDE) )zb^=zobrist::rnd_hashes[zobrist::rnd_start_castlings + 3];
-    if(enpassant_trace() != board::enpassantnotrace) {
+    if(enpassant_trace() != board::nopos) {
       zb ^= zobrist::rnd_hashes[zobrist::rnd_start_enpassant + board::_x(enpassant_trace())];
     }
     if(activePlayer() == BLACK) {
@@ -587,7 +587,7 @@ public:
       state_hist_halfmoves.emplace_back(get_current_ply());
     } else {
       const bool killmove = !self.empty_at_pos(j);
-      pos_t new_enpassant = board::enpassantnotrace;
+      pos_t new_enpassant = board::nopos;
       if(is_doublepush_move(i, j)) {
         const COLOR c = activePlayer();
         new_enpassant = piece::get_pawn_enpassant_trace(c, i, j);
@@ -906,7 +906,7 @@ public:
       if(!doublecheck) {
         const pos_t etrace = enpassant_trace();
         piece_bitboard_t foes_pawn = foes;
-        if(etrace != board::enpassantnotrace && c == activePlayer()) {
+        if(etrace != board::nopos && c == activePlayer()) {
           foes_pawn |= piece::pos_mask(etrace);
         }
         bitmask::foreach(bits_pawns & bits[c], [&](pos_t pos) mutable noexcept -> void {
@@ -939,7 +939,7 @@ public:
     const COLOR c = activePlayer();
     const pos_t etrace = enpassant_trace();
     const pos_t epawn = enpassant_pawn();
-    if(etrace == board::enpassantnotrace)return;
+    if(etrace == board::nopos)return;
     if(!bitmask::is_exp2(state.checkline[c]))return;
     const pos_t attacker = bitmask::log2_of_exp2(state.checkline[c]);
     if(epawn != attacker)return;
@@ -996,7 +996,7 @@ public:
   }
 
   void init_horizontal_enpassant_pin() {
-    if(enpassant_trace() == board::enpassantnotrace)return;
+    if(enpassant_trace() == board::nopos)return;
     const COLOR c = activePlayer();
     const COLOR ec = enemy_of(c);
     const pos_t r = (c == WHITE) ? -1+5 : -1+4;
