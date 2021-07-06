@@ -524,6 +524,7 @@ public:
       const piece_bitboard_t knights = get_knight_bits();
       const COLOR c = activePlayer();
       const pos_t castlrank = (c == WHITE) ? 1 : 8;
+      const pos_t k_i = i;
       pos_t k_j = j;
       if(!traditional) {
         if(j == board::_pos(qcastlrook[c], castlrank)) {
@@ -540,16 +541,20 @@ public:
       update_castlings(i, j);
       {
         if(k_j != r_i) {
-          piece::move_pos(bits[c], i, k_j);
+          piece::move_pos(bits[c], k_i, k_j);
+        } else {
+          piece::unset_pos(bits[c], k_i);
         }
         pos_king[c] = k_j;
       }
-      update_state_attacks_pos(i);
+      update_state_attacks_pos(k_i);
       update_state_attacks_pos(k_j);
       _update_pos_change(i, k_j);
       {
         if(k_j != r_i) {
           piece::move_pos(bits[c], r_i, r_j);
+        } else {
+          piece::set_pos(bits[c], r_j);
         }
         piece::move_pos(bits_slid_orth, r_i, r_j);
       }
