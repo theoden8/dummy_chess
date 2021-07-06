@@ -6,6 +6,7 @@
 #include <map>
 #include <chrono>
 #include <thread>
+#include <optional>
 #include <mutex>
 #include <atomic>
 
@@ -191,6 +192,10 @@ struct UCI {
     return "{"s + str::join(cmd, ", "s) + "}"s;
   }
 
+  std::map<std::string, std::pair<bool, bool>> boolOptions = {
+    {"UCI_Chess960"s, std::make_pair(false, false)},
+  };
+
   void process_cmd(std::vector<std::string> cmd) {
     str::pdebug("processing cmd", to_string(cmd));
     while(cmdmap.find(cmd.front()) == std::end(cmdmap)) {
@@ -204,6 +209,10 @@ struct UCI {
       case CMD_UCI:
         respond(RESP_ID, "name", "dummy_chess");
         respond(RESP_ID, "author", "$USER");
+        for(const auto &[name, args] : boolOptions) {
+          const auto &[deflt, _] = args;
+          respond(RESP_OPTION, "name"s, name, "type"s, "check"s, "default"s, deflt ? "true"s : "false"s);
+        }
         respond(RESP_UCIOK);
       return;
       case CMD_DEBUG:
@@ -219,6 +228,33 @@ struct UCI {
         respond(RESP_READYOK);
       return;
       case CMD_SETOPTION:
+      {
+        std::optional<std::string> name;
+        std::optional<bool> valueBool;
+        for(size_t i = 1; i < cmd.size(); ++i) {
+          if(cmd[i] == "name"s && cmd.size() > i + 1) {
+            name.emplace(cmd[++i]);
+            str::pdebug("name:", name.value());
+          } else if(cmd[i] == "value"s && cmd.size() > i + 1) {
+            ++i;
+            if(cmd[i] == "true"s) {
+              valueBool.emplace(true);
+            } else if(cmd[i] == "false"s) {
+              valueBool.emplace(false);
+            }
+            str::pdebug("value:", valueBool.value() ? "true"s : "false"s);
+          }
+        }
+        if(name.has_value()) {
+          if(valueBool.has_value() && boolOptions.find(name.value()) != boolOptions.end()) {
+            auto &[_, val] = boolOptions.at(name.value());
+            val = valueBool.value();
+            str::pdebug("set option", name.value(), val ? "true"s : "false"s);
+          }
+        } else {
+          str::perror("error: unknown option name");
+        }
+      }
         // no options
       return;
       case CMD_REGISTER:return;
