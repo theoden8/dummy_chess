@@ -114,7 +114,7 @@ struct StoreScope {
 };
 
 template <typename InnerObject>
-ALWAYS_INLINE decltype(auto) make_store_object_scope(ttable_ptr<InnerObject> &zb_store) {
+INLINE decltype(auto) make_store_object_scope(ttable_ptr<InnerObject> &zb_store) {
   return StoreScope<InnerObject>(zb_store);
 }
 

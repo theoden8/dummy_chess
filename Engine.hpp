@@ -567,7 +567,8 @@ public:
 
   float alpha_beta(float alpha, float beta, int16_t depth, MoveLine &pline,
                    zobrist::ttable<tt_ab_entry> &ab_ttable,
-                   zobrist::ttable<tt_eval_entry> &e_ttable)
+                   zobrist::ttable<tt_eval_entry> &e_ttable,
+                   const std::unordered_set<move_t> &searchmoves={})
   {
     if(depth == 0) {
       assert(pline.empty());
@@ -609,6 +610,9 @@ public:
     bool repetitions = false;
     for(size_t move_index = 0; move_index < moves.size(); ++move_index) {
       const auto [_, m] = moves[move_index];
+      if(!searchmoves.empty() && searchmoves.find(m) == searchmoves.end()) {
+        continue;
+      }
       MoveLine pline_alt = pline.branch_from_past();
       float score;
       if(move_index == 0) {
@@ -695,106 +699,25 @@ public:
                                                     zobrist::ttable<tt_eval_entry> &e_ttable,
                                                     F &&callback_f)
   {
-    if(depth == 0)return std::make_tuple(MATERIAL_KING, board::nomove);
-    std::vector<std::tuple<float, move_t, int16_t>> bestmoves;
-    iter_moves([&](pos_t i, pos_t j) mutable -> void {
-      float val = move_heuristic_see(i, j);
-      const move_t m = bitmask::_pos_pair(i, j);
-      if(searchmoves.empty() || searchmoves.find(m) != std::end(searchmoves)) {
-        bestmoves.emplace_back(-val,m,0);
+    MoveLine pline;
+    float eval = .0;
+    move_t m = board::nomove;
+    for(int16_t d = 1; d <= depth; ++d) {
+      if(check_line_terminates(pline) && int(pline.size()) < d) {
+        eval = get_pvline_score(pline);
+        break;
       }
-    });
-    std::sort(bestmoves.begin(), bestmoves.end());
-    std::map<move_t, MoveLine> pline;
-    bool should_stop_iddfs = false;
-    for(int16_t d = 0; d < depth; ++d) {
-      float eval_best = -MATERIAL_KING;
-      move_t m_best = board::nomove;
-      for(size_t i = 0; i < bestmoves.size() && !should_stop_iddfs; ++i) {
-        auto &[eval, m, _d] = bestmoves[i];
-        if(check_line_terminates(pline[m]) && int(pline[m].size()) <= _d) {
-          eval = get_pvline_score(pline[m]);
-          continue;
-        }
-        int16_t razoring_depth = 0;
-        if(!score_is_mate(eval)) {
-          if(eval_best - MATERIAL_PAWN > eval && d-2 > razoring_depth)++razoring_depth;
-          if(eval_best - MATERIAL_BISHOP > eval && d-2 > razoring_depth)++razoring_depth;
-          if(eval_best - MATERIAL_ROOK > eval && d-2 > razoring_depth)++razoring_depth;
-          if(eval_best - MATERIAL_QUEEN > eval && d-2 > razoring_depth)++razoring_depth;
-        }
-        int16_t target_depth = d - razoring_depth;
-        for(; _d <= d - razoring_depth; ++_d) {
-          {
-            debug.set_depth(_d + 1);
-            auto mscope = mline_scope(m, pline[m]);
-            const MoveLine mline = pline[m];
-            float new_eval = .0;
-            if(can_draw_repetition()) {
-              str::print("can draw repetition");
-              new_eval = -1e-4;
-            } else {
-              new_eval = -score_decay(alpha_beta(-MATERIAL_KING, MATERIAL_KING, _d, pline[m], ab_ttable, e_ttable));
-            }
-            const bool fail_low = (pline[m].size() < size_t(_d) && !check_line_terminates(pline[m]));
-            if(fail_low) {
-              pline[m] = mline;
-            } else {
-              eval = new_eval;
-              if(eval > eval_best) {
-                eval_best = eval;
-                m_best = m;
-              }
-            }
-          }
-          debug.check_score(_d+1, eval, pline[m]);
-          str::pdebug("IDDFS:", _d+1, "move:", pgn::_move_str(self, m), "eval:", eval, pgn::_line_str_full(self, pline[m]));
-          assert(pline[m].front() == m && m_best != board::nomove);
-          //if(d+1==depth)str::pdebug("eval:", eval, "move:", _move_str(m), "pvline", _line_str(pline[m]));
-          {
-            // check that search was successful
-            auto [best_eval, best_m, best_d] = *std::max_element(bestmoves.begin(), bestmoves.end());
-            if(best_m == m)++best_d;
-            assert(pline[best_m].size() >= size_t(best_d) || check_line_terminates(pline[best_m]));
-            if(!callback_f(best_d, best_m, best_eval, pline[best_m], m)
-                || (score_is_mate(best_eval) && best_d > 0 && int(pline[best_m].size()) <= best_d))
-            {
-              ++_d;
-              should_stop_iddfs = true;
-              break;
-            }
-          }
-          razoring_depth = 0;
-          if(!score_is_mate(eval)) {
-            if(eval_best - MATERIAL_PAWN > eval && d-2 > razoring_depth)++razoring_depth;
-            if(eval_best - MATERIAL_BISHOP > eval && d-2 > razoring_depth)++razoring_depth;
-            if(eval_best - MATERIAL_ROOK > eval && d-2 > razoring_depth)++razoring_depth;
-            if(eval_best - MATERIAL_QUEEN > eval && d-2 > razoring_depth)++razoring_depth;
-          }
-          if(should_stop_iddfs)break;
-        }
-        if(should_stop_iddfs)break;
-      }
+      eval = alpha_beta(-MATERIAL_KING, MATERIAL_KING, d, pline, ab_ttable, e_ttable);
+      m = pline[0];
+      debug.check_score(d, eval, pline);
+      if(!callback_f(d, m, eval, pline, board::nomove)
+          || (score_is_mate(eval) && d > 0 && int(pline.size()) < d))
       {
-        // check that search was successful
-        auto [best_eval, best_m, best_d] = *std::max_element(bestmoves.begin(), bestmoves.end());
-        assert(pline[m_best].size() >= size_t(best_d) || check_line_terminates(pline[m_best]));
-        callback_f(best_d, best_m, best_eval, pline[best_m], best_m);
+        break;
       }
-      std::sort(bestmoves.begin(), bestmoves.end());
-      std::reverse(bestmoves.begin(), bestmoves.end());
-      const auto &[best_eval, best_m, best_d] = *std::max_element(bestmoves.begin(), bestmoves.end());
-      str::pdebug("depth:", best_d+1, "pline:", pgn::_line_str(self, pline[best_m]), "size:", pline[best_m].size(), "eval", best_eval);
-      if(should_stop_iddfs)break;
+      str::pdebug("depth:", d, "pline:", pgn::_line_str(self, pline), "size:", pline.size(), "eval", eval);
     }
-    {
-      // check that search was successful
-      const auto &[best_eval, best_m, best_d] = *std::max_element(bestmoves.begin(), bestmoves.end());
-      callback_f(best_d, best_m, best_eval, pline[best_m], best_m);
-    }
-    if(bestmoves.empty())return std::make_tuple(-MATERIAL_KING, board::nomove);
-    const auto [best_eval, best_m, best_d] = bestmoves.front();
-    return std::make_tuple(best_eval, best_m);
+    return std::make_pair(eval, m);
   }
 
   size_t nodes_searched = 0;
