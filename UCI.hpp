@@ -445,7 +445,7 @@ struct UCI {
     inctime = std::max(inctime - 2., inctime * .5);
     double tottime = engine->activePlayer() == WHITE ? args.wtime : args.btime;
     tottime = std::max(std::max(tottime - 2., (tottime - .2) * .7), tottime * .5);
-    double movetime = args.infinite ? DBL_MAX : std::min(60., tottime / 40. + inctime);
+    double movetime = args.infinite ? DBL_MAX : std::min(10., tottime / 40. + inctime);
     if(args.movetime!=DBL_MAX)movetime=std::max(args.movetime - 1., args.movetime * .5);
     // time/note counting
     const auto start = system_clock::now();

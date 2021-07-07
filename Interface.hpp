@@ -396,7 +396,7 @@ struct Interface {
         break;
       case ' ':
         {
-          move_t m = board.get_fixed_depth_move(6);
+          move_t m = board.get_fixed_depth_move_iddfs(6);
           if(m != board::nomove) {
             pgn.handle_move(m);
           }

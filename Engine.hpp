@@ -565,9 +565,11 @@ public:
     return moves;
   }
 
+  template <typename F>
   float alpha_beta(float alpha, float beta, int16_t depth, MoveLine &pline,
                    zobrist::ttable<tt_ab_entry> &ab_ttable,
                    zobrist::ttable<tt_eval_entry> &e_ttable,
+                   int16_t initdepth, F &&callback_f,
                    const std::unordered_set<move_t> &searchmoves={})
   {
     if(depth == 0) {
@@ -608,10 +610,17 @@ public:
     }
     float bestscore = -FLT_MAX;
     bool repetitions = false;
+    bool should_stop = false;
     for(size_t move_index = 0; move_index < moves.size(); ++move_index) {
       const auto [_, m] = moves[move_index];
       if(!searchmoves.empty() && searchmoves.find(m) == searchmoves.end()) {
         continue;
+      } else if(initdepth == depth) {
+        if(!callback_f(pline, bestscore, pline.front())) {
+          should_stop = true;
+          str::print("should stop");
+          break;
+        }
       }
       MoveLine pline_alt = pline.branch_from_past();
       float score;
@@ -624,7 +633,7 @@ public:
             ++nodes_searched;
             score = -1e-4;
           } else {
-            score = -score_decay(alpha_beta(-beta, -alpha, depth - 1, pline_alt, ab_ttable, e_ttable));
+            score = -score_decay(alpha_beta(-beta, -alpha, depth - 1, pline_alt, ab_ttable, e_ttable, initdepth, callback_f));
           }
         } // end move scope
         debug.update(depth, alpha, beta, bestscore, score, m, pline, pline_alt, "firstmove"s);
@@ -653,10 +662,10 @@ public:
               alpha = score;
             }
           } else {
-            score = -score_decay(alpha_beta(-alpha-1e-7, -alpha, depth - 1, pline_alt, ab_ttable, e_ttable));
+            score = -score_decay(alpha_beta(-alpha-1e-7, -alpha, depth - 1, pline_alt, ab_ttable, e_ttable, initdepth, callback_f));
             if(score > alpha && score < beta) {
               pline_alt.clear();
-              score = -score_decay(alpha_beta(-beta, -alpha, depth - 1, pline_alt, ab_ttable, e_ttable));
+              score = -score_decay(alpha_beta(-beta, -alpha, depth - 1, pline_alt, ab_ttable, e_ttable, initdepth, callback_f));
               if(score > alpha) {
                 alpha = score;
               }
@@ -679,6 +688,9 @@ public:
         }
       }
     };
+    if(should_stop) {
+      return bestscore;
+    }
     if(overwrite && m_best != board::nomove && !repetitions) {
       if(bestscore <= alpha) {
         if(tt_inactive_entry)++zb_occupied;
@@ -700,23 +712,43 @@ public:
                                                     F &&callback_f)
   {
     MoveLine pline;
-    float eval = .0;
+    float eval = -MATERIAL_KING;
     move_t m = board::nomove;
+    bool should_stop = false;
     for(int16_t d = 1; d <= depth; ++d) {
-      if(check_line_terminates(pline) && int(pline.size()) < d) {
+      if(!pline.empty() && check_line_terminates(pline) && int(pline.size()) < d) {
         eval = get_pvline_score(pline);
         break;
       }
-      eval = alpha_beta(-MATERIAL_KING, MATERIAL_KING, d, pline, ab_ttable, e_ttable);
-      m = pline[0];
+      int16_t new_depth = d - 1;
+      MoveLine new_pline = pline;
+      const float new_eval = alpha_beta(-MATERIAL_KING, MATERIAL_KING, d, new_pline, ab_ttable, e_ttable, d,
+        [&](const MoveLine &_pline, float _eval, move_t _m) mutable -> bool {
+          if(eval < _eval && _m != board::nomove) {
+            eval = _eval;
+            m = _m;
+            pline = _pline;
+            new_depth = d;
+            str::pdebug("IDDFS:", d, "pline:", pgn::_line_str(self, pline), "size:", pline.size(), "eval", eval);
+          }
+          return !(should_stop = !callback_f(new_depth, m, eval, pline, board::nomove));
+        }
+      );
+      if(should_stop) {
+        break;
+      } else {
+        eval = new_eval;
+        pline = new_pline;
+        m = pline.front();
+        new_depth = d;
+      }
       debug.check_score(d, eval, pline);
-      if(!callback_f(d, m, eval, pline, board::nomove)
-          || (score_is_mate(eval) && d > 0 && int(pline.size()) < d))
-      {
+      if(!callback_f(d, m, eval, pline, board::nomove) || (score_is_mate(eval) && d > 0 && int(pline.size()) < d)) {
         break;
       }
-      str::pdebug("depth:", d, "pline:", pgn::_line_str(self, pline), "size:", pline.size(), "eval", eval);
+      str::pdebug("IDDFS:", d, "pline:", pgn::_line_str(self, pline), "size:", pline.size(), "eval", eval);
     }
+    str::pdebug("return here");
     return std::make_pair(eval, m);
   }
 
@@ -744,7 +776,7 @@ public:
   }
 
   INLINE decltype(auto) make_callback_f() {
-    return [&](int16_t depth, move_t m, float eval, const MoveLine &pline, move_t ponder_m) mutable -> bool {
+    return [&](int16_t depth, move_t m, float eval, const MoveLine &pline, move_t ponder_m) -> bool {
       return true;
     };
   }
@@ -763,27 +795,6 @@ public:
 
   move_t get_fixed_depth_move_iddfs(int16_t depth, const std::unordered_set<move_t> &searchmoves={}) {
     return get_fixed_depth_move_iddfs(depth, make_callback_f(), searchmoves);
-  }
-
-  template <typename F>
-  move_t get_fixed_depth_move(int16_t depth, F &&callback_f, const std::unordered_set<move_t> &searchmoves) {
-    reset_planning();
-    auto [ab_store_scope, e_store_scope] = get_zobrist_alphabeta_scope();
-    MoveLine pline;
-    debug.set_depth(depth);
-    evaluation = alpha_beta(-MATERIAL_KING, MATERIAL_KING, depth, pline,
-                            ab_store_scope.get_object(), e_store_scope.get_object());
-    move_t m = get_random_move();
-    if(!pline.full().empty()) {
-      m = pline.full().front();
-    }
-    str::pdebug("pvline:", _line_str(pline, true), "size:", pline.size(), "eval:", evaluation);
-    assert(check_valid_sequence(pline));
-    return m;
-  }
-
-  move_t get_fixed_depth_move(int16_t depth, const std::unordered_set<move_t> &searchmoves={}) {
-    return get_fixed_depth_move(depth, make_callback_f(), searchmoves);
   }
 
   struct tt_perft_entry {

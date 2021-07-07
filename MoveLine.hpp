@@ -58,6 +58,9 @@ struct MoveLine {
   }
 
   INLINE move_t front() const {
+    if(empty()) {
+      return board::nomove;
+    }
     return line.front();
   }
 
@@ -113,9 +116,9 @@ struct MoveLine {
     return mainline == nullptr;
   }
 
-  INLINE const MoveLine *get_mainline() const {
+  INLINE const MoveLine &get_mainline() const {
     if(is_mainline()) {
-      return this;
+      return *this;
     }
     return mainline->get_mainline();
   }
@@ -131,14 +134,11 @@ struct MoveLine {
   }
 
   INLINE bool find_in_mainline(move_t m) const {
-    return get_mainline() != nullptr && get_mainline()->find(m, start & 1);
+    return get_mainline().find(m, start & 1);
   }
 
   INLINE move_t front_in_mainline() const {
-    if(get_mainline() == nullptr) {
-      return board::nomove;
-    }
-    const auto &m_line = get_mainline()->line;
+    const auto &m_line = get_mainline().line;
     if(start >= m_line.size()) {
       return board::nomove;
     }
@@ -146,11 +146,11 @@ struct MoveLine {
   }
 
   INLINE MoveLine get_future() const {
-    return MoveLine(std::vector<move_t>(begin(), end()), get_mainline());
+    return MoveLine(std::vector<move_t>(begin(), end()), mainline);
   }
 
   INLINE MoveLine get_past() const {
-    return MoveLine(std::vector<move_t>(line.begin(), begin()), get_mainline());
+    return MoveLine(std::vector<move_t>(line.begin(), begin()), mainline);
   }
 
   INLINE MoveLine as_past() const {
@@ -162,11 +162,7 @@ struct MoveLine {
   INLINE MoveLine branch_from_past() const {
     MoveLine mline = get_past();
     mline.start = start;
-    if(get_mainline() != nullptr) {
-      mline.mainline = get_mainline();
-    } else {
-      mline.mainline = this;
-    }
+    mline.mainline = &get_mainline();
     return mline;
   }
 

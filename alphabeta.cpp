@@ -13,7 +13,7 @@ int main(int argc, char *argv[]) {
   {
     decltype(auto) store_scopes = e.get_zobrist_alphabeta_scope();
     auto start = system_clock::now();
-    move_t m = e.get_fixed_depth_move(depth);
+    move_t m = e.get_fixed_depth_move_iddfs(depth);
     size_t nds = e.nodes_searched;
     auto stop = system_clock::now();
     long dur = duration_cast<nanoseconds>(stop-start).count();
