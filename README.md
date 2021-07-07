@@ -1,5 +1,8 @@
 # dummy chess
 
+* [**Source Code**](https://codeberg.org/theoden8/dummy_chess)
+* [**Challenge it**](https://lichess.org/@/theoden8_uci)
+
 ## building
 
 ```
