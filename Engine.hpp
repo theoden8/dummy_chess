@@ -616,9 +616,9 @@ public:
       if(!searchmoves.empty() && searchmoves.find(m) == searchmoves.end()) {
         continue;
       } else if(initdepth == depth) {
-        if(!callback_f(pline, bestscore, pline.front())) {
+        if(!callback_f(depth, bestscore)) {
           should_stop = true;
-          str::print("should stop");
+          str::pdebug("should stop");
           break;
         }
       }
@@ -723,13 +723,15 @@ public:
       int16_t new_depth = d - 1;
       MoveLine new_pline = pline;
       const float new_eval = alpha_beta(-MATERIAL_KING, MATERIAL_KING, d, new_pline, ab_ttable, e_ttable, d,
-        [&](const MoveLine &_pline, float _eval, move_t _m) mutable -> bool {
-          if(eval < _eval && _m != board::nomove) {
+        [&](int16_t _depth, float _eval) mutable -> bool {
+          const move_t _m = new_pline.front();
+          if(_depth == d && eval < _eval && _m != board::nomove) {
             eval = _eval;
             m = _m;
-            pline = _pline;
+            pline = new_pline;
             new_depth = d;
             str::pdebug("IDDFS:", d, "pline:", pgn::_line_str(self, pline), "size:", pline.size(), "eval", eval);
+            debug.check_score(d, eval, pline);
           }
           return !(should_stop = !callback_f(new_depth, m, eval, pline, board::nomove));
         }
