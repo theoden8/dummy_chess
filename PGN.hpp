@@ -130,8 +130,8 @@ struct PGN {
       }
     } else if(board.is_promotion_move(i, j)) {
       const PIECE becomewhat = board::get_promotion_as(promote_as);
-      const bool killmove = !board.empty_at_pos(j);
-      if(killmove) {
+      const bool is_capture = !board.empty_at_pos(j);
+      if(is_capture) {
         p += resolve_ambiguity(i, j);
         p += 'x';
       }
@@ -139,16 +139,16 @@ struct PGN {
       p += '=';
       p += toupper(board.pieces[Piece::get_piece_index(becomewhat, board.activePlayer())].str());
     } else {
-      const bool killmove = !board.empty_at_pos(j);
+      const bool is_capture = !board.empty_at_pos(j);
       p = "";
       // pawn takes pawn (not en-passant)
-      if(board[i].value==PAWN && board[j].value==PAWN && killmove && !LICHESS_COMPATIBILITY) {
+      if(board[i].value==PAWN && board[j].value==PAWN && is_capture && !LICHESS_COMPATIBILITY) {
         p += resolve_ambiguity(i, j);
         p += name_of_file(j);
       } else {
         p += piece_name(board[i]);
         p += resolve_ambiguity(i, j);
-        if(killmove)p+='x';
+        if(is_capture)p+='x';
         p += board::_pos_str(j);
       }
     }

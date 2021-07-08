@@ -8,7 +8,7 @@
 
 
 // pieces
-typedef enum { PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING, EMPTY, NO_PIECES=EMPTY } PIECE;
+typedef enum : pos_t { PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING, EMPTY, NO_PIECES=EMPTY } PIECE;
 
 // two bytes, one for each move; second byte may contain information about promotion (2 bits)
 typedef pos_pair_t move_t;
@@ -18,7 +18,7 @@ typedef int16_t ply_index_t;
 typedef uint64_t piece_bitboard_t;
 
 // player color, neutral when neither/both
-typedef enum { WHITE, BLACK, NEUTRAL, NO_COLORS=NEUTRAL, BOTH } COLOR;
+typedef enum : pos_t { WHITE, BLACK, NEUTRAL, NO_COLORS=NEUTRAL, BOTH } COLOR;
 
 inline constexpr COLOR enemy_of(COLOR c) {
   if(c == NEUTRAL)return NEUTRAL;

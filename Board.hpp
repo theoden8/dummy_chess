@@ -22,8 +22,13 @@ protected:
   size_t current_ply_ = 0;
 public:
   bool traditional;
-  pos_t kcastlrook[NO_COLORS] = {0xff, 0xff};
-  pos_t qcastlrook[NO_COLORS] = {0xff, 0xff};
+  pos_t kcastlrook[NO_COLORS] = {0xff, 0xff},
+        qcastlrook[NO_COLORS] = {0xff, 0xff};
+
+  bool crazyhouse;
+  piece_bitboard_t bits_promoted_pawns = 0ULL;
+  pos_t n_subs[NO_PIECES*NO_COLORS] = {0};
+
   struct board_info {
     COLOR active_player = NEUTRAL;
     pos_t enpassant;
@@ -67,9 +72,7 @@ public:
   std::vector<ply_index_t> state_hist_halfmoves;
 
   std::array<piece_bitboard_t, 2> bits = {0x00, 0x00};
-  piece_bitboard_t
-    bits_slid_diag=0x00, bits_slid_orth=0x00,
-    bits_pawns=0x00;
+  piece_bitboard_t bits_slid_diag = 0x00, bits_slid_orth = 0x00, bits_pawns = 0x00;
 
   struct board_state {
     using board_mailbox_t = std::array<piece_bitboard_t, board::SIZE>;
@@ -97,14 +100,14 @@ public:
   explicit Board(const fen::FEN &f):
     activePlayer_(f.active_player),
     current_ply_(f.fullmove * 2 - (f.active_player == WHITE ? 1 : 0)),
-    traditional(f.traditional)
+    traditional(f.traditional), crazyhouse(f.crazyhouse)
   {
-    state_hist_halfmoves.emplace_back(current_ply_ - f.halfmove_clock);
     if(!initialized_) {
       M42::init();
       zobrist::init();
       initialized_ = true;
     }
+    // board
     for(pos_t i = 0; i < board::SIZE; ++i) {
       set_pos(i, get_piece(EMPTY));
     }
@@ -124,7 +127,16 @@ public:
                   y = board::LEN - board::_y(i) - 1;
       put_pos(board::_pos(A+x, 1+y), get_piece(p, c));
     }
-//    std::cout << "castlings: " << std::bitset<16>(f.castlings) << std::endl;
+    // subs
+    if(crazyhouse) {
+      for(COLOR c : {WHITE, BLACK}) {
+        for(PIECE p : {PAWN, KNIGHT, BISHOP, ROOK, QUEEN}) {
+          const Piece piece = get_piece(p, c);
+          n_subs[piece.piece_index] = std::count(f.subs.begin(), f.subs.end(), piece.str());
+        }
+      }
+    }
+    // white castlings
     if(bitmask::first(f.castlings)) {
       const pos_t wcastlmask = bitmask::first(f.castlings);
       if(bitmask::log2_msb(wcastlmask) < board::_x(pos_king[WHITE])) {
@@ -141,6 +153,7 @@ public:
       unset_castling(WHITE, KING_SIDE);
       unset_castling(WHITE, QUEEN_SIDE);
     }
+    // black castlings
     if(bitmask::second(f.castlings)) {
       const pos_t bcastlmask = bitmask::second(f.castlings);
       if(bitmask::log2_msb(bcastlmask) < board::_x(pos_king[BLACK])) {
@@ -157,14 +170,14 @@ public:
       unset_castling(BLACK, KING_SIDE);
       unset_castling(BLACK, QUEEN_SIDE);
     }
-//    str::print(
-//      is_castling(WHITE, KING_SIDE),
-//      is_castling(WHITE, QUEEN_SIDE),
-//      is_castling(BLACK, KING_SIDE),
-//      is_castling(BLACK, QUEEN_SIDE)
-//    );
+    state_hist_halfmoves.emplace_back(current_ply_ - f.halfmove_clock);
     set_enpassant(f.enpassant);
-    init_update_state();
+    state_hist_halfmoves.reserve(piece::size(bits[WHITE] | bits[BLACK]) - 2);
+    state_hist_enpassants.reserve(16);
+    state_hist.reserve(100);
+    init_state_attacks();
+    init_state_moves();
+    update_state_info();
   }
 
   INLINE constexpr COLOR activePlayer() const {
@@ -586,18 +599,16 @@ public:
       _update_pos_change(i, j);
       state_hist_halfmoves.emplace_back(get_current_ply());
     } else {
-      const bool killmove = !self.empty_at_pos(j);
-      pos_t new_enpassant = board::nopos;
+      const COLOR c = activePlayer();
+      const bool is_capture = !self.empty_at_pos(j);
       if(is_doublepush_move(i, j)) {
-        const COLOR c = activePlayer();
-        new_enpassant = piece::get_pawn_enpassant_trace(c, i, j);
+        set_enpassant(piece::get_pawn_enpassant_trace(c, i, j));
       }
-      if(killmove || bits_pawns & piece::pos_mask(i)) {
+      if(is_capture || bits_pawns & piece::pos_mask(i)) {
         state_hist_halfmoves.emplace_back(get_current_ply());
       }
-      set_enpassant(new_enpassant);
       update_castlings(i, j);
-      if(!killmove) {
+      if(!is_capture) {
         move_pos_quiet(i, j);
       } else {
         move_pos(i, j);
@@ -693,15 +704,6 @@ public:
       rec.scope(m);
     }
     return is_draw() || !can_move() || can_draw_repetition();
-  }
-
-  INLINE void init_update_state() {
-    init_state_attacks();
-    init_state_moves();
-    state_hist_halfmoves.reserve(piece::size(bits[WHITE] | bits[BLACK]) - 2);
-    state_hist_enpassants.reserve(16);
-    state_hist.reserve(100);
-    update_state_info();
   }
 
   using board_mailbox_t = std::array <piece_bitboard_t, board::SIZE>;
@@ -1069,13 +1071,15 @@ public:
 
   fen::FEN export_as_fen() const {
     fen::FEN f = {
-      .board=""s,
       .active_player=activePlayer(),
+      .board=""s,
+      .subs=""s,
       .castlings=get_castlings_rook_mask(),
       .enpassant=enpassant_trace(),
       .halfmove_clock=get_halfmoves(),
       .fullmove=ply_index_t(((get_current_ply() - 1) / 2) + 1),
-      .traditional=traditional
+      .traditional=traditional,
+      .crazyhouse=crazyhouse,
     };
     for(pos_t y = 0; y < board::LEN; ++y) {
       for(pos_t x = 0; x < board::LEN; ++x) {
@@ -1084,6 +1088,16 @@ public:
           f.board += ' ';
         } else {
           f.board += self[ind].str();
+        }
+      }
+    }
+    if(f.crazyhouse) {
+      for(COLOR c : {WHITE, BLACK}) {
+        for(PIECE p : {QUEEN,ROOK,BISHOP,KNIGHT,PAWN}) {
+          Piece piece = get_piece(p, c);
+          for(pos_t i = 0; i < n_subs[piece.piece_index]; ++i) {
+            f.subs += piece.str();
+          }
         }
       }
     }

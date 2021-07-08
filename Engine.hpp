@@ -39,13 +39,6 @@ public:
     });
   }
 
-  template <typename F>
-  INLINE void iter_quiesc_moves(F &&func) const {
-    bitmask::foreach(bits[activePlayer()], [&](pos_t i) mutable -> void {
-      iter_quiesc_moves_from(i, func);
-    });
-  }
-
   INLINE size_t count_moves(COLOR c) const {
     assert(c == WHITE || c == BLACK);
     int16_t no_moves = 0;
@@ -453,7 +446,7 @@ public:
     float score = -MATERIAL_KING;
     float bestscore = -MATERIAL_KING;
 
-    const bool king_in_check = state.checkline[activePlayer()] != ~0ULL;
+    const bool king_in_check = state.checkline[activePlayer()] != bitmask::full;
     if(!king_in_check) {
       score = e_ttable_probe(e_ttable);
       debug.update_standpat(depth, alpha, beta, score, pline, nchecks);
@@ -551,7 +544,7 @@ public:
 
   decltype(auto) ab_get_ordered_moves(const MoveLine &pline, move_t firstmove=board::nomove) {
     std::vector<std::pair<float, move_t>> moves;
-    moves.reserve(16);
+    moves.reserve(32);
     iter_moves([&](pos_t i, pos_t j) mutable -> void {
       const move_t m = bitmask::_pos_pair(i, j);
       float val = .0;

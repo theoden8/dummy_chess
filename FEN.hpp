@@ -15,36 +15,37 @@ class Board;
 // https://www.chessprogramming.org/Forsyth-Edwards_Notation#Shredder-FEN
 namespace fen {
   typedef struct _FEN {
-    std::string board;
     COLOR active_player : 2;
+    std::string board;
+    std::string subs;
     pos_pair_t castlings;
     pos_t enpassant;
     pos_t halfmove_clock;
     ply_index_t fullmove;
     bool traditional;
+    bool crazyhouse;
 
     inline bool operator==(const struct _FEN &other) const {
-      return board == other.board && active_player == other.active_player
+      return active_player == other.active_player
+             && board == other.board && subs == other.subs
              && castlings == other.castlings
              && enpassant == other.enpassant && halfmove_clock == other.halfmove_clock
              && fullmove == other.fullmove;
-    }
-
-    inline bool operator!=(const struct _FEN &other) const {
-      return !operator==(other);
     }
   } FEN;
 
   FEN load_from_string(std::string s) {
     size_t i = 0;
     FEN f = {
-      .board=""s,
       .active_player=WHITE,
+      .board=""s,
+      .subs=""s,
       .castlings=0x00,
       .enpassant=board::nopos,
       .halfmove_clock=0,
       .fullmove=0,
-      .traditional=true
+      .traditional=true,
+      .crazyhouse=true,
     };
     // board
     pos_t kingpos[2] = {board::nopos, board::nopos};
@@ -52,8 +53,17 @@ namespace fen {
     pos_t krook[2] = {board::nopos, board::nopos};
     pos_t board_index = 0;
 //    str::pdebug("FEN", s);
+    size_t slashcount = 0;
     for(const char *c = s.c_str(); *c != '\0' && *c != ' '; ++c, ++i) {
-      if(*c == '/')continue;
+      assert(slashcount < 9);
+      if(*c == '/') {
+        ++slashcount;
+        continue;
+      }
+      if(slashcount == 8) {
+        f.crazyhouse = true;
+        f.subs += *c;
+      }
       if(isdigit(*c)) {
         for(int j=0;j<*c-'0';++j, ++board_index)f.board+=' ';
         continue;
@@ -251,6 +261,9 @@ namespace fen {
         emptycount = 0;
       }
       if(y != board::LEN - 1)s+="/";
+    }
+    if(f.crazyhouse) {
+      s += "/"s + f.subs;
     }
     s += ' ';
     s += (f.active_player == WHITE) ? 'w' : 'b';
