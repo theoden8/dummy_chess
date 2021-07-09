@@ -897,7 +897,6 @@ public:
   void init_state_moves() {
     for(auto&m:state.moves)m=0x00;
     if(is_draw_halfmoves()||is_draw_material())return;
-    // for efficiency set c = activePlayer()
     for(const COLOR c : {WHITE, BLACK}) {
 //    const COLOR c = activePlayer(); {
       init_state_checkline(c);

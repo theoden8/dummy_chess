@@ -3,7 +3,7 @@
 
 #include <cfloat>
 #include <algorithm>
-#include <list>
+#include <valarray>
 #include <map>
 
 #include <FEN.hpp>
@@ -81,7 +81,7 @@ public:
                          MATERIAL_BISHOP = 3.25,
                          MATERIAL_ROOK = 5,
                          MATERIAL_QUEEN = 10,
-                         MATERIAL_KING = 1e7;
+                         MATERIAL_KING = 1e4;
   std::vector<PIECE> MATERIAL_PIECE_ORDERING;
 
   static constexpr float MATERIALS[] = {
@@ -257,7 +257,7 @@ public:
   }
 
   INLINE bool score_is_mate(float score) const {
-    return std::abs(score) > MATERIAL_KING * 1e-2;
+    return std::abs(score) > MATERIAL_KING - 2000;
   }
 
   INLINE float score_decay(float score) const {
@@ -700,12 +700,12 @@ public:
 
   template <typename F>
   decltype(auto) iterative_deepening_dfs(int16_t depth, const std::unordered_set<move_t> &searchmoves,
-                                                    zobrist::ttable<tt_ab_entry> &ab_ttable,
-                                                    zobrist::ttable<tt_eval_entry> &e_ttable,
-                                                    F &&callback_f)
+                                         zobrist::ttable<tt_ab_entry> &ab_ttable,
+                                         zobrist::ttable<tt_eval_entry> &e_ttable,
+                                         F &&callback_f)
   {
     MoveLine pline;
-    float eval = -MATERIAL_KING;
+    float eval = .0;
     move_t m = board::nomove;
     bool should_stop = false;
     for(int16_t d = 1; d <= depth; ++d) {
@@ -713,29 +713,44 @@ public:
         eval = get_pvline_score(pline);
         break;
       }
-      int16_t new_depth = d - 1;
+      const float eval_prev = eval;
+      const std::valarray<float> aspiration_window = {.15, 1.25, MATERIAL_QUEEN - 1};
+      pos_t aw_index_alpha = 0, aw_index_beta = 0;
       MoveLine new_pline = pline;
-      const float new_eval = alpha_beta(-MATERIAL_KING, MATERIAL_KING, d, new_pline, ab_ttable, e_ttable, d,
-        [&](int16_t _depth, float _eval) mutable -> bool {
-          const move_t _m = new_pline.front();
-          if(_depth == d && eval < _eval && _m != board::nomove) {
-            eval = _eval;
-            m = _m;
-            pline = new_pline;
-            new_depth = d;
-            str::pdebug("IDDFS:", d, "pline:", pgn::_line_str(self, pline), "size:", pline.size(), "eval", eval);
-            debug.check_score(d, eval, pline);
-          }
-          return !(should_stop = !callback_f(new_depth, m, eval, pline, board::nomove));
+      do {
+        float aw_alpha = -MATERIAL_KING, aw_beta = MATERIAL_KING;
+        if(aw_index_alpha < aspiration_window.size()) {
+          aw_alpha = eval_prev - aspiration_window[aw_index_alpha];
         }
-      );
+        if(aw_index_beta < aspiration_window.size()) {
+          aw_beta = eval_prev + aspiration_window[aw_index_beta];
+        }
+        const bool final_window = (aw_index_alpha == aspiration_window.size() && aw_index_beta == aspiration_window.size());
+        str::pdebug("depth:", d, "aw", aw_alpha, aw_beta);
+        //MoveLine new_pline = pline;
+        int16_t new_depth = d - 1;
+        const float new_eval = alpha_beta(aw_alpha, aw_beta, d, new_pline, ab_ttable, e_ttable, d,
+          [&](int16_t _depth, float _eval) mutable -> bool {
+            const move_t _m = new_pline.front();
+            if(_depth == d && final_window && eval < _eval && _m != board::nomove) {
+              eval=_eval, m=_m, pline=new_pline, new_depth=d;
+              str::pdebug("IDDFS:", d, "pline:", pgn::_line_str(self, pline), "size:", pline.size(), "eval", eval);
+              debug.check_score(d, eval, pline);
+            }
+            return !(should_stop = !callback_f(new_depth, m, eval, pline, board::nomove));
+          }, searchmoves);
+        if(new_eval < aw_alpha) {
+          ++aw_index_alpha;
+        } else if(new_eval > aw_beta) {
+          ++aw_index_beta;
+        } else {
+          eval=new_eval, m=new_pline.front(), pline=new_pline, new_depth=d;
+          break;
+        }
+        if(should_stop)break;
+      } while(1);
       if(should_stop) {
         break;
-      } else {
-        eval = new_eval;
-        pline = new_pline;
-        m = pline.front();
-        new_depth = d;
       }
       debug.check_score(d, eval, pline);
       if(!callback_f(d, m, eval, pline, board::nomove) || (score_is_mate(eval) && d > 0 && int(pline.size()) < d)) {

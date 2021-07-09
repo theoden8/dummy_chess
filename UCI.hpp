@@ -418,7 +418,9 @@ struct UCI {
     if(!engine->score_is_mate(score)) {
       s += std::to_string(int(round(score * 1e2)));
     } else {
-      s += std::to_string(engine->score_mate_in(score) / 2 + 1);
+      int16_t mate_in_ply = engine->score_mate_in(score);
+      mate_in_ply -= (mate_in_ply < 0) ? 1 : -1;
+      s += std::to_string(mate_in_ply / 2);
     }
     return s;
   }
