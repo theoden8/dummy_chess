@@ -34,7 +34,7 @@ namespace fen {
     }
   } FEN;
 
-  FEN load_from_string(std::string s) {
+  FEN load_from_string(const std::string &s) {
     size_t i = 0;
     FEN f = {
       .active_player=WHITE,
@@ -215,7 +215,7 @@ namespace fen {
     return f;
   }
 
-  FEN load_from_file(std::string fname) {
+  FEN load_from_file(const std::string &fname) {
     FILE *fp = fopen(fname.c_str(), "r");
     assert(fp != nullptr);
     std::string s; char c;
@@ -231,6 +231,7 @@ namespace fen {
   const FEN check_test_pos = fen::load_from_string("rnbqkb1r/pppp1ppp/5n2/4N3/8/8/PPPPQPPP/RNB1KB1R w KQkq - 2 5"s);
   const FEN promotion_test_pos = fen::load_from_string("1k3n1n/4PPP1/8/8/8/8/1pp1PPPP/4K3 w - - 0 1"s);
   const FEN search_explosion_pos = fen::load_from_string("q2k2q1/2nqn2b/1n1P1n1b/2rnr2Q/1NQ1QN1Q/3Q3B/2RQR2B/Q2K2Q1 w - -"s);
+  const FEN quiesc_fork_position = fen::load_from_string("r1b1k2r/pp1p1ppp/3pp3/1Nb4q/1n2PPnN/1P1P2P1/P1P4P/R1BQKB1R w KQkq - 0 1"s);
 
   FEN export_from_board(const Board &board);
 
@@ -298,7 +299,6 @@ namespace fen {
   }
 
   std::string export_as_string(const Board &board) {
-    std::string s = export_as_string(export_from_board(board));
-    return s;
+    return export_as_string(export_from_board(board));
   }
 } // namespace fen

@@ -153,6 +153,11 @@ struct MoveLine {
     return MoveLine(std::vector<move_t>(line.begin(), begin()), mainline);
   }
 
+  INLINE move_t get_previous_move() const {
+    if(start == 0)return board::nomove;
+    return line[start - 1];
+  }
+
   INLINE MoveLine as_past() const {
     MoveLine mline = *this;
     mline.start = line.size();

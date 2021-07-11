@@ -11,6 +11,7 @@ struct DebugTracer {
   using tt_ab_entry = typename EngineT::tt_ab_entry;
 
   EngineT &engine;
+  bool show_everything = true;
   MoveLine debug_moveline = MoveLine(std::vector<move_t>{
   });
   board_info debug_board_info;
@@ -84,7 +85,7 @@ struct DebugTracer {
 
   bool filter_moveline(const MoveLine &pline_alt) {
     return (!debug_moveline.empty() && pline_alt.full().startswith(debug_moveline))
-      || engine.state.info == debug_board_info;
+      || engine.state.info == debug_board_info || show_everything;
   }
 
   void update(int16_t depth, double alpha, double beta, double bestscore, double score, move_t m,
