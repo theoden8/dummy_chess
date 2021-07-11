@@ -267,7 +267,7 @@ struct Piece {
   pos_t piece_index;
 
   static INLINE constexpr pos_t get_piece_index(PIECE p, COLOR c) {
-    return (p==EMPTY) ? int(NO_PIECES)*int(NO_COLORS) : int(p)*(int)NO_COLORS+c;
+    return (p==EMPTY) ? int(NO_PIECES)*int(NO_COLORS) : int(p)*int(NO_COLORS)+c;
   }
 
   constexpr INLINE Piece(PIECE p, COLOR c):

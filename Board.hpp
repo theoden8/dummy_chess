@@ -27,7 +27,7 @@ public:
 
   bool crazyhouse;
   piece_bitboard_t bits_promoted_pawns = 0ULL;
-  pos_t n_subs[NO_PIECES*NO_COLORS] = {0};
+  pos_t n_subs[pos_t(NO_PIECES)*pos_t(NO_COLORS)] = {0};
 
   struct board_info {
     COLOR active_player = NEUTRAL;
@@ -486,7 +486,7 @@ public:
 
   zobrist::key_t zb_hash() const {
     zobrist::key_t zb = 0x00;
-    for(pos_t i = 0; i < board::NO_PIECE_INDICES - 1; ++i) {
+    for(pos_t i = 0; i < board::NO_PIECE_INDICES; ++i) {
       const Piece p = self.pieces[i];
       bitmask::foreach(get_mask(p), [&](pos_t pos) mutable -> void {
         zb ^= zobrist::rnd_hashes[zobrist::rnd_start_piecepos + board::SIZE * i + pos];
@@ -633,13 +633,11 @@ public:
   void retract_move() {
     if(state_hist.empty())return;
     const board_info prev_info = state_hist.back().info;
-    bits[WHITE] = prev_info.whites;
-    bits[BLACK] = prev_info.blacks;
+    bits = {prev_info.whites, prev_info.blacks};
     bits_pawns = prev_info.pawn_bits();
     bits_slid_diag = prev_info.diag_slid;
     bits_slid_orth = prev_info.orth_slid;
-    pos_king[WHITE] = prev_info.pos_king(WHITE);
-    pos_king[BLACK] = prev_info.pos_king(BLACK);
+    pos_king = {prev_info.pos_king(WHITE), prev_info.pos_king(BLACK)};
     activePlayer_ = enemy_of(activePlayer());
     --current_ply_;
     //enpassants
@@ -897,8 +895,8 @@ public:
   void init_state_moves() {
     for(auto&m:state.moves)m=0x00;
     if(is_draw_halfmoves()||is_draw_material())return;
-    for(const COLOR c : {WHITE, BLACK}) {
-//    const COLOR c = activePlayer(); {
+//    for(const COLOR c : {WHITE, BLACK}) {
+    const COLOR c = activePlayer(); {
       init_state_checkline(c);
       const COLOR ec = enemy_of(c);
       const piece_bitboard_t friends = bits[c], foes = bits[ec],
@@ -929,8 +927,8 @@ public:
     init_state_moves_checkline_enpassant_takes();
     init_state_pins();
     if(!traditional) {
-      for(const COLOR c : {WHITE, BLACK}) {
-//      const COLOR c = activePlayer(); {
+//      for(const COLOR c : {WHITE, BLACK}) {
+      const COLOR c = activePlayer(); {
         state.moves[pos_king[c]] &= ~state.pins[c];
       }
     }

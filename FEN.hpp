@@ -45,7 +45,7 @@ namespace fen {
       .halfmove_clock=0,
       .fullmove=0,
       .traditional=true,
-      .crazyhouse=true,
+      .crazyhouse=false,
     };
     // board
     pos_t kingpos[2] = {board::nopos, board::nopos};

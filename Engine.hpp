@@ -362,7 +362,7 @@ public:
   };
 
   INLINE float e_ttable_probe(zobrist::ttable<tt_eval_entry> &e_ttable) {
-    const zobrist::key_t k = self.zb_hash();
+    const zobrist::key_t k = zb_hash();
     if(e_ttable[k].info == state.info) {
       return e_ttable[k].eval;
     }
@@ -392,7 +392,7 @@ public:
   };
 
   INLINE decltype(auto) ab_ttable_probe(int16_t depth, const zobrist::ttable<tt_ab_entry> &ab_ttable) {
-    const zobrist::key_t k = self.zb_hash();
+    const zobrist::key_t k = zb_hash();
     const bool tt_has_entry = ab_ttable[k].can_apply(state.info, depth, tt_age);
     if(tt_has_entry) {
       ++zb_hit;
@@ -714,7 +714,7 @@ public:
         break;
       }
       const float eval_prev = eval;
-      const std::valarray<float> aspiration_window = {.15, 1.25, MATERIAL_QUEEN - 1};
+      const std::valarray<float> aspiration_window = {.01, .15, 1.25, MATERIAL_QUEEN - 1};
       pos_t aw_index_alpha = 0, aw_index_beta = 0;
       MoveLine new_pline = pline;
       do {
@@ -822,7 +822,7 @@ public:
       return count_moves(activePlayer());
     }
     // look-up:
-    zobrist::key_t k = self.zb_hash();
+    const zobrist::key_t k = zb_hash();
     if(perft_ttable[k].info == state.info && perft_ttable[k].depth == depth) {
       ++zb_hit;
       return perft_ttable[k].nodes;
