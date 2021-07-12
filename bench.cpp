@@ -1,4 +1,5 @@
 #include <chrono>
+#include <valarray>
 
 #include <Engine.hpp>
 #include <FEN.hpp>
@@ -7,14 +8,21 @@ using namespace std::chrono;
 
 int main(int argc, char *argv[]) {
   const fen::FEN f = (argc >= 2) ? fen::load_from_string(argv[1]) : fen::starting_pos;
+//  const fen::FEN f = fen::load_from_string("r1b1kb1r/pp2pp2/n1p1q1p1/1N1nN2p/2BP4/4BQ2/PPP2PPP/R4RK1 b kq - 1 11"s);
+//  const fen::FEN f = fen::load_from_string("8/5k2/2pBp2p/6p1/pP2P3/P1R1K2P/2P5/3r4 w - - 3 49"s);
+//  const fen::FEN f = fen::load_from_string("rnq1kbnr/p1p4p/1p2pp2/3p2p1/2PP3N/4P3/PP1B1PQP/RN2K2R w KQkq - 0 11"s);
+//  const fen::FEN f = fen::load_from_string("2rqkb1r/p2b1pp1/2n5/1p1n2Pp/N3p2P/1PPp4/P2P1P2/R1BQKBNR w KQk - 0 15"s);
+//  const fen::FEN f = fen::load_from_string("1r4k1/1r3pp1/3b3p/3p1qnP/Q1pP3R/2P2PP1/PP4K1/R1B3N1 b - - 2 24"s);
 #if 1
-  constexpr uint64_t shannon_number[] = { 20, 400, 8902, 197281, 4865609, 119060324, 3195901860, 84998978956, 2439530234167 };
-  str::print("perft benchmarks");
+  const std::valarray<uint64_t> shannon_number = { 20, 400, 8902, 197281, 4865609, 119060324, 3195901860, 84998978956, 2439530234167 };
+//  const fen::FEN f = fen::load_from_string("r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - "s);
+//  const std::valarray<uint64_t> shannon_number = { 48, 2039, 97862, 4085603, 193690690, 8031647685 };
+  str::print("perft benchmarks\n");
   str::print("position", fen::export_as_string(f));
   {
     Engine e(f);
     decltype(auto) store_scope = e.get_zobrist_perft_scope();
-    for(int depth = 1; depth <= 7; ++depth) {
+    for(int depth = 1; depth < (int)shannon_number.size(); ++depth) {
       store_scope.reset();
       auto start = system_clock::now();
       size_t nds = e.perft(depth);
@@ -36,10 +44,9 @@ int main(int argc, char *argv[]) {
   str::print("position", fen::export_as_string(f));
   {
     Engine e(f);
-    auto [ab_store_scope, e_store_scope] = e.get_zobrist_alphabeta_scope();
-    for(const int depth : {1,2,3,4,5,6,7,8,9}) {
-      ab_store_scope.reset();
-      e_store_scope.reset();
+    decltype(auto) ab_storage = e.get_zobrist_alphabeta_scope();
+    for(const int depth : {1,2,3,4,5,6,7,8,9,10}) {
+      ab_storage.reset();
       auto start = system_clock::now();
       move_t m = e.get_fixed_depth_move_iddfs(depth);
       size_t nds = e.nodes_searched;
