@@ -155,7 +155,11 @@ struct MoveLine {
 
   INLINE move_t get_previous_move() const {
     if(start == 0)return board::nullmove;
-    return line[start - 1];
+    if(line[start - 1] != board::nullmove) {
+      return line[start - 1];
+    }
+    if(start < 3)return board::nullmove;
+    return line[start - 3];
   }
 
   INLINE MoveLine as_past() const {

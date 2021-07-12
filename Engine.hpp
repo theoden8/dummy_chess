@@ -254,6 +254,17 @@ public:
     return .0;
   }
 
+  INLINE float move_heuristic_cmt(move_t m, const MoveLine &pline, const std::vector<double> &countermove_table) {
+    const move_t p_m = pline.get_previous_move();
+    if(p_m != board::nullmove) {
+      const pos_t i = bitmask::first(m), _j = bitmask::second(m);
+      const size_t cmt_outer = board::NO_PIECE_INDICES * board::SIZE;
+      const pos_t p_j = bitmask::second(p_m) & board::MOVEMASK;
+      return countermove_table[cmt_outer * (self[p_j].piece_index * board::SIZE + p_j) + self[i].piece_index * board::SIZE + _j];
+    }
+    return .0;
+  }
+
   INLINE bool score_is_mate(float score) const {
     return std::abs(score) > MATERIAL_KING - 2000;
   }
@@ -424,7 +435,7 @@ public:
            && piece::size(piece::get_pawn_attack(j, c) & bits[ec] & ~bits_pawns) == 2;
   }
 
-  decltype(auto) ab_get_quiesc_moves(int16_t depth, MoveLine &pline, int8_t nchecks, bool king_in_check, move_t firstmove=board::nullmove) {
+  decltype(auto) ab_get_quiesc_moves(int16_t depth, MoveLine &pline, const std::vector<double> &countermove_table, int8_t nchecks, bool king_in_check, move_t firstmove=board::nullmove) {
     std::vector<std::tuple<float, move_t, bool>> quiescmoves;
     quiescmoves.reserve(8);
     const COLOR c = activePlayer();
@@ -464,6 +475,7 @@ public:
       if(val > -.75) {
         val += move_heuristic_pv(m, pline, firstmove);
       }
+      val += move_heuristic_cmt(m, pline, countermove_table);
       quiescmoves.emplace_back(-val, m, reduce_nchecks);
     });
     std::sort(quiescmoves.begin(), quiescmoves.end());
@@ -474,6 +486,7 @@ public:
   float alpha_beta_quiescence(float alpha, float beta, int16_t depth, MoveLine &pline,
                                zobrist::ttable<tt_ab_entry> &ab_ttable,
                                zobrist::ttable<tt_eval_entry> &e_ttable,
+                               const std::vector<double> &countermove_table,
                                int8_t nchecks)
   {
     float score = -MATERIAL_KING;
@@ -518,7 +531,7 @@ public:
     const bool tt_replace_depth = tt_inactive_entry || depth >= ab_ttable[k].depth;
     const bool tt_inexact_entry = tt_inactive_entry || ab_ttable[k].lowerbound != ab_ttable[k].upperbound;
 
-    decltype(auto) quiescmoves = ab_get_quiesc_moves(depth, pline, nchecks, king_in_check, m_best);
+    decltype(auto) quiescmoves = ab_get_quiesc_moves(depth, pline, countermove_table, nchecks, king_in_check, m_best);
     if(quiescmoves.empty()) {
       ++nodes_searched;
       if(king_in_check) {
@@ -539,7 +552,7 @@ public:
           ++nodes_searched;
           score = 1e-4;
         } else {
-          score = -score_decay(alpha_beta_quiescence(-beta, -alpha, depth - 1, pline_alt, ab_ttable, e_ttable, reduce_nchecks ? nchecks - 1 : nchecks));
+          score = -score_decay(alpha_beta_quiescence(-beta, -alpha, depth - 1, pline_alt, ab_ttable, e_ttable, countermove_table, reduce_nchecks ? nchecks - 1 : nchecks));
         }
       }
       debug.update(depth, alpha, beta, bestscore, score, m, pline, pline_alt);
@@ -585,14 +598,7 @@ public:
       if(val > -.75 || m == firstmove) {
         val += move_heuristic_pv(m, pline, firstmove);
       }
-      const pos_t _j = j & board::MOVEMASK;
-      // countermove
-      const move_t p_m = pline.get_previous_move();
-      if(p_m != board::nullmove) {
-        const size_t cmt_outer = board::NO_PIECE_INDICES * board::SIZE;
-        const pos_t p_j = bitmask::second(p_m) & board::MOVEMASK;
-        val += countermove_table[cmt_outer * (self[p_j].piece_index * board::SIZE + p_j) + self[i].piece_index * board::SIZE + _j];
-      }
+      val += move_heuristic_cmt(m, pline, countermove_table);
       moves.emplace_back(-val, m);
     });
     std::sort(moves.begin(), moves.end());
@@ -611,7 +617,7 @@ public:
     if(depth <= 0) {
       assert(pline.empty());
       const int nchecks = 0;
-      return alpha_beta_quiescence(alpha, beta, 0, pline, ab_ttable, e_ttable, nchecks);
+      return alpha_beta_quiescence(alpha, beta, 0, pline, ab_ttable, e_ttable, countermove_table, nchecks);
     }
     move_t m_best = board::nullmove;
     const auto [tt_has_entry, k] = ab_ttable_probe(depth, ab_ttable);
@@ -653,7 +659,7 @@ public:
         depth -= 4;
         if(depth <= 0) {
           const int nchecks = 0;
-          return alpha_beta_quiescence(alpha, beta, 0, pline, ab_ttable, e_ttable, nchecks);
+          return alpha_beta_quiescence(alpha, beta, 0, pline, ab_ttable, e_ttable, countermove_table, nchecks);
         }
       }
     }
