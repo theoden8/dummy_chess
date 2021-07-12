@@ -238,7 +238,8 @@ public:
     if(is_castling_move(i, _j)) {
       val += .5;
     } else {
-      val -= 1.05*material_of(self[i].value);
+      const PIECE ipiece = self[i].value;
+      val -= 1.05*(ipiece == KING ? 50. : material_of(ipiece));
     }
     val += move_heuristic_extra_material(i, j);
     val += move_heuristic_check(i, j);
@@ -330,13 +331,14 @@ public:
     piece_bitboard_t from_set = piece::pos_mask(i);
     piece_bitboard_t occupied = bits[WHITE] | bits[BLACK];
     piece_bitboard_t attadef = get_attacks_to(j, BOTH, occupied);
+    assert(self[j].value != KING);
     gain[depth] = material_of(self[j].value);
 
     PIECE curpiece = self[i].value;
     do {
 //      const pos_t from = bitmask::log2_of_exp2(from_set);
       ++depth;
-      gain[depth] = material_of(curpiece) - gain[depth - 1];
+      gain[depth] = (curpiece == KING ? 50. : material_of(curpiece)) - gain[depth - 1];
 //      str::pdebug("SEE: depth:", depth, "piece:", board::_pos_str(from) + " "s + self[from].str(), "score:"s, gain[depth]);
       if(std::max(-gain[depth - 1], gain[depth]) < -1e-7) {
 //        str::pdebug("SEE BREAK: max(", -gain[depth-1], ",", gain[depth], ") < 0");
@@ -796,17 +798,27 @@ public:
     return bestscore;
   }
 
+  struct ab_storage_t {
+    zobrist::StoreScope<tt_ab_entry> ab_ttable_scope;
+    zobrist::StoreScope<tt_eval_entry> e_ttable_scope;
+    std::vector<double> cmh_table;
+
+    void reset() {
+      ab_ttable_scope.reset();
+      e_ttable_scope.reset();
+    }
+  };
+
   template <typename F>
-  decltype(auto) iterative_deepening_dfs(int16_t depth, const std::unordered_set<move_t> &searchmoves,
-                                         zobrist::ttable<tt_ab_entry> &ab_ttable,
-                                         zobrist::ttable<tt_eval_entry> &e_ttable,
-                                         F &&callback_f)
-  {
+  decltype(auto) iterative_deepening_dfs(int16_t depth, ab_storage_t &ab_storage, const std::unordered_set<move_t> &searchmoves, F &&callback_f) {
+    auto &ab_ttable = ab_storage.ab_ttable_scope.get_object();
+    auto &e_ttable = ab_storage.e_ttable_scope.get_object();
+    auto &cmh_table = ab_storage.cmh_table;
+    std::fill(cmh_table.begin(), cmh_table.end(), .0);
     MoveLine pline;
     float eval = .0;
     move_t m = board::nullmove;
     bool should_stop = false;
-    std::vector<double> countermove_table(board::NO_PIECE_INDICES * board::SIZE * board::NO_PIECE_INDICES * board::SIZE, .0);
     for(int16_t d = 1; d <= depth; ++d) {
       if(!pline.empty() && check_line_terminates(pline) && int(pline.size()) < d) {
         eval = get_pvline_score(pline);
@@ -827,7 +839,7 @@ public:
         const bool final_window = (aw_index_alpha == aspiration_window.size() && aw_index_beta == aspiration_window.size());
         str::pdebug("depth:", d, "aw", aw_alpha, aw_beta);
         int16_t new_depth = d - 1;
-        const float new_eval = alpha_beta(aw_alpha, aw_beta, d, new_pline, ab_ttable, e_ttable, countermove_table, d,
+        const float new_eval = alpha_beta(aw_alpha, aw_beta, d, new_pline, ab_ttable, e_ttable, cmh_table, d,
           [&](int16_t _depth, float _eval) mutable -> bool {
             const move_t _m = new_pline.front();
             if(_depth == d && final_window && eval < _eval && _m != board::nullmove) {
@@ -877,10 +889,11 @@ public:
   zobrist::ttable_ptr<tt_eval_entry> e_ttable = nullptr;
 
   decltype(auto) get_zobrist_alphabeta_scope() {
-    return std::make_tuple(
-      zobrist::make_store_object_scope<tt_ab_entry>(ab_ttable),
-      zobrist::make_store_object_scope<tt_eval_entry>(e_ttable)
-    );
+    return (ab_storage_t){
+      .ab_ttable_scope=zobrist::make_store_object_scope<tt_ab_entry>(ab_ttable),
+      .e_ttable_scope=zobrist::make_store_object_scope<tt_eval_entry>(e_ttable),
+      .cmh_table=std::vector<double>(board::NO_PIECE_INDICES * board::SIZE * board::NO_PIECE_INDICES * board::SIZE, .0)
+    };
   }
 
   INLINE decltype(auto) make_callback_f() {
@@ -892,11 +905,10 @@ public:
   template <typename F>
   move_t get_fixed_depth_move_iddfs(int16_t depth, F &&callback_f, const std::unordered_set<move_t> &searchmoves) {
     reset_planning();
-    auto &&[ab_store_scope, e_store_scope] = get_zobrist_alphabeta_scope();
+    decltype(auto) ab_storage = get_zobrist_alphabeta_scope();
     assert(ab_ttable != nullptr && e_ttable != nullptr);
     debug.set_depth(depth);
-    const auto [_, m] = iterative_deepening_dfs(depth, searchmoves, ab_store_scope.get_object(), e_store_scope.get_object(),
-                                                std::forward<F>(callback_f));
+    const auto [_, m] = iterative_deepening_dfs(depth, ab_storage, searchmoves, std::forward<F>(callback_f));
     evaluation = _;
     return m;
   }

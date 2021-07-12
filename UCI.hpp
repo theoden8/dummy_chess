@@ -19,8 +19,7 @@ using namespace std::chrono;
 
 struct UCI {
   Engine *engine = nullptr;
-  zobrist::StoreScope<Engine::tt_ab_entry> *engine_ab_ttable_owner = nullptr;
-  zobrist::StoreScope<Engine::tt_eval_entry> *engine_e_ttable_owner = nullptr;
+  typename Engine::ab_storage_t *engine_ab_storage = nullptr;
 
   std::atomic<bool> debug_mode = false;
   std::atomic<bool> should_quit = false;
@@ -39,9 +38,7 @@ struct UCI {
     destroy();
     _printf("init\n");
     engine = new Engine(f);
-    decltype(auto) obj = engine->get_zobrist_alphabeta_scope();
-    engine_ab_ttable_owner = new zobrist::StoreScope<Engine::tt_ab_entry>(std::get<0>(obj));
-    engine_e_ttable_owner = new zobrist::StoreScope<Engine::tt_eval_entry>(std::get<1>(obj));
+    engine_ab_storage = new typename Engine::ab_storage_t(engine->get_zobrist_alphabeta_scope());
   }
 
   void destroy() {
@@ -50,10 +47,8 @@ struct UCI {
       _printf("destroy\n");
       delete engine;
       engine = nullptr;
-      delete engine_ab_ttable_owner;
-      delete engine_e_ttable_owner;
-      engine_ab_ttable_owner = nullptr;
-      engine_e_ttable_owner = nullptr;
+      delete engine_ab_storage;
+      engine_ab_storage = nullptr;
     }
   }
 
