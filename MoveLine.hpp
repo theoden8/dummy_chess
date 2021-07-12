@@ -59,7 +59,7 @@ struct MoveLine {
 
   INLINE move_t front() const {
     if(empty()) {
-      return board::nomove;
+      return board::nullmove;
     }
     return line.front();
   }
@@ -140,7 +140,7 @@ struct MoveLine {
   INLINE move_t front_in_mainline() const {
     const auto &m_line = get_mainline().line;
     if(start >= m_line.size()) {
-      return board::nomove;
+      return board::nullmove;
     }
     return m_line[start];
   }
@@ -154,7 +154,7 @@ struct MoveLine {
   }
 
   INLINE move_t get_previous_move() const {
-    if(start == 0)return board::nomove;
+    if(start == 0)return board::nullmove;
     return line[start - 1];
   }
 

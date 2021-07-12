@@ -93,10 +93,11 @@ struct PGN {
   }
 
   void write_move(pos_t i, pos_t j) {
+    const move_t m = bitmask::_pos_pair(i, j);
     const pos_t promote_as = j & ~board::MOVEMASK;
     j &= board::MOVEMASK;
     std::string p;
-    if(bitmask::_pos_pair(i, j) == board::nomove) {
+    if(m == board::nullmove) {
       p = "0000"s;
     } else if(board.is_castling_move(i, j)) {
       const COLOR c = board.color_at_pos(i);

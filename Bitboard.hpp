@@ -49,7 +49,7 @@ namespace board {
                   PROMOTE_ROOK = 2<<6,
                   PROMOTE_QUEEN = 3<<6;
   constexpr pos_t nopos = 0xff;
-  constexpr move_t nomove = bitmask::_pos_pair(nopos, nopos);
+  constexpr move_t nullmove = bitmask::_pos_pair(nopos, nopos);
   constexpr ply_index_t nocastlings = INT16_MAX;
   constexpr pos_t CASTLING_K_WHITE = 0,
                   CASTLING_Q_WHITE = 1,
@@ -104,7 +104,7 @@ namespace board {
   }
 
   std::string _move_str(move_t m, bool ispawn=false) {
-    if(m == board::nomove) {
+    if(m == board::nullmove) {
       return "0000"s;
     }
     const pos_t i = bitmask::first(m) & board::MOVEMASK,

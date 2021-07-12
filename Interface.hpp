@@ -383,10 +383,10 @@ struct Interface {
       break;
       case 'r':
         {
-          move_t m = board::nomove;
+          move_t m = board::nullmove;
           if(sel_x==-1||sel_y==-1)m=board.get_random_move();
           else m=board.get_random_move_from(board::_pos(A+sel_x, 1+sel_y));
-          if(m != board::nomove) {
+          if(m != board::nullmove) {
             pgn.handle_move(m);
           }
         }
@@ -395,12 +395,7 @@ struct Interface {
         board.evaluation = board.evaluate();
         break;
       case ' ':
-        {
-          move_t m = board.get_fixed_depth_move_iddfs(6);
-          if(m != board::nomove) {
-            pgn.handle_move(m);
-          }
-        }
+        pgn.handle_move(board::nullmove);
       break;
       case KEY_BACKSPACE:
         pgn.retract_move();

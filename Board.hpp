@@ -76,6 +76,7 @@ public:
 
   struct board_state {
     using board_mailbox_t = std::array<piece_bitboard_t, board::SIZE>;
+    bool null_move_state : 1;
     board_info info;
     board_mailbox_t attacks;
     std::array<piece_bitboard_t, NO_COLORS> checkline = {0x00,0x00};
@@ -524,15 +525,16 @@ public:
     const move_t m = bitmask::_pos_pair(i, j);
     const pos_t promote_as = j & ~board::MOVEMASK;
     j &= board::MOVEMASK;
-    const bool is_castling = is_castling_move(i, j);
-    const bool is_enpassant_take = is_enpassant_take_move(i, j);
+    const bool is_castling = (m != board::nullmove && is_castling_move(i, j));
+    const bool is_enpassant_take = (m != board::nullmove && is_enpassant_take_move(i, j));
     const pos_t epawn = enpassant_pawn();
 
     ++current_ply_;
     _backup_on_event();
     state_hist.emplace_back(state);
-    assert(m == board::nomove || check_valid_move(m));
-    if(m == board::nomove) {
+    assert(m == board::nullmove || check_valid_move(m));
+    state.null_move_state = (m == board::nullmove);
+    if(m == board::nullmove) {
     } else if(is_castling) {
       const piece_bitboard_t knights = get_knight_bits();
       const COLOR c = activePlayer();
@@ -877,7 +879,8 @@ public:
     }
     int repetitions = 1;
     for(ply_index_t i = 0; i < std::min<ply_index_t>(state_hist.size(), get_halfmoves()); ++i) {
-      if(state.info == state_hist[state_hist.size() - i - 1].info) {
+      const auto &state_iter = state_hist[state_hist.size() - i - 1];
+      if(state.info == state_iter.info && !state_iter.null_move_state) {
         ++repetitions;
         if(repetitions >= 3) {
           state_hist_repetitions = get_current_ply();
@@ -1031,7 +1034,7 @@ public:
   }
 
   NEVER_INLINE std::string _move_str(move_t m) const {
-    if(m==board::nomove)return "0000"s;
+    if(m==board::nullmove)return "0000"s;
     return board::_move_str(m, bits_pawns & piece::pos_mask(bitmask::first(m)));
   }
 
@@ -1040,7 +1043,7 @@ public:
     if(thorough)assert(check_valid_sequence(line));
     auto rec_mscope = self.recursive_move_scope();
     for(const auto m : line) {
-      if(m==board::nomove)break;
+      if(m==board::nullmove)break;
       s.emplace_back(_move_str(m));
       if(thorough) {
         rec_mscope.scope(m);

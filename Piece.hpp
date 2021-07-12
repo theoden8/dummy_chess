@@ -250,7 +250,7 @@ namespace piece {
     if(k_j == board::_pos(C, castlrank))return bitmask::_pos_pair(board::_pos(qcastlrook, castlrank), board::_pos(D, castlrank));
     if(k_j == board::_pos(G, castlrank))return bitmask::_pos_pair(board::_pos(kcastlrook, castlrank), board::_pos(F, castlrank));
     abort();
-    return board::nomove;
+    return board::nullmove;
   }
 
   void print(piece_bitboard_t mask) {
