@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <iostream>
 
+#include <Optimizations.hpp>
 
 using namespace std::string_literals;
 
@@ -89,7 +90,17 @@ void perror(const Elem & ...s) {
 }
 
 template <typename... Elem>
-void pdebug(const Elem & ...s) {
+void print(const Elem & ...s) {
+  std::vector<std::string> v;
+  _unroll_(_add_to_vector(v, s)...);
+#ifndef __clang__
+  std::reverse(v.begin(), v.end());
+#endif
+  std::cout << str::join(v, " "s) << std::endl;
+}
+
+template <typename... Elem>
+INLINE void pdebug(const Elem & ...s) {
 #ifndef NDEBUG
   std::vector<std::string> v;
   _unroll_(_add_to_vector(v, s)...);
@@ -98,16 +109,6 @@ void pdebug(const Elem & ...s) {
 #endif
   std::cout << str::join(v, " "s) << std::endl;
 #endif
-}
-
-template <typename... Elem>
-void print(const Elem & ...s) {
-  std::vector<std::string> v;
-  _unroll_(_add_to_vector(v, s)...);
-#ifndef __clang__
-  std::reverse(v.begin(), v.end());
-#endif
-  std::cout << str::join(v, " "s) << std::endl;
 }
 
 } // namespace str

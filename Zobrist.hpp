@@ -79,20 +79,20 @@ INLINE void toggle_castling(key_t &zb, COLOR c, CASTLING_SIDE side) {
 }
 
 
-template <typename T> using ttable = std::array<T, ZOBRIST_SIZE>;
+template <typename T> using ttable = std::vector<T>;
 template <typename T> using ttable_ptr = ttable<T> *;
 
 template<typename InnerObject>
 struct StoreScope {
-  ttable_ptr<InnerObject> &zb_store;
+  zobrist::ttable_ptr<InnerObject> &zb_store;
   bool is_outer_scope;
 
-  explicit INLINE StoreScope(ttable_ptr<InnerObject> &scope_ptr):
+  explicit INLINE StoreScope(zobrist::ttable_ptr<InnerObject> &scope_ptr, size_t zbsize):
     zb_store(scope_ptr),
     is_outer_scope(scope_ptr == nullptr)
   {
     if(zb_store == nullptr) {
-      zb_store = new ttable<InnerObject>{};
+      zb_store = new zobrist::ttable<InnerObject>(zbsize);
       reset();
     }
   }
@@ -112,12 +112,12 @@ struct StoreScope {
   }
 
   void reset() {
-    for(size_t i = 0; i < ZOBRIST_SIZE; ++i) {
+    for(size_t i = 0; i < zb_store->size(); ++i) {
       zb_store->at(i).info.unset();
     }
   }
 
-  ttable<InnerObject> &get_object() {
+  zobrist::ttable<InnerObject> &get_object() {
     return *zb_store;
   }
 
@@ -135,8 +135,8 @@ struct StoreScope {
 };
 
 template <typename InnerObject>
-INLINE decltype(auto) make_store_object_scope(ttable_ptr<InnerObject> &zb_store) {
-  return StoreScope<InnerObject>(zb_store);
+INLINE decltype(auto) make_store_object_scope(zobrist::ttable_ptr<InnerObject> &zb_store, size_t zbsize=ZOBRIST_SIZE) {
+  return StoreScope<InnerObject>(zb_store, zbsize);
 }
 
 } // zobrist

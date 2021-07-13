@@ -1,6 +1,6 @@
 DBGFLAGS = -g3
-OPTFLAGS = -Ofast -DNDEBUG -flto -fwhole-program -march=native -m64 -march=native -DUSE_INTRIN
-PROFFLAGS = $(OPTFLAGS) -pg
+OPTFLAGS = -Ofast -DNDEBUG -flto -fwhole-program -m64 -march=native -DUSE_INTRIN -fno-exceptions
+PROFFLAGS = -O1 -DNDEBUG -flto -DUSE_INTRIN -pg
 CXXFLAGS = -std=c++20 -I. -Wall -Wextra -Wno-unused -Wno-parentheses
 # clang:
 #CXX = clang++-13

@@ -16,10 +16,14 @@ struct MoveLine {
   INLINE MoveLine()
   {}
 
-  explicit INLINE MoveLine(const std::vector<move_t> &line, const MoveLine *mainline=nullptr):
+  explicit INLINE MoveLine(const std::vector<move_t> &line, const MoveLine *mainline=nullptr, bool shrink=false):
     line(line), mainline(mainline)
   {
-    this->line.reserve(16);
+    if(!shrink) {
+      this->line.reserve(16);
+    } else {
+      this->line.shrink_to_fit();
+    }
   }
 
   INLINE size_t size() const {
@@ -100,13 +104,13 @@ struct MoveLine {
     return f;
   }
 
-  void set_mainline(const MoveLine *other) {
+  INLINE void set_mainline(const MoveLine *other) {
     mainline = other;
   }
 
-  void replace_line(const MoveLine &other) {
+  INLINE void replace_line(const MoveLine &other) {
     resize(other.size());
-    for(size_t i = 0; i < other.size(); ++i) {
+    for(pos_t i = 0; i < other.size(); ++i) {
       (*this)[i] = other[i];
     }
     assert(full().size() == start + other.size());
@@ -146,7 +150,7 @@ struct MoveLine {
   }
 
   INLINE MoveLine get_future() const {
-    return MoveLine(std::vector<move_t>(begin(), end()), mainline);
+    return MoveLine(std::vector<move_t>(begin(), end()), mainline, true);
   }
 
   INLINE MoveLine get_past() const {
