@@ -286,9 +286,9 @@ public:
   }
 
   INLINE float move_heuristic_pv(move_t m, const MoveLine &pline, move_t firstmove=board::nullmove) const {
-    if(m == firstmove) {
-      return 1000.;
-    } else if(m == pline.front_in_mainline()) {
+    if(pline.is_mainline() && m == pline.front_in_mainline()) {
+      return 200.;
+    } else if(m == firstmove) {
       return 100.;
     }
     return .0;
@@ -585,7 +585,6 @@ public:
       }
       return score;
     }
-    assert(pline.empty());
     bool repetitions = false;
     for(size_t move_index = 0; move_index < quiescmoves.size(); ++move_index) {
       const auto &[_, m, reduce_nchecks] = quiescmoves[move_index];
@@ -643,11 +642,11 @@ public:
     iter_moves([&](pos_t i, pos_t j) mutable -> void {
       const move_t m = bitmask::_pos_pair(i, j);
       float val = .0;
-      val += move_heuristic_see(i, j, edefendmap);
-      if(val > -.75 || m == firstmove) {
-        val += move_heuristic_pv(m, pline, firstmove);
+      val += move_heuristic_pv(m, pline, firstmove);
+      if(val < 100.) {
+        val += move_heuristic_see(i, j, edefendmap);
+        val += move_heuristic_cmt(m, pline, countermove_table);
       }
-      val += move_heuristic_cmt(m, pline, countermove_table);
       moves.emplace_back(-val, m);
     });
     std::sort(moves.begin(), moves.end());
@@ -664,7 +663,6 @@ public:
                    const std::unordered_set<move_t> &searchmoves={})
   {
     if(depth <= 0) {
-      assert(pline.empty());
       const int nchecks = 0;
       return alpha_beta_quiescence(alpha, beta, 0, pline, ab_ttable, e_ttable, countermove_table, nchecks);
     }

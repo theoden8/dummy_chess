@@ -65,7 +65,7 @@ struct MoveLine {
     if(empty()) {
       return board::nullmove;
     }
-    return line.front();
+    return line[start];
   }
 
   INLINE decltype(auto) begin() const {
@@ -174,6 +174,13 @@ struct MoveLine {
 
   INLINE MoveLine branch_from_past() const {
     MoveLine mline = get_past();
+    mline.start = start;
+    mline.mainline = &get_mainline();
+    return mline;
+  }
+
+  INLINE MoveLine branch() const {
+    MoveLine mline = *this;
     mline.start = start;
     mline.mainline = &get_mainline();
     return mline;
