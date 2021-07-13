@@ -853,15 +853,13 @@ public:
         }
         if(should_stop)break;
       } while(1);
-      if(should_stop) {
-        break;
-      }
       debug.check_score(d, eval, pline);
       if(!callback_f(d, m, eval, pline, board::nullmove) || (score_is_mate(eval) && d > 0 && int(pline.size()) < d)) {
         should_stop = true;
         break;
       }
       str::pdebug("IDDFS:", d, "pline:", pgn::_line_str(self, pline), "size:", pline.size(), "eval", eval);
+      if(should_stop)break;
     }
     return std::make_pair(eval, m);
   }
