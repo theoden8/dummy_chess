@@ -233,7 +233,21 @@ public:
     return .0;
   }
 
-  INLINE float move_heuristic_see(pos_t i, pos_t j) const {
+  INLINE float move_heuristic_attacker_decay(pos_t i, pos_t j, piece_bitboard_t edefendmap) const {
+    float val = .0;
+    const PIECE frompiece = self[i].value;
+    const float mat_from = (frompiece == KING ? 50. : material_of(frompiece));
+    const pos_t _j = j & board::MOVEMASK;
+    if(self.empty_at_pos(_j) || (edefendmap & piece::pos_mask(_j))) {
+      const float decay_i = (edefendmap & piece::pos_mask(_j)) ? .02 : .05;
+      val -= mat_from * decay_i;
+    } else {
+      val -= mat_from * .01;
+    }
+    return val;
+  }
+
+  INLINE float move_heuristic_see(pos_t i, pos_t j, piece_bitboard_t edefendmap) const {
     const pos_t _j = j & board::MOVEMASK;
     float val = .0;
     val += move_heuristic_extra_material(i, j);
@@ -242,21 +256,29 @@ public:
     }
     const float mat_i = material_of(self[i].value),
                 mat_j = material_of(self[_j].value);
-    if(mat_i < mat_j) {
+    if(~edefendmap & piece::pos_mask(_j)) {
+      return mat_j;
+    } else if(mat_i < mat_j) {
       return mat_j - mat_i;
     }
     val += static_exchange_evaluation(i, _j);
     return val;
   }
 
-  INLINE float move_heuristic_mvv_lva(pos_t i, pos_t j) const {
+  INLINE float move_heuristic_mvv_lva(pos_t i, pos_t j, piece_bitboard_t edefendmap) const {
     const pos_t _j = j & board::MOVEMASK;
-    float val = material_of(self[_j].value);
+    float val = .0;
     if(is_castling_move(i, _j)) {
       val += .5;
-    } else {
+    } else if(is_naively_capture_move(i, _j)) {
+      const float mat_to = material_of(self[_j].value);
+      val += mat_to;
       const PIECE frompiece = self[i].value;
-      val -= 1.05*(frompiece == KING ? 50. : material_of(frompiece));
+      const float mat_from = (frompiece == KING ? 50. : material_of(frompiece));
+      if(edefendmap & piece::pos_mask(_j)) {
+        val -= mat_from;
+      }
+      val += move_heuristic_attacker_decay(i, j, edefendmap);
     }
     val += move_heuristic_extra_material(i, j);
     val += move_heuristic_check(i, j);
@@ -465,6 +487,7 @@ public:
     quiescmoves.reserve(8);
     const COLOR c = activePlayer();
     const COLOR ec = enemy_of(c);
+    const piece_bitboard_t edefendmap = get_attack_mask(ec) & bits[ec];
     const piece_bitboard_t pawn_attacks = piece::get_pawn_attacks(bits_pawns & bits[ec], ec);
     iter_moves([&](pos_t i, pos_t j) mutable -> void {
       float val = .0;
@@ -473,14 +496,14 @@ public:
       bool reduce_nchecks = false;
       const bool allow_checking = (nchecks > 0 && -depth < 3);
       if(king_in_check) {
-        val = move_heuristic_mvv_lva(i, j);
+        val = move_heuristic_mvv_lva(i, j, edefendmap);
       } else if(is_promotion_move(i, j) || is_enpassant_take_move(i, j)) {
-        val = move_heuristic_mvv_lva(i, j);
+        val = move_heuristic_mvv_lva(i, j, edefendmap);
       } else if(is_naively_capture_move(i, j)) {
-        if(material_of(self[i].value) + 1e-9 < material_of(self[j].value)) {
-          val = move_heuristic_mvv_lva(i, j);
+        if(material_of(self[i].value) + 1e-9 < material_of(self[j].value) && (~edefendmap & piece::pos_mask(j))) {
+          val = move_heuristic_mvv_lva(i, j, edefendmap) + .01;
         } else {
-          val = move_heuristic_see(i, j);
+          val = move_heuristic_see(i, j, edefendmap);
           if(val < -1e-9)return;
         }
       } else if((~pawn_attacks & piece::pos_mask(j)) && (is_knight_fork_move(i, j) || is_pawn_fork_move(i, j))) {
@@ -614,10 +637,13 @@ public:
   decltype(auto) ab_get_ordered_moves(const MoveLine &pline, move_t firstmove, const std::vector<double> &countermove_table) {
     std::vector<std::pair<float, move_t>> moves;
     moves.reserve(32);
+    const COLOR c = activePlayer();
+    const COLOR ec = enemy_of(activePlayer());
+    const piece_bitboard_t edefendmap = get_attack_mask(ec) & bits[ec];
     iter_moves([&](pos_t i, pos_t j) mutable -> void {
       const move_t m = bitmask::_pos_pair(i, j);
       float val = .0;
-      val += move_heuristic_see(i, j);
+      val += move_heuristic_see(i, j, edefendmap);
       if(val > -.75 || m == firstmove) {
         val += move_heuristic_pv(m, pline, firstmove);
       }
