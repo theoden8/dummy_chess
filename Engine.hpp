@@ -136,10 +136,26 @@ public:
   INLINE float h_attack_cells(COLOR c) const {
     const piece_bitboard_t occupied = bits[WHITE] | bits[BLACK];
     float h = .0;
-    bitmask::foreach(bits[c], [&](pos_t i) mutable -> void {
+    decltype(auto) h_add = [&](pos_t i, float mat) mutable -> void {
       auto a = state.attacks[i];
-      h += float(piece::size(a & occupied) + piece::size(a)) / material_of(self[i].value);
+      h += float(piece::size(a & occupied) + piece::size(a)) / mat;
+    };
+    bitmask::foreach(bits[c] & bits_pawns, [&](pos_t i) mutable -> void {
+      h_add(i, MATERIAL_PAWN);
     });
+    bitmask::foreach(bits[c] & bits_slid_diag & ~bits_slid_orth, [&](pos_t i) mutable -> void {
+      h_add(i, MATERIAL_BISHOP);
+    });
+    bitmask::foreach(bits[c] & get_knight_bits(), [&](pos_t i) mutable -> void {
+      h_add(i, MATERIAL_KNIGHT);
+    });
+    bitmask::foreach(bits[c] & ~bits_slid_diag & bits_slid_orth, [&](pos_t i) mutable -> void {
+      h_add(i, MATERIAL_ROOK);
+    });
+    bitmask::foreach(bits[c] & bits_slid_diag & bits_slid_orth, [&](pos_t i) mutable -> void {
+      h_add(i, MATERIAL_QUEEN);
+    });
+    h_add(pos_king[c], MATERIAL_KING);
     return h;
   }
 
@@ -239,8 +255,8 @@ public:
     if(is_castling_move(i, _j)) {
       val += .5;
     } else {
-      const PIECE ipiece = self[i].value;
-      val -= 1.05*(ipiece == KING ? 50. : material_of(ipiece));
+      const PIECE frompiece = self[i].value;
+      val -= 1.05*(frompiece == KING ? 50. : material_of(frompiece));
     }
     val += move_heuristic_extra_material(i, j);
     val += move_heuristic_check(i, j);
@@ -860,15 +876,14 @@ public:
           ++aw_index_beta;
         } else {
           eval=new_eval, m=new_pline.front(), pline=new_pline, new_depth=d;
+          debug.check_score(d, eval, pline);
+          if(!callback_f(d, m, eval, pline, board::nullmove) || (score_is_mate(eval) && d > 0 && int(pline.size()) < d)) {
+            should_stop = true;
+          }
           break;
         }
         if(should_stop)break;
       } while(1);
-      debug.check_score(d, eval, pline);
-      if(!callback_f(d, m, eval, pline, board::nullmove) || (score_is_mate(eval) && d > 0 && int(pline.size()) < d)) {
-        should_stop = true;
-        break;
-      }
       str::pdebug("IDDFS:", d, "pline:", pgn::_line_str(self, pline), "size:", pline.size(), "eval", eval);
       if(should_stop)break;
     }
