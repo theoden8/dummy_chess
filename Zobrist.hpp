@@ -135,7 +135,7 @@ struct StoreScope {
 };
 
 template <typename InnerObject>
-INLINE decltype(auto) make_store_object_scope(zobrist::ttable_ptr<InnerObject> &zb_store, size_t zbsize=ZOBRIST_SIZE) {
+INLINE decltype(auto) make_store_object_scope(zobrist::ttable_ptr<InnerObject> &zb_store, size_t zbsize) {
   return StoreScope<InnerObject>(zb_store, zbsize);
 }
 

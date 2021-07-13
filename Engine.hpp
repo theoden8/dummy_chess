@@ -399,6 +399,10 @@ public:
       return !is_inactive(_age) && depth >= _depth && info == _info;
     }
 
+    INLINE bool can_use_move(const board_info &_info, int16_t _depth, ply_index_t _age) const {
+      return !is_inactive(_age) && ((depth >= (_depth - 1) && _depth > 3) || (depth <= 0)) && info == _info;
+    }
+
     INLINE bool is_inactive(ply_index_t cur_age) const {
       return info.is_unset() || cur_age != age;
     }
@@ -524,6 +528,9 @@ public:
       alpha = std::max(alpha, zb.lowerbound);
       beta = std::min(beta, zb.upperbound);
       m_best = zb.m;
+    } else if(ab_ttable[k].can_use_move(state.info, depth, tt_age)) {
+      const auto &zb = ab_ttable[k];
+      m_best = zb.m;
     }
 
     constexpr bool overwrite = true;
@@ -633,6 +640,9 @@ public:
       alpha = std::max(alpha, zb.lowerbound);
       beta = std::min(beta, zb.upperbound);
       m_best = zb.m;
+    } else if(ab_ttable[k].can_use_move(state.info, depth, tt_age)) {
+      const auto &zb = ab_ttable[k];
+      m_best = zb.m;
     }
 
     constexpr bool overwrite = true;
@@ -644,12 +654,12 @@ public:
     const bool nullmove_allowed = (allow_nullmoves && state.checkline[activePlayer()] != bitmask::full
                                    && ((bits_pawns | get_king_bits()) & bits[activePlayer()] != bits[activePlayer()]));
     if(nullmove_allowed && depth >= 3) {
-      const int16_t reduction = (depth > 6) ? 4 : 3;
+      const int16_t R = (depth > 6) ? 4 : 3;
       MoveLine pline_alt = pline.branch_from_past();
       float score = .0;
       {
         auto mscope = mline_scope(board::nullmove, pline_alt);
-        score = -score_decay(alpha_beta(-alpha-1e-7, -alpha, depth - reduction - 1, pline_alt, ab_ttable, e_ttable, countermove_table, initdepth, callback_f, false));
+        score = -score_decay(alpha_beta(-alpha-1e-7, -alpha, depth-R-1, pline_alt, ab_ttable, e_ttable, countermove_table, initdepth, callback_f, false));
       }
       if(score >= beta) {
         depth -= 4;
@@ -669,7 +679,7 @@ public:
     bool repetitions = false;
     bool should_stop = false;
     for(size_t move_index = 0; move_index < moves.size(); ++move_index) {
-      const auto [_, m] = moves[move_index];
+      const auto [m_val, m] = moves[move_index];
       if(!searchmoves.empty() && searchmoves.find(m) == searchmoves.end()) {
         continue;
       } else if(initdepth == depth) {
@@ -734,6 +744,7 @@ public:
               alpha = score;
             }
           } else {
+//            const bool lmr_allowed = move_index >= 4 && depth >= 3 && (state.checkline[activePlayer()] != bitmask::full && m_val < 0);
             score = -score_decay(alpha_beta(-alpha-1e-7, -alpha, depth - 1, pline_alt, ab_ttable, e_ttable, countermove_table, initdepth, callback_f, allow_nullmoves));
             if(score > alpha && score < beta) {
               pline_alt.clear();
@@ -881,10 +892,20 @@ public:
   zobrist::ttable_ptr<tt_eval_entry> e_ttable = nullptr;
 
   decltype(auto) get_zobrist_alphabeta_scope() {
+    constexpr size_t size_ab = ZOBRIST_SIZE;
+    constexpr size_t mem_ab = size_ab * (sizeof(tt_ab_entry) + 16 * sizeof(move_t));
+    constexpr size_t size_e = 0;
+    constexpr size_t mem_e = size_e * sizeof(tt_eval_entry);
+    constexpr size_t size_cmh = size_t(board::NO_PIECE_INDICES) * size_t(board::SIZE);
+    constexpr size_t size_cmh_twice = size_cmh * size_cmh;
+    constexpr size_t mem_cmh = size_cmh_twice * sizeof(double);
+    constexpr size_t mem_total = mem_ab+mem_e+mem_cmh;
+    str::pdebug("alphabeta scope", "ab:", mem_ab, "e:", mem_e, "cmh:", mem_cmh, "total:", mem_total);
+    _printf("MEM: %luMB %luKB %luB\n", mem_total>>20, (mem_total>>10)&((1<<10)-1), mem_total&((1<<10)-1));
     return (ab_storage_t){
-      .ab_ttable_scope=zobrist::make_store_object_scope<tt_ab_entry>(ab_ttable),
-      .e_ttable_scope=zobrist::make_store_object_scope<tt_eval_entry>(e_ttable, 0),
-      .cmh_table=std::vector<double>(board::NO_PIECE_INDICES * board::SIZE * board::NO_PIECE_INDICES * board::SIZE, .0)
+      .ab_ttable_scope=zobrist::make_store_object_scope<tt_ab_entry>(ab_ttable, size_ab),
+      .e_ttable_scope=zobrist::make_store_object_scope<tt_eval_entry>(e_ttable, size_e),
+      .cmh_table=std::vector<double>(size_cmh_twice, .0)
     };
   }
 
@@ -905,7 +926,7 @@ public:
     return m;
   }
 
-  move_t get_fixed_depth_move_iddfs(int16_t depth, const std::unordered_set<move_t> &searchmoves={}) {
+  INLINE move_t get_fixed_depth_move_iddfs(int16_t depth, const std::unordered_set<move_t> &searchmoves={}) {
     return get_fixed_depth_move_iddfs(depth, make_callback_f(), searchmoves);
   }
 
@@ -917,7 +938,9 @@ public:
 
   zobrist::ttable_ptr<tt_perft_entry> perft_ttable = nullptr;
   decltype(auto) get_zobrist_perft_scope() {
-    return zobrist::make_store_object_scope<tt_perft_entry>(perft_ttable);
+    constexpr size_t size_perft = ZOBRIST_SIZE;
+    constexpr size_t mem_perft = size_perft * sizeof(tt_perft_entry);
+    return zobrist::make_store_object_scope<tt_perft_entry>(perft_ttable, size_perft);
   }
   size_t _perft(int16_t depth, std::vector<tt_perft_entry> &perft_ttable) {
     if(depth == 1 || depth == 0) {

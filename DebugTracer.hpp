@@ -135,13 +135,14 @@ struct DebugTracer {
   void check_score(int16_t depth, double score, const MoveLine &pline) {
     #ifndef NDEBUG
     const float adraw = std::abs(-1e-4);
-    if(!engine.check_pvline_score(pline, score) && std::abs(score - adraw) < 1e-9 && std::abs(engine.get_pvline_score(pline) - adraw) < 1e-9) {
+    const float pvscore = engine.get_pvline_score(pline);
+    if(!engine.check_pvline_score(pline, score) && std::abs(std::abs(score) - adraw) > 1e-6 && std::abs(std::abs(pvscore) - adraw) > 1e-6) {
       str::pdebug(tab(depth), "pvline", _line_str_full(pline));
       str::pdebug(tab(depth), "score", score);
-      str::pdebug(tab(depth), "pvscore", engine.get_pvline_score(pline));
+      str::pdebug(tab(depth), "pvscore", pvscore);
       abort();
     }
-    assert(engine.check_pvline_score(pline, score));
+    assert(engine.check_pvline_score(pline, score) || std::abs(std::abs(score) - adraw) < 1e-6 || std::abs(std::abs(pvscore) - adraw) < 1e-6);
     #endif
   }
 
