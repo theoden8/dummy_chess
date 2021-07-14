@@ -98,14 +98,16 @@ public:
     Piece(KING, WHITE), Piece(KING, BLACK),
     Piece(EMPTY, NEUTRAL)
   };
-  explicit Board(const fen::FEN &f):
+  size_t zobrist_size = 0;
+  explicit Board(const fen::FEN &f, size_t zbsize=ZOBRIST_SIZE):
     activePlayer_(f.active_player),
     current_ply_(f.fullmove * 2 - (f.active_player == WHITE ? 1 : 0)),
-    traditional(f.traditional), crazyhouse(f.crazyhouse)
+    traditional(f.traditional), crazyhouse(f.crazyhouse),
+    zobrist_size(bitmask::highest_bit(zbsize))
   {
     if(!initialized_) {
       M42::init();
-      zobrist::init();
+      zobrist::init(zobrist_size);
       initialized_ = true;
     }
     // board

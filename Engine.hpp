@@ -136,6 +136,7 @@ public:
   INLINE float h_attack_cells(COLOR c) const {
     const piece_bitboard_t occupied = bits[WHITE] | bits[BLACK];
     float h = .0;
+
     decltype(auto) h_add = [&](pos_t i, float mat) mutable -> void {
       auto a = state.attacks[i];
       h += float(piece::size(a & occupied) + piece::size(a)) / mat;
@@ -931,14 +932,14 @@ public:
   zobrist::ttable_ptr<tt_eval_entry> e_ttable = nullptr;
 
   decltype(auto) get_zobrist_alphabeta_scope() {
-    constexpr size_t size_ab = ZOBRIST_SIZE;
-    constexpr size_t mem_ab = size_ab * (sizeof(tt_ab_entry) + 16 * sizeof(move_t));
-    constexpr size_t size_e = 0;
-    constexpr size_t mem_e = size_e * sizeof(tt_eval_entry);
-    constexpr size_t size_cmh = size_t(board::NO_PIECE_INDICES) * size_t(board::SIZE);
-    constexpr size_t size_cmh_twice = size_cmh * size_cmh;
-    constexpr size_t mem_cmh = size_cmh_twice * sizeof(double);
-    constexpr size_t mem_total = mem_ab+mem_e+mem_cmh;
+    const size_t size_ab = zobrist_size;
+    const size_t mem_ab = size_ab * (sizeof(tt_ab_entry) + 16 * sizeof(move_t));
+    const size_t size_e = 0;
+    const size_t mem_e = size_e * sizeof(tt_eval_entry);
+    const size_t size_cmh = size_t(board::NO_PIECE_INDICES) * size_t(board::SIZE);
+    const size_t size_cmh_twice = size_cmh * size_cmh;
+    const size_t mem_cmh = size_cmh_twice * sizeof(double);
+    const size_t mem_total = mem_ab+mem_e+mem_cmh;
     str::pdebug("alphabeta scope", "ab:", mem_ab, "e:", mem_e, "cmh:", mem_cmh, "total:", mem_total);
     _printf("MEM: %luMB %luKB %luB\n", mem_total>>20, (mem_total>>10)&((1<<10)-1), mem_total&((1<<10)-1));
     return (ab_storage_t){
@@ -977,8 +978,8 @@ public:
 
   zobrist::ttable_ptr<tt_perft_entry> perft_ttable = nullptr;
   decltype(auto) get_zobrist_perft_scope() {
-    constexpr size_t size_perft = ZOBRIST_SIZE;
-    constexpr size_t mem_perft = size_perft * sizeof(tt_perft_entry);
+    const size_t size_perft = zobrist_size;
+    const size_t mem_perft = size_perft * sizeof(tt_perft_entry);
     return zobrist::make_store_object_scope<tt_perft_entry>(perft_ttable, size_perft);
   }
   size_t _perft(int16_t depth, std::vector<tt_perft_entry> &perft_ttable) {
@@ -1015,8 +1016,8 @@ public:
   }
 
   DebugTracer<Engine> debug;
-  Engine(const fen::FEN fen=fen::starting_pos):
-    Board(fen), debug(*this)
+  Engine(const fen::FEN fen=fen::starting_pos, size_t zbsize=ZOBRIST_SIZE):
+    Board(fen, zbsize), debug(*this)
   {
     const std::vector<PIECE> piece_types = {PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING};
     std::vector<std::pair<float, PIECE>> pieces;

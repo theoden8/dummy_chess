@@ -62,10 +62,7 @@ struct MoveLine {
   }
 
   INLINE move_t front() const {
-    if(empty()) {
-      return board::nullmove;
-    }
-    return line[start];
+    return empty() ? board::nullmove : line[start];
   }
 
   INLINE decltype(auto) begin() const {

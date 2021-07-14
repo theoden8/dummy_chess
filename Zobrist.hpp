@@ -15,7 +15,7 @@
 
 
 #ifndef ZOBRIST_SIZE
-#define ZOBRIST_SIZE (1ULL << 21)
+#define ZOBRIST_SIZE (1ULL << 18)
 #endif
 
 namespace zobrist {
@@ -44,13 +44,14 @@ INLINE uint64_t randint() {
   return g_seed * 2685821657736338717ULL;
 }
 
-void init(size_t zbsize=ZOBRIST_SIZE) {
+void init(size_t zbsize) {
+  assert(bitmask::is_exp2(zbsize));
   assert(rnd_start_moveside + 1 < zbsize);
   std::unordered_set<key_t> rnd_seen = {0};
   for(ind_t i = 0; i < rnd_hashes.size(); ++i) {
     key_t r;
     do {
-      r = randint() % zbsize;
+      r = randint() & (zbsize - 1);
       rnd_hashes[i] = r;
     } while(rnd_seen.find(r) != rnd_seen.end());
     rnd_seen.insert(r);

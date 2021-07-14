@@ -37,7 +37,9 @@ struct UCI {
     lock_guard guard(engine_mtx);
     destroy();
     _printf("init\n");
-    engine = new Engine(f);
+    auto [_lo, _hi, zobrist_size] = spinOptions.at("Hash"s);
+    zobrist_size = (zobrist_size << (20 - 8));
+    engine = new Engine(f, zobrist_size);
     engine_ab_storage = new typename Engine::ab_storage_t(engine->get_zobrist_alphabeta_scope());
   }
 
@@ -191,6 +193,10 @@ struct UCI {
     {"UCI_Chess960"s, std::make_pair(false, false)},
   };
 
+  std::map<std::string, std::tuple<int, int, int>> spinOptions = {
+    {"Hash"s, std::make_tuple(4, 4096, 64)},
+  };
+
   void process_cmd(std::vector<std::string> cmd) {
     str::pdebug("processing cmd", to_string(cmd));
     while(cmdmap.find(cmd.front()) == std::end(cmdmap)) {
@@ -205,8 +211,12 @@ struct UCI {
         respond(RESP_ID, "name", "dummy_chess");
         respond(RESP_ID, "author", "$USER");
         for(const auto &[name, args] : boolOptions) {
-          const auto &[deflt, _] = args;
-          respond(RESP_OPTION, "name"s, name, "type"s, "check"s, "default"s, deflt ? "true"s : "false"s);
+          const auto &[dflt, _] = args;
+          respond(RESP_OPTION, "name"s, name, "type"s, "check"s, "default"s, dflt ? "true"s : "false"s);
+        }
+        for(const auto &[name, args] : spinOptions) {
+          const auto &[lo, hi, dflt] = args;
+          respond(RESP_OPTION, "name"s, name, "type"s, "spin"s, "default"s, dflt, "min"s, lo, "max", hi);
         }
         respond(RESP_UCIOK);
       return;
@@ -224,27 +234,36 @@ struct UCI {
       return;
       case CMD_SETOPTION:
       {
-        std::optional<std::string> name;
-        std::optional<bool> valueBool;
+        std::optional<std::string> optname;
+        std::optional<std::string> optvalue;
         for(size_t i = 1; i < cmd.size(); ++i) {
           if(cmd[i] == "name"s && cmd.size() > i + 1) {
-            name.emplace(cmd[++i]);
-            str::pdebug("name:", name.value());
+            optname.emplace(cmd[++i]);
+            str::pdebug("name:", optname.value());
           } else if(cmd[i] == "value"s && cmd.size() > i + 1) {
-            ++i;
-            if(cmd[i] == "true"s) {
-              valueBool.emplace(true);
-            } else if(cmd[i] == "false"s) {
-              valueBool.emplace(false);
-            }
-            str::pdebug("value:", valueBool.value() ? "true"s : "false"s);
+            optvalue.emplace(cmd[++i]);
+            str::pdebug("value:", optvalue.value());
           }
         }
-        if(name.has_value()) {
-          if(valueBool.has_value() && boolOptions.find(name.value()) != boolOptions.end()) {
-            auto &[_, val] = boolOptions.at(name.value());
-            val = valueBool.value();
-            str::pdebug("set option", name.value(), val ? "true"s : "false"s);
+        if(optname.has_value()) {
+          if(optvalue.has_value()) {
+            if(boolOptions.find(optname.value()) != boolOptions.end()) {
+              auto &[_, val] = boolOptions.at(optname.value());
+              if(optvalue.value() == "true"s) {
+                val = true;
+                str::pdebug("set option", optname.value(), "true"s);
+              } else if(optvalue.value() == "false"s) {
+                val = false;
+                str::pdebug("set option", optname.value(), "false"s);
+              } else {
+                str::perror("error: unknown optvalue", optvalue.value(), "for option", optname.value());
+              }
+            } else if(spinOptions.find(optname.value()) != spinOptions.end()) {
+              auto &[_lo, _hi, val] = spinOptions.at(optname.value());
+              int v = atoi(optvalue.value().c_str());
+              val = std::min(_hi, std::max(_lo, v));
+              str::pdebug("set option", optname.value(), val);
+            }
           }
         } else {
           str::perror("error: unknown option name");
@@ -454,7 +473,7 @@ struct UCI {
       [&](int16_t depth, move_t currmove, double curreval, const MoveLine &pline, move_t ponder_m) mutable -> bool {
         const size_t nps = update_nodes_per_second(start, time_spent, nodes_searched);
         currline.replace_line(pline);
-        const double hashfull = double(engine->zb_occupied) / double(ZOBRIST_SIZE);
+        const double hashfull = double(engine->zb_occupied) / double(engine->zobrist_size);
         respond(RESP_INFO, "depth"s, depth,
                            "seldepth"s, pline.size(),
                            "nodes"s, engine->nodes_searched,
@@ -469,7 +488,7 @@ struct UCI {
       }, searchmoves);
     should_stop = false;
     if(bestmove != board::nullmove) {
-      const double hashfull = double(engine->zb_occupied) / double(ZOBRIST_SIZE);
+      const double hashfull = double(engine->zb_occupied) / double(engine->zobrist_size);
       respond(RESP_INFO, "seldepth"s, currline.size(),
                          "nodes"s, engine->nodes_searched,
                          "currmove"s, engine->_move_str(bestmove),
