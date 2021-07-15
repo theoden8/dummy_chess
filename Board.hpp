@@ -111,9 +111,6 @@ public:
       initialized_ = true;
     }
     // board
-    for(pos_t i = 0; i < board::SIZE; ++i) {
-      set_pos(i, get_piece(EMPTY));
-    }
     for(pos_t i = 0; i < f.board.length(); ++i) {
       if(f.board[i]==' ')continue;
       const COLOR c = islower(f.board[i]) ? BLACK : WHITE;
@@ -126,8 +123,7 @@ public:
         case 'q':p=QUEEN;break;
         case 'k':p=KING;break;
       }
-      const pos_t x = board::_x(i),
-                  y = board::LEN - board::_y(i) - 1;
+      const pos_t x = board::_x(i), y = board::LEN - board::_y(i) - 1;
       put_pos(board::_pos(A+x, 1+y), get_piece(p, c));
     }
     // subs

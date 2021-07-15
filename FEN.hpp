@@ -207,7 +207,7 @@ namespace fen {
       return f;
     }
     int sc;
-    sc = sscanf(&s[i], "%hhu %hu", &f.halfmove_clock, &f.fullmove);
+    sc = sscanf(&s[i], "%hhu %hd", &f.halfmove_clock, &f.fullmove);
     if(f.fullmove == 0)++f.fullmove;
     assert(sc != -1);
     i += sc;

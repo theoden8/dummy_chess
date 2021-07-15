@@ -20,10 +20,12 @@ using namespace std::chrono;
 struct UCI {
   Engine *engine = nullptr;
   typename Engine::ab_storage_t *engine_ab_storage = nullptr;
+  Engine::iddfs_state engine_idstate;
 
   std::atomic<bool> debug_mode = false;
   std::atomic<bool> should_quit = false;
   std::atomic<bool> should_stop = false;
+  std::atomic<bool> should_ponderhit = false;
   std::atomic<bool> job_started = false;
 
   std::recursive_mutex engine_mtx;
@@ -133,6 +135,7 @@ struct UCI {
     if(cmd.size() > 1 || !cmd.back().empty()) {
       process_cmd(cmd);
     }
+    should_ponderhit = false;
     should_stop = true;
   }
 
@@ -176,6 +179,7 @@ struct UCI {
   } go_perft_command;
 
   void join_engine_thread() {
+    should_stop = true;
     if(job_started == true) {
       while(!engine_thread.joinable())
         ;
@@ -189,11 +193,12 @@ struct UCI {
     return "{"s + str::join(cmd, ", "s) + "}"s;
   }
 
-  std::map<std::string, std::pair<bool, bool>> boolOptions = {
-    {"UCI_Chess960"s, std::make_pair(false, false)},
+  std::map<std::string, bool> boolOptions = {
+    {"UCI_Chess960"s, false},
+    {"Ponder"s, false},
   };
 
-  std::map<std::string, std::tuple<int, int, int>> spinOptions = {
+  std::map<std::string, std::tuple<int, int, int64_t>> spinOptions = {
     {"Hash"s, std::make_tuple(4, 4096, 64)},
   };
 
@@ -210,8 +215,7 @@ struct UCI {
       case CMD_UCI:
         respond(RESP_ID, "name", "dummy_chess");
         respond(RESP_ID, "author", "$USER");
-        for(const auto &[name, args] : boolOptions) {
-          const auto &[dflt, _] = args;
+        for(const auto &[name, dflt] : boolOptions) {
           respond(RESP_OPTION, "name"s, name, "type"s, "check"s, "default"s, dflt ? "true"s : "false"s);
         }
         for(const auto &[name, args] : spinOptions) {
@@ -230,7 +234,10 @@ struct UCI {
         }
       return;
       case CMD_ISREADY:
+      {
+        lock_guard guard(engine_mtx);
         respond(RESP_READYOK);
+      }
       return;
       case CMD_SETOPTION:
       {
@@ -248,7 +255,7 @@ struct UCI {
         if(optname.has_value()) {
           if(optvalue.has_value()) {
             if(boolOptions.find(optname.value()) != boolOptions.end()) {
-              auto &[_, val] = boolOptions.at(optname.value());
+              auto &val = boolOptions.at(optname.value());
               if(optvalue.value() == "true"s) {
                 val = true;
                 str::pdebug("set option", optname.value(), "true"s);
@@ -386,10 +393,13 @@ struct UCI {
       case CMD_STOP:
       {
         should_stop = true;
+        join_engine_thread();
       }
       return;
       case CMD_PONDERHIT:
-        //TODO
+      {
+        should_ponderhit = true;
+      }
       return;
       case CMD_QUIT:
       {
@@ -439,6 +449,43 @@ struct UCI {
     return s;
   }
 
+  double time_control_movetime(const go_command &args, bool pondering) const {
+    if(args.infinite || pondering) {
+      str::pdebug(args.infinite, pondering);
+      return DBL_MAX;
+    } else if(args.movetime != DBL_MAX) {
+      return std::max(args.movetime - 1., args.movetime * .5);
+    }
+    const COLOR c = engine->activePlayer();
+    double inctime = (c == WHITE) ? args.winc : args.binc;
+    inctime = std::max(inctime - 2., inctime * .3);
+    double tottime = (c == WHITE) ? args.wtime : args.btime;
+    tottime = std::max(std::max(tottime - 2., (tottime - .2) * .7), tottime * .5);
+    return std::min(60., tottime / 40. + inctime);
+  }
+
+  void respond_full_iddfs(const Engine::iddfs_state &engine_idstate, size_t nps, double time_spent) {
+    const double hashfull = double(engine->zb_occupied) / double(engine->zobrist_size);
+    respond(RESP_INFO, "depth"s, engine_idstate.curdepth,
+                       "seldepth"s, engine_idstate.pline.size(),
+                       "nodes"s, engine->nodes_searched,
+                       "nps"s, size_t(nps),
+                       "score"s, get_score_type_string(engine_idstate.eval),
+                       "pv"s, engine->_line_str(engine_idstate.pline, true),
+                       "time"s, int(round(time_spent * 1e3)),
+                       "hashfull"s, int(round(hashfull * 1e3)));
+  }
+
+  void respond_final_iddfs(const Engine::iddfs_state &engine_idstate, move_t bestmove, double time_spent) {
+    const double hashfull = double(engine->zb_occupied) / double(engine->zobrist_size);
+    respond(RESP_INFO, "seldepth"s, engine_idstate.pline.size(),
+                       "nodes"s, engine->nodes_searched,
+                       "score"s, get_score_type_string(engine->evaluation),
+                       "pv"s, engine->_line_str(engine_idstate.pline, true),
+                       "time"s, int(round(time_spent * 1e3)),
+                       "hashfull"s, int(round(hashfull * 1e3)));
+  }
+
   void perform_go(go_command args) {
     lock_guard guard(engine_mtx);
     _printf("GO COMMAND\n");
@@ -455,52 +502,55 @@ struct UCI {
     for(auto&s:args.searchmoves)searchmoves_s.emplace_back(engine->_move_str(s));
     std::string s = str::join(searchmoves_s, ", "s);
     _printf("searchmoves: [%s]\n", s.c_str());
-    // TODO ponder, mate, movestogo
-    // time management
-    double inctime = (engine->activePlayer() == WHITE) ? args.winc : args.binc;
-    inctime = std::max(inctime - 2., inctime * .5);
-    double tottime = engine->activePlayer() == WHITE ? args.wtime : args.btime;
-    tottime = std::max(std::max(tottime - 2., (tottime - .2) * .7), tottime * .5);
-    double movetime = args.infinite ? DBL_MAX : std::min(60., tottime / 50. + inctime);
-    if(args.movetime!=DBL_MAX)movetime=std::max(args.movetime - 1., args.movetime * .5);
-    // time/note counting
+    // TODO mate, movestogo
+    double movetime = time_control_movetime(args, args.ponder);
     const auto start = system_clock::now();
-    MoveLine currline;
     double time_spent = 0.;
     size_t nodes_searched = 0;
     const std::unordered_set<move_t> searchmoves(args.searchmoves.begin(), args.searchmoves.end());
-    const move_t bestmove = engine->get_fixed_depth_move_iddfs(args.depth,
-      [&](int16_t depth, move_t currmove, double curreval, const MoveLine &pline, move_t ponder_m) mutable -> bool {
-        const size_t nps = update_nodes_per_second(start, time_spent, nodes_searched);
-        currline.replace_line(pline);
-        const double hashfull = double(engine->zb_occupied) / double(engine->zobrist_size);
-        respond(RESP_INFO, "depth"s, depth,
-                           "seldepth"s, pline.size(),
-                           "nodes"s, engine->nodes_searched,
-                           "nps"s, size_t(nps),
-                           "currmove"s, engine->_move_str(currmove),
-                           "score"s, get_score_type_string(curreval),
-                           "pv"s, engine->_line_str(pline, true),
-                           "time"s, int(round(time_spent * 1e3)),
-                           "hashfull"s, int(round(hashfull * 1e3))
-        );
-        return !check_if_should_stop(args, time_spent, movetime);
-      }, searchmoves);
-    should_stop = false;
-    if(bestmove != board::nullmove) {
-      const double hashfull = double(engine->zb_occupied) / double(engine->zobrist_size);
-      respond(RESP_INFO, "seldepth"s, currline.size(),
-                         "nodes"s, engine->nodes_searched,
-                         "currmove"s, engine->_move_str(bestmove),
-                         "score"s, get_score_type_string(engine->evaluation),
-                         "pv"s, engine->_line_str(currline, true),
-                         "time"s, int(round(time_spent * 1e3)),
-                         "hashfull"s, int(round(hashfull * 1e3))
-      );
-      respond(RESP_BESTMOVE, engine->_move_str(bestmove));
+    if(!args.ponder) {
+      engine_idstate.reset();
+    } else if(engine_idstate.pline.size() >= 2) {
+      engine_idstate.ponderhit();
+      engine_idstate.ponderhit();
     }
+    bool pondering = args.ponder;
+    bool return_from_search = false;
+    const move_t bestmove = engine->get_fixed_depth_move_iddfs(args.depth, engine_idstate, [&](bool verbose) mutable -> bool {
+      if(engine_idstate.pline.empty()) {
+        return true;
+      } else if(return_from_search) {
+        return false;
+      }
+      if(pondering && movetime > 1e9 && should_ponderhit && !should_stop) {
+        pondering = false;
+        const double new_movetime = time_control_movetime(args, false);
+        movetime = std::max(new_movetime / 3, new_movetime - time_spent / 4);
+        str::pdebug("changed time", movetime);
+      }
+      return_from_search = return_from_search || check_if_should_stop(args, time_spent, movetime);
+      const size_t nps = update_nodes_per_second(start, time_spent, nodes_searched);
+			if(verbose && !pondering && !should_stop) {
+        respond_full_iddfs(engine_idstate, nps, time_spent);
+			}
+      return !return_from_search;
+    }, searchmoves);
+		while(pondering && !should_stop) {
+      if(should_ponderhit) {
+        pondering = false;
+      }
+    }
+    if(!args.ponder || !should_stop) {
+      respond_final_iddfs(engine_idstate, bestmove, time_spent);
+    }
+		if(engine_idstate.pondermove() != board::nullmove) {
+			respond(RESP_BESTMOVE, engine->_move_str(bestmove), "ponder"s, engine->_move_str(engine_idstate.pondermove()));
+		} else {
+			respond(RESP_BESTMOVE, engine->_move_str(bestmove));
+		}
     str::pdebug("NOTE: search is over");
     should_stop = true;
+    should_ponderhit = false;
   }
 
   void perform_go_perft(go_perft_command args) {

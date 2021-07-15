@@ -604,6 +604,7 @@ public:
       debug.update(depth, alpha, beta, bestscore, score, m, pline, pline_alt);
       debug.check_score(depth, score, pline_alt);
       if(score >= beta) {
+        ++nodes_searched;
         pline.replace_line(pline_alt);
         if(overwrite && tt_replace_depth && tt_inexact_entry && !repetitions) {
           if(tt_inactive_entry)++zb_occupied;
@@ -723,7 +724,7 @@ public:
       const auto [m_val, m] = moves[move_index];
       if(!searchmoves.empty() && searchmoves.find(m) == searchmoves.end()) {
         continue;
-      } else if(initdepth == depth) {
+      } else if(initdepth <= depth + 1) {
         if(!callback_f(depth, bestscore)) {
           should_stop = true;
           str::pdebug("should stop");
@@ -750,6 +751,7 @@ public:
         pline.replace_line(pline_alt);
         if(bestscore > alpha) {
           if(bestscore >= beta) {
+            ++nodes_searched;
             if(overwrite && tt_replace_depth && tt_inexact_entry && !repetitions) {
               if(tt_inactive_entry)++zb_occupied;
               ab_ttable[k] = { .info=state.info, .depth=depth, .lowerbound=beta, .upperbound=FLT_MAX, .exactscore=score,
@@ -801,6 +803,7 @@ public:
         if(score > bestscore) {
           pline.replace_line(pline_alt);
           if(score >= beta) {
+            ++nodes_searched;
             if(overwrite && tt_replace_depth && tt_inexact_entry && !repetitions) {
               if(tt_inactive_entry)++zb_occupied;
               ab_ttable[k] = (tt_ab_entry){ .info=state.info, .depth=depth, .lowerbound=beta, .upperbound=FLT_MAX, .exactscore=score,
@@ -855,17 +858,51 @@ public:
     }
   };
 
+  typedef struct _iddfs_state {
+    int16_t curdepth = 1;
+    float eval = .0;
+    MoveLine pline;
+
+    INLINE void reset() {
+      curdepth = 1;
+      eval = .0;
+      pline = MoveLine();
+    }
+
+    INLINE move_t currmove() const {
+      return pline.front();
+    }
+
+    INLINE move_t pondermove() const {
+      if(pline.size() > 1) {
+        return pline[1];
+      }
+      return board::nullmove;
+    }
+
+    INLINE move_t ponderhit() {
+      move_t m = pline.front();
+      if(m != board::nullmove) {
+        pline.shift_start();
+        --curdepth;
+      }
+      return m;
+    }
+  } iddfs_state;
+
   template <typename F>
-  decltype(auto) iterative_deepening_dfs(int16_t depth, ab_storage_t &ab_storage, const std::unordered_set<move_t> &searchmoves, F &&callback_f) {
+  decltype(auto) iterative_deepening_dfs(int16_t depth, ab_storage_t &ab_storage, iddfs_state &idstate, const std::unordered_set<move_t> &searchmoves, F &&callback_f) {
     auto &ab_ttable = ab_storage.ab_ttable_scope.get_object();
     auto &e_ttable = ab_storage.e_ttable_scope.get_object();
     auto &cmh_table = ab_storage.cmh_table;
-    std::fill(cmh_table.begin(), cmh_table.end(), .0);
-    MoveLine pline;
-    float eval = .0;
-    move_t m = board::nullmove;
+    if(idstate.curdepth == 1) {
+      std::fill(cmh_table.begin(), cmh_table.end(), .0);
+    }
+    MoveLine &pline = idstate.pline;
+    float &eval = idstate.eval;
+    move_t m = idstate.currmove();
     bool should_stop = false;
-    for(int16_t d = 1; d <= depth; ++d) {
+    for(int16_t d = idstate.curdepth; d <= depth; ++d) {
       if(!pline.empty() && check_line_terminates(pline) && int(pline.size()) < d) {
         eval = get_pvline_score(pline);
         break;
@@ -888,21 +925,21 @@ public:
         const float new_eval = alpha_beta(aw_alpha, aw_beta, d, new_pline, ab_ttable, e_ttable, cmh_table, d,
           [&](int16_t _depth, float _eval) mutable -> bool {
             const move_t _m = new_pline.front();
-            if(_depth == d && final_window && eval < _eval && _m != board::nullmove) {
-              eval=_eval, m=_m, pline=new_pline, new_depth=d;
+            if(!should_stop && _depth == d && final_window && eval < _eval && _m != board::nullmove) {
+              eval=_eval, m=_m, pline=new_pline, new_depth=d, idstate.curdepth=d;
               str::pdebug("IDDFS:", d, "pline:", pgn::_line_str(self, pline), "size:", pline.size(), "eval", eval);
               debug.check_score(d, eval, pline);
             }
-            return !(should_stop = !callback_f(new_depth, m, eval, pline, board::nullmove));
+            return !(should_stop = !callback_f(d == _depth));
           }, true, searchmoves);
         if(new_eval < aw_alpha) {
           ++aw_index_alpha;
         } else if(new_eval > aw_beta) {
           ++aw_index_beta;
         } else {
-          eval=new_eval, m=new_pline.front(), pline=new_pline, new_depth=d;
+          eval=new_eval, m=new_pline.front(), pline=new_pline, new_depth=d, idstate.curdepth=d;
           debug.check_score(d, eval, pline);
-          if(!callback_f(d, m, eval, pline, board::nullmove) || (score_is_mate(eval) && d > 0 && int(pline.size()) < d)) {
+          if(should_stop || !callback_f(true) || (score_is_mate(eval) && d > 0 && int(pline.size()) < d)) {
             should_stop = true;
           }
           break;
@@ -912,7 +949,7 @@ public:
       str::pdebug("IDDFS:", d, "pline:", pgn::_line_str(self, pline), "size:", pline.size(), "eval", eval);
       if(should_stop)break;
     }
-    return std::make_pair(eval, m);
+    return eval;
   }
 
   size_t nodes_searched = 0;
@@ -950,24 +987,22 @@ public:
   }
 
   INLINE decltype(auto) make_callback_f() {
-    return [&](int16_t depth, move_t m, float eval, const MoveLine &pline, move_t ponder_m) -> bool {
-      return true;
-    };
+    return [&](bool verbose) -> bool { return true; };
   }
 
   template <typename F>
-  move_t get_fixed_depth_move_iddfs(int16_t depth, F &&callback_f, const std::unordered_set<move_t> &searchmoves) {
+  move_t get_fixed_depth_move_iddfs(int16_t depth, iddfs_state &idstate, F &&callback_f, const std::unordered_set<move_t> &searchmoves) {
     reset_planning();
     decltype(auto) ab_storage = get_zobrist_alphabeta_scope();
     assert(ab_ttable != nullptr && e_ttable != nullptr);
     debug.set_depth(depth);
-    const auto [_, m] = iterative_deepening_dfs(depth, ab_storage, searchmoves, std::forward<F>(callback_f));
-    evaluation = _;
-    return m;
+    evaluation = iterative_deepening_dfs(depth, ab_storage, idstate, searchmoves, std::forward<F>(callback_f));
+    return idstate.currmove();
   }
 
   INLINE move_t get_fixed_depth_move_iddfs(int16_t depth, const std::unordered_set<move_t> &searchmoves={}) {
-    return get_fixed_depth_move_iddfs(depth, make_callback_f(), searchmoves);
+    iddfs_state idstate;
+    return get_fixed_depth_move_iddfs(depth, idstate, make_callback_f(), searchmoves);
   }
 
   struct tt_perft_entry {
