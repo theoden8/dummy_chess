@@ -11,13 +11,12 @@ $ make
 
 ## features
 
-* transposition tables for alpha-beta including exact and lower/upper bounds
-* principal variation search with iddfs
-* basic razoring
+* alpha-beta, iddfs, transposition tables, pvsearch
 * uci partially supported
 * variants:
     - standard
     - chess960
+    - crazyhouse
 
 ## tools
 
