@@ -100,12 +100,12 @@ struct PGN {
     if(m == board::nullmove) {
       p = "0000"s;
     } else if(board.is_drop_move(i, j)) {
-      p = board::_move_str(i, j);
+      p = board::_move_str(bitmask::_pos_pair(i, j));
     } else if(board.is_castling_move(i, j)) {
       const COLOR c = board.color_at_pos(i);
       const pos_t castlrank = (c == WHITE) ? 1 : 8;
       pos_t k_j = j;
-      if(!board.traditional) {
+      if(board.chess960) {
         if(j == board::_pos(board.qcastlrook[c], castlrank)) {
           k_j = board::_pos(C, castlrank);
         } else if(j == board::_pos(board.kcastlrook[c], castlrank)) {

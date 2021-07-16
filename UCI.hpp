@@ -30,6 +30,7 @@ struct UCI {
 
   struct Options {
     size_t hash_mb = 64;
+    bool chess960 = false;
     bool crazyhouse = false;
   };
   Options engine_options;
@@ -279,7 +280,7 @@ struct UCI {
         }
         if(optname.has_value() && optvalue.has_value()) {
           if(boolOptions.find(optname.value()) != boolOptions.end()) {
-            auto &val = boolOptions.at(optname.value());
+            bool val = boolOptions.at(optname.value());
             if(optvalue.value() == "true"s) {
               val = true;
               str::pdebug("set option", optname.value(), "true"s);
@@ -288,6 +289,9 @@ struct UCI {
               str::pdebug("set option", optname.value(), "false"s);
             } else {
               str::perror("error: unknown optvalue", optvalue.value(), "for option", optname.value());
+            }
+            if(optname.value() == "UCI_Chess960"s) {
+              engine_options.chess960 = val;
             }
           } else if(spinOptions.find(optname.value()) != spinOptions.end()) {
             auto &[_lo, _hi, val] = spinOptions.at(optname.value());

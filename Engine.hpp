@@ -35,9 +35,9 @@ public:
   template <typename F>
   INLINE void iter_drop_moves(F &&func) const {
     if(crazyhouse) {
+      if(is_draw_halfmoves()||is_draw_material())return;
       const COLOR c = activePlayer();
-      const COLOR ec = enemy_of(c);
-      const piece_bitboard_t ch_drop_locations = ~(bits[c] | bits[ec]) & state.checkline[c];
+      const piece_bitboard_t ch_drop_locations = ~(bits[WHITE]|bits[BLACK]) & state.checkline[c];
       {
         if(n_subs[Piece::get_piece_index(PAWN, c)]) {
           bitmask::foreach(ch_drop_locations & board::PAWN_RANKS, [&](pos_t j) mutable -> void {
@@ -81,7 +81,7 @@ public:
     });
     if(crazyhouse) {
       const COLOR c = activePlayer();
-      const piece_bitboard_t ch_drop_locations = ~(bits[c] | bits[enemy_of(c)]) & state.checkline[c];
+      const piece_bitboard_t ch_drop_locations = ~(bits[WHITE]|bits[BLACK]) & state.checkline[c];
       if(n_subs[Piece::get_piece_index(PAWN, c)]) {
         no_moves += piece::size(ch_drop_locations & board::PAWN_RANKS);
       }
@@ -171,7 +171,7 @@ public:
     }
     if(crazyhouse) {
       h += MATERIAL_PAWN * n_subs[Piece::get_piece_index(PAWN, c)];
-      h += (MATERIAL_KNIGHT + 1.) * n_subs[Piece::get_piece_index(KNIGHT, c)];
+      h += (MATERIAL_KNIGHT + .5) * n_subs[Piece::get_piece_index(KNIGHT, c)];
       h += MATERIAL_BISHOP * n_subs[Piece::get_piece_index(BISHOP, c)];
       h += MATERIAL_ROOK * n_subs[Piece::get_piece_index(ROOK, c)];
       h += MATERIAL_QUEEN * n_subs[Piece::get_piece_index(QUEEN, c)];

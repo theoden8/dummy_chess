@@ -127,7 +127,7 @@ namespace board {
         case PAWN:ps="P";break;
         case KNIGHT:ps="N";break;
         case BISHOP:ps="B";break;
-        case ROOK:ps="P";break;
+        case ROOK:ps="R";break;
         case QUEEN:ps="Q";break;
         default:abort();
       }

@@ -205,7 +205,7 @@ namespace piece {
   }
 
   INLINE piece_bitboard_t get_king_castling_moves(COLOR c, pos_t kingpos, piece_bitboard_t occupied, piece_bitboard_t attack_mask,
-                                                  bool queen_side, bool king_side, pos_t qcastlrook, pos_t kcastlrook, bool traditional)
+                                                  bool queen_side, bool king_side, pos_t qcastlrook, pos_t kcastlrook, bool chess960)
   {
     assert(qcastlrook != 0xff || !queen_side);
     assert(kcastlrook != 0xff || !king_side);
@@ -221,7 +221,7 @@ namespace piece {
         const piece_bitboard_t castleleftcheckocc = castleleftcheck | bitmask::ones_between_eq_symm(qrook, board::_pos(D, castlrank));
         const piece_bitboard_t exclude = piece::pos_mask(kingpos) | piece::pos_mask(qrook);
         if(!(attack_mask & castleleftcheck) && !(occupied & ~exclude & castleleftcheckocc)) {
-          if(traditional) {
+          if(!chess960) {
             castlemoves |= piece::pos_mask(castleleft);
           } else {
             castlemoves |= piece::pos_mask(qrook);
@@ -234,7 +234,7 @@ namespace piece {
         const piece_bitboard_t castlerightcheckocc = castlerightcheck | bitmask::ones_between_eq_symm(board::_pos(F, castlrank), krook);
         const piece_bitboard_t exclude = piece::pos_mask(kingpos) | piece::pos_mask(krook);
         if(!(attack_mask & castlerightcheck) && !(occupied & ~exclude & castlerightcheckocc)) {
-          if(traditional) {
+          if(!chess960) {
             castlemoves |= piece::pos_mask(castleright);
           } else {
             castlemoves |= piece::pos_mask(krook);

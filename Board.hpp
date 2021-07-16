@@ -21,7 +21,7 @@ protected:
   COLOR activePlayer_;
   size_t current_ply_ = 0;
 public:
-  const bool traditional;
+  const bool chess960;
   pos_t kcastlrook[NO_COLORS] = {0xff, 0xff},
         qcastlrook[NO_COLORS] = {0xff, 0xff};
 
@@ -122,7 +122,7 @@ public:
   explicit Board(const fen::FEN &f, size_t zbsize=ZOBRIST_SIZE):
     activePlayer_(f.active_player),
     current_ply_(f.fullmove * 2 - (f.active_player == WHITE ? 1 : 0)),
-    traditional(f.traditional), crazyhouse(f.crazyhouse),
+    chess960(f.chess960), crazyhouse(f.crazyhouse),
     zobrist_size(bitmask::highest_bit(zbsize))
   {
     if(!initialized_) {
@@ -330,7 +330,7 @@ public:
     assert(j <= board::MOVEMASK);
     const COLOR c = self.color_at_pos(i);
     const pos_t castlrank = (c == WHITE) ? 1 : 8;
-    if(traditional) {
+    if(!chess960) {
       return (i == pos_king[c]) && (i == board::_pos(E, castlrank))
           && (j == board::_pos(C, castlrank) || j == board::_pos(G, castlrank));
     } else {
@@ -593,7 +593,7 @@ public:
       const pos_t castlrank = (c == WHITE) ? 1 : 8;
       const pos_t k_i = i;
       pos_t k_j = j;
-      if(!traditional) {
+      if(chess960) {
         if(j == board::_pos(qcastlrook[c], castlrank)) {
           k_j = board::_pos(C, castlrank);
         } else if(j == board::_pos(kcastlrook[c], castlrank)) {
@@ -913,6 +913,20 @@ public:
     return !is_draw() && !can_move();
   }
 
+  INLINE bool can_drop_move() const {
+    if(!crazyhouse)return false;
+    const COLOR c = activePlayer();
+    const piece_bitboard_t ch_drop_locations = ~(bits[WHITE]|bits[BLACK]) & state.checkline[c];
+    if(!ch_drop_locations)return false;
+    if(n_subs[Piece::get_piece_index(PAWN, c)] && ch_drop_locations & board::PAWN_RANKS) {
+      return true;
+    }
+    for(PIECE p : {KNIGHT, BISHOP, ROOK, QUEEN}) {
+      if(n_subs[Piece::get_piece_index(p, c)])return true;
+    }
+    return false;
+  }
+
   INLINE bool can_move() const {
     const COLOR c = activePlayer();
     bool canmove = false;
@@ -920,7 +934,7 @@ public:
       if(state.moves[pos])canmove=true;
       return !canmove;
     });
-    return canmove;
+    return canmove || can_drop_move();
   }
 
   INLINE bool is_draw_stalemate() const {
@@ -931,6 +945,9 @@ public:
   INLINE bool is_draw_material() const {
     if(bits_slid_orth)return false;
     const size_t no_pieces = piece::size(bits[WHITE] | bits[BLACK]);
+    if(crazyhouse) {
+      return no_pieces == 2 && !can_drop_move();
+    }
     const piece_bitboard_t bishops = bits_slid_diag & ~bits_slid_orth,
                            knights = get_knight_bits();
     const piece_bitboard_t light_pieces = knights | bishops;
@@ -999,12 +1016,12 @@ public:
       if(state.checkline[c] == bitmask::full && (is_castling(c, QUEEN_SIDE) || is_castling(c, KING_SIDE))) {
         state.moves[pos_king[c]] |= piece::get_king_castling_moves(c, pos_king[c], friends|foes, attack_mask,
                                                                    is_castling(c, QUEEN_SIDE), is_castling(c, KING_SIDE),
-                                                                   qcastlrook[c], kcastlrook[c], traditional);
+                                                                   qcastlrook[c], kcastlrook[c], chess960);
       }
     }
     init_state_moves_checkline_enpassant_takes();
     init_state_pins();
-    if(!traditional) {
+    if(chess960) {
 //      for(const COLOR c : {WHITE, BLACK}) {
       const COLOR c = activePlayer(); {
         state.moves[pos_king[c]] &= ~state.pins[c];
@@ -1163,7 +1180,7 @@ public:
       .enpassant=enpassant_trace(),
       .halfmove_clock=get_halfmoves(),
       .fullmove=ply_index_t(((get_current_ply() - 1) / 2) + 1),
-      .traditional=traditional,
+      .chess960=chess960,
       .crazyhouse=crazyhouse,
     };
     for(pos_t y = 0; y < board::LEN; ++y) {

@@ -22,7 +22,7 @@ namespace fen {
     pos_t enpassant;
     pos_t halfmove_clock;
     ply_index_t fullmove;
-    bool traditional;
+    bool chess960;
     bool crazyhouse;
 
     inline bool operator==(const struct _FEN &other) const {
@@ -44,7 +44,7 @@ namespace fen {
       .enpassant=board::nopos,
       .halfmove_clock=0,
       .fullmove=0,
-      .traditional=true,
+      .chess960=false,
       .crazyhouse=false,
     };
     // board
@@ -171,20 +171,20 @@ namespace fen {
         const pos_t castlfile = c - 'A';
         assert(castlfile == qrook[WHITE] || castlfile == krook[WHITE]);
         if(kingpos[WHITE] != E || (castlfile != A && castlfile != H)) {
-          f.traditional = false;
+          f.chess960 = true;
         }
         f.castlings |= bitmask::_pos_pair(1u << (c - 'A'), 0x00);
       } else if(c != '-') {
         const pos_t castlfile = c - 'a';
         assert(castlfile == qrook[BLACK] || castlfile == krook[BLACK]);
         if(kingpos[BLACK] != E || (castlfile != A && castlfile != H)) {
-          f.traditional = false;
+          f.chess960 = true;
         }
         f.castlings |= bitmask::_pos_pair(0x00, 1u << (c - 'a'));
       }
       ++i;
     }
-//    str::pdebug("traditional", f.traditional);
+//    str::pdebug("chess960", f.chess960);
     // skip space
     while(isspace(s[i]))++i;
     // enpassant
@@ -296,7 +296,7 @@ namespace fen {
           const pos_t c = board::LEN - _c - 1;
           if(mask & (1 << c)) {
             char ch = ((color == WHITE) ? 'A' : 'a') + c;
-            if(f.traditional) {
+            if(!f.chess960) {
               switch(ch) {
                 case 'H':ch='K';break;
                 case 'A':ch='Q';break;
