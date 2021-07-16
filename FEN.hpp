@@ -62,6 +62,13 @@ namespace fen {
           f.crazyhouse = true;
         }
         continue;
+      } else if(*c == '[') {
+        ++slashcount;
+        assert(slashcount == 8);
+        f.crazyhouse = true;
+        continue;
+      } else if(*c == ']') {
+        continue;
       }
       if(slashcount == 8) {
         f.subs += *c;
@@ -249,7 +256,7 @@ namespace fen {
   constexpr fen::lazyFEN search_explosion_pos("q2k2q1/2nqn2b/1n1P1n1b/2rnr2Q/1NQ1QN1Q/3Q3B/2RQR2B/Q2K2Q1 w - -");
   constexpr fen::lazyFEN quiesc_fork_position("r1b1k2r/pp1p1ppp/3pp3/1Nb4q/1n2PPnN/1P1P2P1/P1P4P/R1BQKB1R w KQkq - 0 1");
   // crazyhouse
-  const fen::FEN starting_pos_ch = fen::load_from_string("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR/ w KQkq - 0 1");
+  const fen::FEN starting_pos_ch = fen::load_from_string("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR[] w KQkq - 0 1");
 
   fen::FEN export_from_board(const Board &board);
 
@@ -282,7 +289,8 @@ namespace fen {
       if(y != board::LEN - 1)s+="/";
     }
     if(f.crazyhouse) {
-      s += "/"s + f.subs;
+      //s += "/"s + f.subs;
+      s += "["s + f.subs + "]"s;
     }
     s += ' ';
     s += (f.active_player == WHITE) ? 'w' : 'b';
