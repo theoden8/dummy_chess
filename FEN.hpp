@@ -54,15 +54,18 @@ namespace fen {
     pos_t board_index = 0;
 //    str::pdebug("FEN", s);
     size_t slashcount = 0;
-    for(const char *c = s.c_str(); *c != '\0' && *c != ' '; ++c, ++i) {
+    for(const char *c = s.c_str(); *c != '\0' && !isspace(*c); ++c, ++i) {
       assert(slashcount < 9);
       if(*c == '/') {
         ++slashcount;
+        if(slashcount == 8) {
+          f.crazyhouse = true;
+        }
         continue;
       }
       if(slashcount == 8) {
-        f.crazyhouse = true;
         f.subs += *c;
+        continue;
       }
       if(isdigit(*c)) {
         for(int j=0;j<*c-'0';++j, ++board_index)f.board+=' ';
@@ -225,10 +228,10 @@ namespace fen {
   }
 
   struct lazyFEN {
-    std::string fenstring;
+    const char *fenstring;
 
-    INLINE explicit lazyFEN(const std::string &s):
-      fenstring(s)
+    constexpr INLINE explicit lazyFEN(const char *c):
+      fenstring(c)
     {}
 
     INLINE operator FEN() const {
@@ -236,14 +239,17 @@ namespace fen {
     }
   };
 
+  // standard
   const fen::FEN starting_pos = fen::load_from_string("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"s);
-//  const fen::lazyFEN pins_pos("rnb1k1nr/ppppbppp/8/4Q3/4P2q/8/PPPP1PPP/RNB1KBNR w KQkq - 1 4"s);
-//  const fen::lazyFEN castling_pos("r3k2r/pppppppp/8/8/8/8/PPPPPPPP/R3K2R w KQkq - 0 1"s);
-//  const fen::lazyFEN doublecheck_test_pos("rnbqkbnr/pppp1ppp/8/8/4N3/5N2/PPPPQPPP/R1B1KB1R w KQkq - 8 8"s);
-//  const fen::lazyFEN check_test_pos("rnbqkb1r/pppp1ppp/5n2/4N3/8/8/PPPPQPPP/RNB1KB1R w KQkq - 2 5"s);
-//  const fen::lazyFEN promotion_test_pos("1k3n1n/4PPP1/8/8/8/8/1pp1PPPP/4K3 w - - 0 1"s);
-//  const fen::lazyFEN search_explosion_pos("q2k2q1/2nqn2b/1n1P1n1b/2rnr2Q/1NQ1QN1Q/3Q3B/2RQR2B/Q2K2Q1 w - -"s);
-//  const fen::lazyFEN quiesc_fork_position("r1b1k2r/pp1p1ppp/3pp3/1Nb4q/1n2PPnN/1P1P2P1/P1P4P/R1BQKB1R w KQkq - 0 1"s);
+  constexpr fen::lazyFEN pins_pos("rnb1k1nr/ppppbppp/8/4Q3/4P2q/8/PPPP1PPP/RNB1KBNR w KQkq - 1 4");
+  constexpr fen::lazyFEN castling_pos("r3k2r/pppppppp/8/8/8/8/PPPPPPPP/R3K2R w KQkq - 0 1");
+  constexpr fen::lazyFEN doublecheck_test_pos("rnbqkbnr/pppp1ppp/8/8/4N3/5N2/PPPPQPPP/R1B1KB1R w KQkq - 8 8");
+  constexpr fen::lazyFEN check_test_pos("rnbqkb1r/pppp1ppp/5n2/4N3/8/8/PPPPQPPP/RNB1KB1R w KQkq - 2 5");
+  constexpr fen::lazyFEN promotion_test_pos("1k3n1n/4PPP1/8/8/8/8/1pp1PPPP/4K3 w - - 0 1");
+  constexpr fen::lazyFEN search_explosion_pos("q2k2q1/2nqn2b/1n1P1n1b/2rnr2Q/1NQ1QN1Q/3Q3B/2RQR2B/Q2K2Q1 w - -");
+  constexpr fen::lazyFEN quiesc_fork_position("r1b1k2r/pp1p1ppp/3pp3/1Nb4q/1n2PPnN/1P1P2P1/P1P4P/R1BQKB1R w KQkq - 0 1");
+  // crazyhouse
+  const fen::FEN starting_pos_ch = fen::load_from_string("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR/ w KQkq - 0 1");
 
   fen::FEN export_from_board(const Board &board);
 

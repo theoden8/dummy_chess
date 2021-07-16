@@ -99,6 +99,8 @@ struct PGN {
     std::string p;
     if(m == board::nullmove) {
       p = "0000"s;
+    } else if(board.is_drop_move(i, j)) {
+      p = board::_move_str(i, j);
     } else if(board.is_castling_move(i, j)) {
       const COLOR c = board.color_at_pos(i);
       const pos_t castlrank = (c == WHITE) ? 1 : 8;
@@ -138,7 +140,7 @@ struct PGN {
       }
       p += board::_pos_str(j);
       p += '=';
-      p += toupper(board.pieces[Piece::get_piece_index(becomewhat, board.activePlayer())].str());
+      p += toupper(Piece(becomewhat, board.activePlayer()).str());
     } else {
       const bool is_capture = !board.empty_at_pos(j);
       p = "";

@@ -32,8 +32,7 @@ struct DebugTracer {
   }
 
   std::string tab(int16_t depth) const {
-    std::string tab = ""s; for(int16_t i=0; i<debug_depth-depth;++i)tab+=" "s;
-    return tab;
+    return std::string(debug_depth - depth, ' ');
   }
 
   std::string actinfo(double alpha, double beta, double bestscore, double score) const {

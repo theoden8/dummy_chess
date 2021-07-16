@@ -55,7 +55,14 @@ namespace board {
                   CASTLING_Q_WHITE = 1,
                   CASTLING_K_BLACK = 2,
                   CASTLING_Q_BLACK = 3;
-  constexpr pos_t NO_PIECE_INDICES = int(NO_PIECES)*int(NO_COLORS) + 1;
+  constexpr pos_t NO_PIECE_INDICES = int(NO_PIECES)*int(NO_COLORS);
+  constexpr pos_t CRAZYHOUSE_DROP = 1 << 7;
+  constexpr pos_t NO_DROPPIECE_INDICES = (int(NO_PIECES) - 1)*int(NO_COLORS);
+  constexpr pos_t DROP_PAWN = pos_t(PAWN) | CRAZYHOUSE_DROP,
+                  DROP_KNIGHT = pos_t(KNIGHT) | CRAZYHOUSE_DROP,
+                  DROP_BISHOP = pos_t(BISHOP) | CRAZYHOUSE_DROP,
+                  DROP_ROOK = pos_t(ROOK) | CRAZYHOUSE_DROP,
+                  DROP_QUEEN = pos_t(QUEEN) | CRAZYHOUSE_DROP;
 
   INLINE PIECE get_promotion_as(pos_t j) {
     switch(j & ~board::MOVEMASK) {
@@ -65,6 +72,10 @@ namespace board {
       case board::PROMOTE_QUEEN:return QUEEN;
     }
     return PAWN;
+  }
+
+  INLINE PIECE get_drop_as(pos_t i) {
+    return (PIECE)(i & ~board::CRAZYHOUSE_DROP);
   }
 
   INLINE constexpr pos_t _castling_index(COLOR c, CASTLING_SIDE side) {
@@ -107,8 +118,21 @@ namespace board {
     if(m == board::nullmove) {
       return "0000"s;
     }
-    const pos_t i = bitmask::first(m) & board::MOVEMASK,
+    const pos_t i = bitmask::first(m),
                 j = bitmask::second(m) & board::MOVEMASK;
+    if(i & board::CRAZYHOUSE_DROP) {
+      std::string ps = "";
+      const PIECE p = board::get_drop_as(i);
+      switch(p) {
+        case PAWN:ps="P";break;
+        case KNIGHT:ps="N";break;
+        case BISHOP:ps="B";break;
+        case ROOK:ps="P";break;
+        case QUEEN:ps="Q";break;
+        default:abort();
+      }
+      return ps + "@"s + _pos_str(j);
+    }
     std::string sp;
     if(ispawn && (board::_y(j) == -1+1 || board::_y(j) == -1+8)) {
       switch(board::get_promotion_as(bitmask::second(m))) {

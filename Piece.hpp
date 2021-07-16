@@ -259,6 +259,12 @@ namespace piece {
   }
 } // namespace piece
 
+namespace board {
+  constexpr piece_bitboard_t PAWN_RANKS =
+          piece::rank_mask(1) | piece::rank_mask(2) | piece::rank_mask(3)
+        | piece::rank_mask(4) | piece::rank_mask(5) | piece::rank_mask(6);
+} // namespace board
+
 
 // interface to piece bitboard
 struct Piece {

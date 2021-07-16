@@ -21,27 +21,28 @@ protected:
   COLOR activePlayer_;
   size_t current_ply_ = 0;
 public:
-  bool traditional;
+  const bool traditional;
   pos_t kcastlrook[NO_COLORS] = {0xff, 0xff},
         qcastlrook[NO_COLORS] = {0xff, 0xff};
 
-  bool crazyhouse;
+  const bool crazyhouse;
   piece_bitboard_t bits_promoted_pawns = 0ULL;
-  pos_t n_subs[pos_t(NO_PIECES)*pos_t(NO_COLORS)] = {0};
 
   struct board_info {
     COLOR active_player = NEUTRAL;
     pos_t enpassant;
     pos_pair_t castlings;
     piece_bitboard_t whites, blacks, diag_slid, orth_slid, pawns;
+    uint64_t n_subs_mask;
+    piece_bitboard_t promoted_pawns;
 
     INLINE bool operator==(board_info other) const noexcept {
       return active_player == other.active_player &&
              pawns == other.pawns &&
              whites == other.whites && blacks == other.blacks &&
              diag_slid == other.diag_slid && orth_slid == other.orth_slid &&
-             castlings == other.castlings &&
-             enpassant == other.enpassant;
+             castlings == other.castlings && enpassant == other.enpassant &&
+             n_subs_mask == other.n_subs_mask && promoted_pawns == other.promoted_pawns;
     }
 
     INLINE void unset() {
@@ -64,6 +65,24 @@ public:
     INLINE piece_bitboard_t pawn_bits() const {
       return pawns & ((bitmask::full >> (board::LEN * 2)) << board::LEN);
     }
+
+    std::array<pos_t, board::NO_DROPPIECE_INDICES> get_n_subs() const {
+      std::array<pos_t, board::NO_DROPPIECE_INDICES> nsubs;
+      nsubs.fill(0);
+      for(pos_t i = 0; i < board::NO_DROPPIECE_INDICES; ++i) {
+        nsubs[i] = (n_subs_mask >> (i * 6)) & (board::SIZE - 1);
+      }
+      return nsubs;
+    }
+
+    static std::array<pos_t, board::NO_DROPPIECE_INDICES> get_n_subs(piece_bitboard_t n_subs_mask) {
+      std::array<pos_t, board::NO_DROPPIECE_INDICES> nsubs;
+      nsubs.fill(0);
+      for(pos_t i = 0; i < board::NO_DROPPIECE_INDICES; ++i) {
+        nsubs[i] = (n_subs_mask >> (i * 6)) & (board::SIZE - 1);
+      }
+      return nsubs;
+    }
   };
 public:
   Board &self = *this;
@@ -73,6 +92,7 @@ public:
 
   std::array<piece_bitboard_t, 2> bits = {0x00, 0x00};
   piece_bitboard_t bits_slid_diag = 0x00, bits_slid_orth = 0x00, bits_pawns = 0x00;
+  std::array<pos_t, board::NO_DROPPIECE_INDICES> n_subs = {0};
 
   struct board_state {
     using board_mailbox_t = std::array<piece_bitboard_t, board::SIZE>;
@@ -89,7 +109,7 @@ public:
   std::array<pos_t, 2> pos_king = {board::nopos, board::nopos};
   ply_index_t state_hist_repetitions = INT16_MAX;
 
-  const std::array<Piece, 2*6+1>  pieces = {
+  const std::array<Piece, board::NO_PIECE_INDICES+1>  pieces = {
     Piece(PAWN, WHITE), Piece(PAWN, BLACK),
     Piece(KNIGHT, WHITE), Piece(KNIGHT, BLACK),
     Piece(BISHOP, WHITE), Piece(BISHOP, BLACK),
@@ -124,13 +144,13 @@ public:
         case 'k':p=KING;break;
       }
       const pos_t x = board::_x(i), y = board::LEN - board::_y(i) - 1;
-      put_pos(board::_pos(A+x, 1+y), get_piece(p, c));
+      put_pos(board::_pos(A+x, 1+y), Piece(p, c));
     }
     // subs
     if(crazyhouse) {
       for(COLOR c : {WHITE, BLACK}) {
         for(PIECE p : {PAWN, KNIGHT, BISHOP, ROOK, QUEEN}) {
-          const Piece piece = get_piece(p, c);
+          const Piece piece = Piece(p, c);
           n_subs[piece.piece_index] = std::count(f.subs.begin(), f.subs.end(), piece.str());
         }
       }
@@ -188,20 +208,20 @@ public:
     const piece_bitboard_t ind_mask = piece::pos_mask(ind);
     const COLOR c = self.color_at_pos(ind);
     if(c == NEUTRAL) {
-      return get_piece(EMPTY);
+      return Piece(EMPTY, NEUTRAL);
     }
     if(bits_pawns & ind_mask) {
-      return get_piece(PAWN, c);
+      return Piece(PAWN, c);
     } else if(bits_slid_diag & bits_slid_orth & ind_mask) {
-      return get_piece(QUEEN, c);
+      return Piece(QUEEN, c);
     } else if(bits_slid_diag & ind_mask) {
-      return get_piece(BISHOP, c);
+      return Piece(BISHOP, c);
     } else if(bits_slid_orth & ind_mask) {
-      return get_piece(ROOK, c);
+      return Piece(ROOK, c);
     } else if(pos_king[c] == ind) {
-      return get_piece(KING, c);
+      return Piece(KING, c);
     } else {
-      return get_piece(KNIGHT, c);
+      return Piece(KNIGHT, c);
     }
     abort();
   }
@@ -222,15 +242,14 @@ public:
     return NEUTRAL;
   }
 
-  INLINE const Piece get_piece(PIECE p=EMPTY, COLOR c=NEUTRAL) const {
-    return pieces[Piece::get_piece_index(p, c)];
-  }
-
-  INLINE const Piece get_piece(const Piece p) const {
-    return get_piece(p.value, p.color);
-  }
-
   INLINE void update_state_info() {
+    uint64_t n_subs_mask = 0x00;
+    if(crazyhouse) {
+      for(pos_t i = 0; i < board::NO_DROPPIECE_INDICES; ++i) {
+        n_subs_mask |= uint64_t(n_subs[i]) << (i * 6);
+      }
+      assert(n_subs == board_info::get_n_subs(n_subs_mask));
+    }
     state.info = (board_info){
       .active_player=activePlayer(),
       .enpassant=enpassant_trace(),
@@ -242,6 +261,8 @@ public:
       .pawns=bits_pawns
              | (uint64_t(pos_king[BLACK]) << 7*board::LEN) \
              | uint64_t(pos_king[WHITE]),
+      .n_subs_mask=n_subs_mask,
+      .promoted_pawns=bits_promoted_pawns
     };
   }
 
@@ -318,26 +339,30 @@ public:
   }
 
   INLINE bool is_doublepush_move(pos_t i, pos_t j) const {
-    assert(j <= board::MOVEMASK);
+    assert(i <= board::MOVEMASK && j <= board::MOVEMASK);
     if(~bits_pawns & piece::pos_mask(i))return false;
     const COLOR c = self.color_at_pos(i);
     return piece::is_pawn_double_push(c, i, j);
   }
 
+  INLINE bool is_drop_move(pos_t i, pos_t j) const {
+    return i & board::CRAZYHOUSE_DROP;
+  }
+
   INLINE bool is_enpassant_take_move(pos_t i, pos_t j) const {
-    assert(j <= board::MOVEMASK);
+    assert(i <= board::MOVEMASK && j <= board::MOVEMASK);
     return (bits_pawns & piece::pos_mask(i)) && j == enpassant_trace();
   }
 
   INLINE bool is_promotion_move(pos_t i, pos_t j) const {
-    assert(j <= board::MOVEMASK);
+    assert(i <= board::MOVEMASK && j <= board::MOVEMASK);
     if(~bits_pawns & piece::pos_mask(i))return false;
     const COLOR c = self.color_at_pos(i);
     return piece::is_pawn_promotion_move(c, i, j);
   }
 
   INLINE bool is_naively_capture_move(pos_t i, pos_t j) const {
-    assert(j <= board::MOVEMASK);
+    assert(i <= board::MOVEMASK && j <= board::MOVEMASK);
     const COLOR c = self.color_at_pos(i);
     return bits[enemy_of(c)] & piece::pos_mask(j);
   }
@@ -508,10 +533,29 @@ public:
     return current_ply_;
   }
 
+  INLINE bool check_valid_drop_move(pos_t i, pos_t j) const {
+    const COLOR c = activePlayer();
+    const COLOR ec = enemy_of(c);
+    PIECE p = board::get_drop_as(i);
+    constexpr piece_bitboard_t non_final_ranks = piece::rank_mask(1) | piece::rank_mask(2) | piece::rank_mask(3)
+      | piece::rank_mask(4) | piece::rank_mask(5) | piece::rank_mask(6);
+    const piece_bitboard_t drop_locations = ~(bits[c] | bits[ec]) & state.checkline[c];
+    return crazyhouse
+          && is_drop_move(i, j)
+          && pos_t(p) < pos_t(NO_PIECES)
+          && j <= board::MOVEMASK
+          && n_subs[Piece::get_piece_index(board::get_drop_as(i), c)] > 0
+          && (
+            (p != PAWN && (drop_locations & piece::pos_mask(j)))
+            || (drop_locations & non_final_ranks & piece::pos_mask(j))
+          );
+  }
+
   INLINE bool check_valid_move(pos_t i, pos_t j) const {
-    return i == (i & board::MOVEMASK)
+    return (crazyhouse && check_valid_drop_move(i, j)) || (
+        i == (i & board::MOVEMASK)
            && (bits[activePlayer()] & piece::pos_mask(i))
-           && (state.moves[i] & piece::pos_mask(j & board::MOVEMASK));
+           && (state.moves[i] & piece::pos_mask(j & board::MOVEMASK)));
   }
 
   virtual void _backup_on_event() {}
@@ -523,8 +567,10 @@ public:
     const move_t m = bitmask::_pos_pair(i, j);
     const pos_t promote_as = j & ~board::MOVEMASK;
     j &= board::MOVEMASK;
-    const bool is_castling = (m != board::nullmove && is_castling_move(i, j));
-    const bool is_enpassant_take = (m != board::nullmove && is_enpassant_take_move(i, j));
+    const bool is_drop = crazyhouse && is_drop_move(i, j);
+    const bool known_move_type = (m == board::nullmove || is_drop);
+    const bool is_castling = !known_move_type && is_castling_move(i, j);
+    const bool is_enpassant_take =  !known_move_type && is_enpassant_take_move(i, j);
     const pos_t epawn = enpassant_pawn();
 
     ++current_ply_;
@@ -533,6 +579,14 @@ public:
     assert(m == board::nullmove || check_valid_move(m));
     state.null_move_state = (m == board::nullmove);
     if(m == board::nullmove) {
+    } else if(is_drop) {
+      assert(check_valid_drop_move(i, j));
+      const COLOR c = activePlayer();
+      const PIECE p = board::get_drop_as(i);
+      put_pos(j, Piece(p, c));
+      update_state_attacks_pos(j);
+      --n_subs[Piece::get_piece_index(p, c)];
+      state_hist_halfmoves.emplace_back(get_current_ply());
     } else if(is_castling) {
       const piece_bitboard_t knights = get_knight_bits();
       const COLOR c = activePlayer();
@@ -588,12 +642,22 @@ public:
       update_state_attacks_pos(i);
       update_state_attacks_pos(j);
       _update_pos_change(i, j);
+      if(crazyhouse) {
+        ++n_subs[Piece::get_piece_index(PAWN, c)];
+      }
       state_hist_halfmoves.emplace_back(get_current_ply());
     } else if(is_promotion_move(i, j)) {
       const PIECE becomewhat = board::get_promotion_as(promote_as);
+      if(crazyhouse) {
+        const PIECE p = self[j].value;
+        if(p != EMPTY) {
+          ++n_subs[Piece::get_piece_index(p, activePlayer())];
+        }
+        bits_promoted_pawns |= piece::pos_mask(j);
+      }
       update_castlings(i, j);
       unset_pos(i);
-      put_pos(j, self.pieces[Piece::get_piece_index(becomewhat, activePlayer())]);
+      put_pos(j, Piece(becomewhat, activePlayer()));
       update_state_attacks_pos(i);
       update_state_attacks_pos(j);
       _update_pos_change(i, j);
@@ -605,7 +669,14 @@ public:
         set_enpassant(piece::get_pawn_enpassant_trace(c, i, j));
       }
       if(is_capture || bits_pawns & piece::pos_mask(i)) {
+        if(crazyhouse && is_capture) {
+          const PIECE p = (bits_promoted_pawns & piece::pos_mask(j)) ? PAWN : self[j].value;
+          ++n_subs[Piece::get_piece_index(p, c)];
+        }
         state_hist_halfmoves.emplace_back(get_current_ply());
+      }
+      if(crazyhouse && bits_promoted_pawns & piece::pos_mask(i)) {
+        piece::move_pos(bits_promoted_pawns, i, j);
       }
       update_castlings(i, j);
       if(!is_capture) {
@@ -639,6 +710,10 @@ public:
     bits_slid_orth = prev_info.orth_slid;
     pos_king = {prev_info.pos_king(WHITE), prev_info.pos_king(BLACK)};
     activePlayer_ = enemy_of(activePlayer());
+    if(crazyhouse) {
+      n_subs = prev_info.get_n_subs();
+      bits_promoted_pawns = prev_info.promoted_pawns;
+    }
     --current_ply_;
     //enpassants
     while(!state_hist_enpassants.empty() && state_hist_enpassants.back().first > get_current_ply()) {
@@ -876,7 +951,9 @@ public:
       return;
     }
     int repetitions = 1;
-    for(ply_index_t i = 0; i < std::min<ply_index_t>(state_hist.size(), get_halfmoves()); ++i) {
+    const size_t no_iter = !crazyhouse ? std::min<size_t>(state_hist.size(), get_halfmoves())
+                                       : state_hist.size();
+    for(size_t i = 0; i < no_iter; ++i) {
       const auto &state_iter = state_hist[state_hist.size() - i - 1];
       if(state.info == state_iter.info && !state_iter.null_move_state) {
         ++repetitions;
@@ -1022,6 +1099,7 @@ public:
   }
 
   NEVER_INLINE void print() const {
+    std::cout << "Active player: " << (activePlayer() == WHITE ? "WHITE" : "BLACK") << std::endl;
     for(pos_t i = board::LEN; i > 0; --i) {
       for(pos_t j = 0; j < board::LEN; ++j) {
         const Piece p = self[(i-1) * board::LEN + j];
@@ -1029,6 +1107,15 @@ public:
       }
       std::cout << std::endl;
     }
+    if(crazyhouse) {
+      std::cout << "Drop pieces" << std::endl;
+      for(pos_t i = 0; i < board::NO_DROPPIECE_INDICES; ++i) {
+        std::cout << pieces[i].str() << " ";
+      }
+      std::cout << std::endl;
+      std::cout << str::join(n_subs, " ") << std::endl;
+    }
+    str::print("FEN:", fen::export_as_string(export_as_fen()));
   }
 
   NEVER_INLINE std::string _move_str(move_t m) const {
@@ -1092,7 +1179,7 @@ public:
     if(f.crazyhouse) {
       for(COLOR c : {WHITE, BLACK}) {
         for(PIECE p : {QUEEN,ROOK,BISHOP,KNIGHT,PAWN}) {
-          Piece piece = get_piece(p, c);
+          Piece piece = Piece(p, c);
           for(pos_t i = 0; i < n_subs[piece.piece_index]; ++i) {
             f.subs += piece.str();
           }

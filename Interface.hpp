@@ -264,15 +264,9 @@ struct Interface {
     move(top + 2, LEFT);
     attron(A_BOLD);
     const COLOR c = board.activePlayer();
-    //set statusbar message
-    //int len = printw("[ %s ]", activePlayer().c_str());
-    //int len = printw("[ %s %hhu %hhu->%hhu ]", activePlayer().c_str(), fen::compress_castlings(board.get_castlings_mask()), from, to);
-    int len = printw("[ %s [%hu %hu %hu %hu] %hu", activePlayer().c_str(), board.is_castling(WHITE, QUEEN_SIDE), board.is_castling(WHITE, KING_SIDE),
-                                                   board.is_castling(BLACK, QUEEN_SIDE), board.is_castling(BLACK, KING_SIDE), board.enpassant_pawn());
-    //int len = printw("[ %s %llx ]", activePlayer().c_str(), board.state_checkline);
-    //int len = printw("[ %s %llx %llx %hhu ]", activePlayer().c_str(), board.state_checkline[c], board.state_checkline[enemy_of(c)], board.halfmoves_);
+    const int len = printw("%s", fen::export_as_string(board.export_as_fen()).c_str());
     nc_reset_color();
-    for(int i = 0; i < 20 - len; ++i)addch(' ');
+    for(int i = 0; i < 100 - len; ++i)addch(' ');
   }
 
   void draw_pgn(const int LEFT, const int TOP, int &top) {

@@ -33,14 +33,39 @@ public:
   }
 
   template <typename F>
+  INLINE void iter_drop_moves(F &&func) const {
+    if(crazyhouse) {
+      const COLOR c = activePlayer();
+      const COLOR ec = enemy_of(c);
+      const piece_bitboard_t ch_drop_locations = ~(bits[c] | bits[ec]) & state.checkline[c];
+      {
+        if(n_subs[Piece::get_piece_index(PAWN, c)]) {
+          bitmask::foreach(ch_drop_locations & board::PAWN_RANKS, [&](pos_t j) mutable -> void {
+            func(board::DROP_PAWN, j);
+          });
+        }
+      }
+      for(PIECE p : {KNIGHT, BISHOP, ROOK, QUEEN}) {
+        if(n_subs[Piece::get_piece_index(p, c)]) {
+          bitmask::foreach(ch_drop_locations, [&](pos_t j) mutable -> void {
+            func(pos_t(p) | board::CRAZYHOUSE_DROP, j);
+          });
+        }
+      }
+    }
+  }
+
+  template <typename F>
   INLINE void iter_moves(F &&func) const {
-    bitmask::foreach(bits[activePlayer()], [&](pos_t i) mutable -> void {
-      iter_moves_from(i, func);
+    const COLOR c = activePlayer();
+    bitmask::foreach(bits[c], [&](pos_t i) mutable -> void {
+      iter_moves_from(i, std::forward<F>(func));
     });
+    iter_drop_moves(std::forward<F>(func));
   }
 
   INLINE size_t count_moves(COLOR c) const {
-    assert(c == WHITE || c == BLACK);
+    assert(c < NO_COLORS);
     int16_t no_moves = 0;
     bitmask::foreach(bits[c], [&](pos_t i) mutable -> void {
       pos_t moves_from = bitmask::count_bits(state.moves[i]);
@@ -54,6 +79,20 @@ public:
       }
       no_moves += moves_from;
     });
+    if(crazyhouse) {
+      const COLOR c = activePlayer();
+      const piece_bitboard_t ch_drop_locations = ~(bits[c] | bits[enemy_of(c)]) & state.checkline[c];
+      if(n_subs[Piece::get_piece_index(PAWN, c)]) {
+        no_moves += piece::size(ch_drop_locations & board::PAWN_RANKS);
+      }
+      pos_t npieces = 0;
+      for(PIECE p : {KNIGHT, BISHOP, ROOK, QUEEN}) {
+        if(n_subs[Piece::get_piece_index(p, c)]) {
+          ++npieces;
+        }
+      }
+      no_moves += npieces * piece::size(ch_drop_locations);
+    }
     return no_moves;
   }
 
@@ -129,6 +168,13 @@ public:
       const piece_bitboard_t side = piece::file_mask(A) | piece::file_mask(H);
       h -= .02 * piece::size(bits[c] & bits_pawns & side);
       h += .01 * piece::size(bits[c] & bits_pawns & ~side);
+    }
+    if(crazyhouse) {
+      h += MATERIAL_PAWN * n_subs[Piece::get_piece_index(PAWN, c)];
+      h += (MATERIAL_KNIGHT + 1.) * n_subs[Piece::get_piece_index(KNIGHT, c)];
+      h += MATERIAL_BISHOP * n_subs[Piece::get_piece_index(BISHOP, c)];
+      h += MATERIAL_ROOK * n_subs[Piece::get_piece_index(ROOK, c)];
+      h += MATERIAL_QUEEN * n_subs[Piece::get_piece_index(QUEEN, c)];
     }
     return h;
   }
@@ -218,7 +264,8 @@ public:
 
   INLINE float move_heuristic_extra_material(pos_t i, pos_t j) const {
     const pos_t _j = j & board::MOVEMASK;
-    if(is_promotion_move(i, _j)) {
+    if(crazyhouse && is_drop_move(i, j)) {
+    } else if(is_promotion_move(i, _j)) {
       return material_of(board::get_promotion_as(j)) - material_of(PAWN);
     } else if(is_enpassant_take_move(i, _j)) {
       return material_of(PAWN);
@@ -228,7 +275,8 @@ public:
 
   INLINE float move_heuristic_check(pos_t i, pos_t j) const {
     const pos_t _j = j & board::MOVEMASK;
-    if(is_naively_checking_move(i, _j)) {
+    if(crazyhouse && is_drop_move(i, j)) {
+    } else if(is_naively_checking_move(i, _j)) {
       return .5;
     }
     return .0;
@@ -251,8 +299,11 @@ public:
   INLINE float move_heuristic_see(pos_t i, pos_t j, piece_bitboard_t edefendmap) const {
     const pos_t _j = j & board::MOVEMASK;
     float val = .0;
-    val += move_heuristic_extra_material(i, j);
-    if(val > 0 || is_castling_move(i, _j)) {
+    const float extra_val = move_heuristic_extra_material(i, j);
+    val += extra_val;
+    if(crazyhouse && is_drop_move(i, _j)) {
+      return .0;
+    } else if(val > 0 || is_castling_move(i, _j)) {
       return val;
     }
     const float mat_i = material_of(self[i].value),
@@ -260,16 +311,22 @@ public:
     if(~edefendmap & piece::pos_mask(_j)) {
       return mat_j;
     } else if(mat_i < mat_j) {
-      return mat_j - mat_i;
+      return mat_j - mat_i - extra_val;
     }
-    val += static_exchange_evaluation(i, _j);
+    const float see = static_exchange_evaluation(i, _j);
+    val += see;
+    if(see < 0) {
+      val -= extra_val;
+    }
     return val;
   }
 
   INLINE float move_heuristic_mvv_lva(pos_t i, pos_t j, piece_bitboard_t edefendmap) const {
     const pos_t _j = j & board::MOVEMASK;
     float val = .0;
-    if(is_castling_move(i, _j)) {
+    if(is_drop_move(i, _j)) {
+      ;
+    } else if(is_castling_move(i, _j)) {
       val += .5;
     } else if(is_naively_capture_move(i, _j)) {
       const float mat_to = material_of(self[_j].value);
@@ -297,7 +354,7 @@ public:
 
   INLINE float move_heuristic_cmt(move_t m, const MoveLine &pline, const std::vector<double> &countermove_table) const {
     const move_t p_m = pline.get_previous_move();
-    if(p_m != board::nullmove) {
+    if(p_m != board::nullmove && !(crazyhouse && is_drop_move(bitmask::first(m), bitmask::second(m)))) {
       const pos_t i = bitmask::first(m), _j = bitmask::second(m);
       const size_t cmt_outer = board::NO_PIECE_INDICES * board::SIZE;
       const pos_t p_j = bitmask::second(p_m) & board::MOVEMASK;
@@ -498,8 +555,11 @@ public:
       const bool allow_checking = (nchecks > 0 && -depth < 3);
       if(king_in_check) {
         val = move_heuristic_mvv_lva(i, j, edefendmap);
+      } else if(crazyhouse && is_drop_move(i, j)) {
+        return;
       } else if(is_promotion_move(i, j) || is_enpassant_take_move(i, j)) {
-        val = move_heuristic_mvv_lva(i, j, edefendmap);
+        val = move_heuristic_see(i, j, edefendmap);
+        if(val < 0)return;
       } else if(is_naively_capture_move(i, j)) {
         if(material_of(self[i].value) + 1e-9 < material_of(self[j].value) && (~edefendmap & piece::pos_mask(j))) {
           val = move_heuristic_mvv_lva(i, j, edefendmap) + .01;
@@ -604,7 +664,6 @@ public:
       debug.update(depth, alpha, beta, bestscore, score, m, pline, pline_alt);
       debug.check_score(depth, score, pline_alt);
       if(score >= beta) {
-        ++nodes_searched;
         pline.replace_line(pline_alt);
         if(overwrite && tt_replace_depth && tt_inexact_entry && !repetitions) {
           if(tt_inactive_entry)++zb_occupied;
@@ -751,7 +810,6 @@ public:
         pline.replace_line(pline_alt);
         if(bestscore > alpha) {
           if(bestscore >= beta) {
-            ++nodes_searched;
             if(overwrite && tt_replace_depth && tt_inexact_entry && !repetitions) {
               if(tt_inactive_entry)++zb_occupied;
               ab_ttable[k] = { .info=state.info, .depth=depth, .lowerbound=beta, .upperbound=FLT_MAX, .exactscore=score,
@@ -759,7 +817,7 @@ public:
             }
             const pos_t i = bitmask::first(m), j = bitmask::second(m) & board::MOVEMASK;
             const move_t p_m = pline.get_previous_move();
-            if(p_m != board::nullmove) {
+            if(p_m != board::nullmove && !(crazyhouse && is_drop_move(i, j))) {
               const size_t cmt_outer = board::NO_PIECE_INDICES * board::SIZE;
               const pos_t p_j = bitmask::second(p_m) & board::MOVEMASK;
               const size_t cmt_index = cmt_outer * (self[p_j].piece_index * board::SIZE + p_j) + (self[i].piece_index * board::SIZE + j);
@@ -803,7 +861,6 @@ public:
         if(score > bestscore) {
           pline.replace_line(pline_alt);
           if(score >= beta) {
-            ++nodes_searched;
             if(overwrite && tt_replace_depth && tt_inexact_entry && !repetitions) {
               if(tt_inactive_entry)++zb_occupied;
               ab_ttable[k] = (tt_ab_entry){ .info=state.info, .depth=depth, .lowerbound=beta, .upperbound=FLT_MAX, .exactscore=score,
@@ -811,7 +868,7 @@ public:
             }
             const pos_t i = bitmask::first(m), j = bitmask::second(m) & board::MOVEMASK;
             const move_t p_m = pline.get_previous_move();
-            if(p_m != board::nullmove) {
+            if(p_m != board::nullmove && !(crazyhouse && is_drop_move(i, j))) {
               const size_t cmt_outer = board::NO_PIECE_INDICES * board::SIZE;
               const pos_t p_j = bitmask::second(p_m) & board::MOVEMASK;
               const size_t cmt_index = cmt_outer * (self[p_j].piece_index * board::SIZE + p_j) + (self[i].piece_index * board::SIZE + j);
@@ -1031,7 +1088,7 @@ public:
       ++zb_miss;
     }
     // search
-    const bool overwrite = true;
+    constexpr bool overwrite = true;
     size_t nodes = 0;
     iter_moves([&](pos_t i, pos_t j) mutable -> void {
       auto mscope = move_scope(bitmask::_pos_pair(i, j));

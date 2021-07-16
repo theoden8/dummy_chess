@@ -25,15 +25,15 @@ def get_output(command):
     return s
 
 
-[STANDARD, CHESS960] = range(2)
+[STANDARD, CHESS960, CRAZYHOUSE] = range(3)
 def get_setoption_uci(variant=STANDARD):
-    optionname = None
+    if variant == STANDARD:
+        return ''
     if variant == CHESS960:
-        optionname = 'UCI_Chess960'
-    setoption = ''
-    if optionname is not None:
-        setoption = f"echo 'setoption name {optionname} value true';"
-    return setoption
+        return f"echo 'setoption name UCI_CHESS960 value true';"
+    elif variant == CRAZYHOUSE:
+        return f"echo 'setoption name UCI_Variant value crazyhouse';"
+    return ''
 
 
 startingpos = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
@@ -51,8 +51,14 @@ def get_output_uci(uci_exec, depth: int, fen=startingpos, variant=STANDARD) -> d
     return turnmaps
 
 
+def get_uciexec(variant=STANDARD):
+    if variant in [STANDARD, CHESS960]:
+        return 'stockfish'
+    return 'fairy-stockfish'
+
+
 def get_output_stockfish(depth=5, fen=startingpos, variant=STANDARD) -> dict:
-    return get_output_uci('stockfish', depth=depth, fen=fen, variant=variant)
+    return get_output_uci(get_uciexec(variant=variant), depth=depth, fen=fen, variant=variant)
 
 
 def get_output_dummy_chess(depth=5, fen=startingpos, variant=STANDARD) -> dict:
@@ -60,7 +66,8 @@ def get_output_dummy_chess(depth=5, fen=startingpos, variant=STANDARD) -> dict:
 
 
 def get_next_fen(fen, move, variant=STANDARD):
-    s = get_output(f"({get_setoption_uci(variant=variant)} echo 'position fen {fen} moves {move}'; echo 'd') | stockfish | grep Fen")
+    uciexec = get_uciexec(variant=variant)
+    s = get_output(f"({get_setoption_uci(variant=variant)} echo 'position fen {fen} moves {move}'; echo 'd') | {uciexec} | grep Fen")
     s = s.replace('Fen: ', '')
     return s.strip()
 
@@ -89,15 +96,18 @@ def compare_outputs(depth=5, fen=startingpos, path=[], variant=STANDARD):
     if flag_exit:
         print(f"path={path}, depth={depth}, fen={fen}")
         return False
-    diff = [k for k in sfmaps.keys() if sfmaps[k] != dcmaps[k] and k != 'total']
-    random.shuffle(diff)
+    diff = [k for k in dcmaps.keys() if sfmaps[k] != dcmaps[k] and k != 'total']
     for m in diff:
-        res = compare_outputs(depth=depth-1, fen=get_next_fen(fen, m), path=path+[m], variant=variant)
+        res = compare_outputs(depth=depth-1, fen=get_next_fen(fen, m, variant=variant), path=path+[m], variant=variant)
     return False
 
 
 def compare_outputs_960(depth: int, fen: str, path=[]):
     return compare_outputs(depth=depth, fen=fen, path=path, variant=CHESS960)
+
+
+def compare_outputs_ch(depth: int, fen: str, path=[]):
+    return compare_outputs(depth=depth, fen=fen, path=path, variant=CRAZYHOUSE)
 
 
 def check_traditional():
@@ -164,6 +174,13 @@ def check_chess960():
     compare_outputs_960(depth=5, fen='nb1qbrkr/p1pppp2/1p1n2pp/8/1P6/2PN3P/P2PPPP1/NB1QBRKR w HFhf - 0 9')
 
 
+def check_crazyhouse():
+    compare_outputs_ch(depth=6, fen='rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR/ w KQkq - 0 1')
+    compare_outputs_ch(depth=4, fen='r1bq1rk1/pppp1p2/2n2p1p/2b1p3/2B1P3/2NP1N2/PPP2PPP/R2Q1RK1/Nb b - - 1 8')
+    compare_outputs_ch(depth=4, fen='r2q2k1/p1Pp1r2/bpn2p1p/2b1p3/2B4N/PPN4P/2PbpPP1/R2Q1RK1/PNp w - - 0 17')
+
+
 if __name__ == "__main__":
     check_traditional()
     check_chess960()
+    check_crazyhouse()

@@ -28,6 +28,12 @@ struct UCI {
   std::atomic<bool> should_ponderhit = false;
   std::atomic<bool> job_started = false;
 
+  struct Options {
+    size_t hash_mb = 64;
+    bool crazyhouse = false;
+  };
+  Options engine_options;
+
   std::recursive_mutex engine_mtx;
   using lock_guard = std::lock_guard<std::recursive_mutex>;
   std::thread engine_thread;
@@ -39,8 +45,7 @@ struct UCI {
     lock_guard guard(engine_mtx);
     destroy();
     _printf("init\n");
-    auto [_lo, _hi, zobrist_size] = spinOptions.at("Hash"s);
-    zobrist_size = (zobrist_size << (20 - 8));
+    const size_t zobrist_size = (engine_options.hash_mb << (20 - 8));
     engine = new Engine(f, zobrist_size);
     engine_ab_storage = new typename Engine::ab_storage_t(engine->get_zobrist_alphabeta_scope());
   }
@@ -141,9 +146,21 @@ struct UCI {
 
   static move_t scan_move(const std::string &s) {
     assert(s.length() == 4 || s.length() == 5);
-    const pos_t i_file = tolower(s[0]) - 'a';
-    const pos_t i_rank = s[1] - '0';
-    const pos_t i = board::_pos(A+i_file, i_rank);
+    pos_t i = 0x00;
+    if(s[1] == '@') {
+      switch(toupper(s[0])) {
+        case 'P':i=board::DROP_PAWN;break;
+        case 'N':i=board::DROP_KNIGHT;break;
+        case 'B':i=board::DROP_BISHOP;break;
+        case 'R':i=board::DROP_ROOK;break;
+        case 'Q':i=board::DROP_QUEEN;break;
+        default:abort();
+      }
+    } else {
+      const pos_t i_file = tolower(s[0]) - 'a';
+      const pos_t i_rank = s[1] - '0';
+      i = board::_pos(A+i_file, i_rank);
+    }
     const pos_t j_file = tolower(s[2]) - 'a';
     const pos_t j_rank = s[3] - '0';
     pos_t j = board::_pos(A+j_file, j_rank);
@@ -199,7 +216,11 @@ struct UCI {
   };
 
   std::map<std::string, std::tuple<int, int, int64_t>> spinOptions = {
-    {"Hash"s, std::make_tuple(4, 4096, 64)},
+    {"Hash"s, std::make_tuple(4, 4096, engine_options.hash_mb)},
+  };
+
+  std::map<std::string, std::pair<std::vector<std::string>, std::string>> comboOptions = {
+    {"UCI_Variant"s, std::make_pair(std::vector<std::string>{"chess"s, "crazyhouse"s}, "chess"s)},
   };
 
   void process_cmd(std::vector<std::string> cmd) {
@@ -221,6 +242,10 @@ struct UCI {
         for(const auto &[name, args] : spinOptions) {
           const auto &[lo, hi, dflt] = args;
           respond(RESP_OPTION, "name"s, name, "type"s, "spin"s, "default"s, dflt, "min"s, lo, "max", hi);
+        }
+        for(const auto &[name, args] : comboOptions) {
+          const auto &[vals, dflt] = args;
+          respond(RESP_OPTION, "name"s, name, "type"s, "combo"s, "default", dflt, "var "s + str::join(vals, " var "s));
         }
         respond(RESP_UCIOK);
       return;
@@ -252,28 +277,37 @@ struct UCI {
             str::pdebug("value:", optvalue.value());
           }
         }
-        if(optname.has_value()) {
-          if(optvalue.has_value()) {
-            if(boolOptions.find(optname.value()) != boolOptions.end()) {
-              auto &val = boolOptions.at(optname.value());
-              if(optvalue.value() == "true"s) {
-                val = true;
-                str::pdebug("set option", optname.value(), "true"s);
-              } else if(optvalue.value() == "false"s) {
-                val = false;
-                str::pdebug("set option", optname.value(), "false"s);
-              } else {
-                str::perror("error: unknown optvalue", optvalue.value(), "for option", optname.value());
-              }
-            } else if(spinOptions.find(optname.value()) != spinOptions.end()) {
-              auto &[_lo, _hi, val] = spinOptions.at(optname.value());
-              int v = atoi(optvalue.value().c_str());
-              val = std::min(_hi, std::max(_lo, v));
-              str::pdebug("set option", optname.value(), val);
+        if(optname.has_value() && optvalue.has_value()) {
+          if(boolOptions.find(optname.value()) != boolOptions.end()) {
+            auto &val = boolOptions.at(optname.value());
+            if(optvalue.value() == "true"s) {
+              val = true;
+              str::pdebug("set option", optname.value(), "true"s);
+            } else if(optvalue.value() == "false"s) {
+              val = false;
+              str::pdebug("set option", optname.value(), "false"s);
+            } else {
+              str::perror("error: unknown optvalue", optvalue.value(), "for option", optname.value());
             }
+          } else if(spinOptions.find(optname.value()) != spinOptions.end()) {
+            auto &[_lo, _hi, val] = spinOptions.at(optname.value());
+            int v = atoi(optvalue.value().c_str());
+            val = std::min(_hi, std::max(_lo, v));
+            str::pdebug("set option", optname.value(), val);
+          } else if(comboOptions.find(optname.value()) != comboOptions.end()) {
+            auto &[_vals, val] = comboOptions.at(optname.value());
+            if(std::find(_vals.begin(), _vals.end(), optvalue.value()) == std::end(_vals)) {
+              str::perror("error: unknown optvalue", optvalue.value(), "for option", optname.value());
+            }
+            if(optvalue.value() == "chess") {
+              engine_options.crazyhouse = false;
+            } else if(optvalue.value() == "crazyhouse") {
+              engine_options.crazyhouse = true;
+            }
+            str::pdebug("set option", optname.value(), val);
           }
         } else {
-          str::perror("error: unknown option name");
+          str::perror("error: unknown option name or value");
         }
       }
         // no options
@@ -293,7 +327,11 @@ struct UCI {
         size_t ind = 1;
         if(cmd[ind] == "startpos"s) {
           ++ind;
-          f = fen::starting_pos;
+          if(engine_options.crazyhouse) {
+            f = fen::starting_pos_ch;
+          } else {
+            f = fen::starting_pos;
+          }
         } else if(cmd[ind] == "fen"s) {
           ++ind;
           const size_t begin_ind = ind;
@@ -522,7 +560,7 @@ struct UCI {
       } else if(return_from_search) {
         return false;
       }
-      if(pondering && movetime > 1e9 && should_ponderhit && !should_stop) {
+      if(pondering && movetime > 1e9 && should_ponderhit) {
         pondering = false;
         const double new_movetime = time_control_movetime(args, false);
         movetime = std::max(new_movetime / 3, new_movetime - time_spent / 4);
