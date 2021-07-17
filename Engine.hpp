@@ -684,7 +684,7 @@ public:
       debug.check_score(depth, score, pline_alt);
       if(score >= beta) {
         pline.replace_line(pline_alt);
-        if(overwrite && tt_replace_depth && tt_inexact_entry && !repetitions) {
+        if(overwrite && tt_replace_depth && tt_inexact_entry && !repetitions && !pline.find(board::nullmove)) {
           if(tt_inactive_entry)++zb_occupied;
           ab_ttable[k] = (tt_ab_entry){ .info=state.info, .depth=depth, .lowerbound=beta, .upperbound=FLT_MAX, .exactscore=score,
                                         .m=m, .subpline=pline.get_future(), .age=tt_age };
@@ -699,7 +699,7 @@ public:
         }
       }
     }
-    if(overwrite && m_best != board::nullmove && !repetitions) {
+    if(overwrite && m_best != board::nullmove && !repetitions && !pline.find(board::nullmove)) {
       if((tt_replace_depth) && bestscore <= alpha) {
         if(tt_inactive_entry)++zb_occupied;
         ab_ttable[k] = (tt_ab_entry){ .info=state.info, .depth=depth, .lowerbound=-FLT_MAX, .upperbound=alpha, .exactscore=bestscore,
@@ -739,7 +739,6 @@ public:
                    zobrist::ttable<tt_eval_entry> &e_ttable,
                    std::vector<double> &countermove_table,
                    int16_t initdepth, F &&callback_f,
-                   bool allow_nullmoves=true,
                    const std::unordered_set<move_t> &searchmoves={})
   {
     if(depth <= 0) {
@@ -771,15 +770,17 @@ public:
     const bool tt_inexact_entry = tt_inactive_entry || ab_ttable[k].lowerbound != ab_ttable[k].upperbound;
 
     // nullmove reduction
-    const bool nullmove_allowed = (allow_nullmoves && state.checkline[activePlayer()] != bitmask::full
-                                   && ((bits_pawns | get_king_bits()) & bits[activePlayer()] != bits[activePlayer()]));
+    const COLOR c = activePlayer();
+    const bool nullmove_allowed = (state.checkline[c] == bitmask::full)
+                                && piece::size((bits_slid_diag | get_knight_bits() | bits_slid_orth) & bits[c]) > 0;
     if(nullmove_allowed && depth >= 3) {
       const int16_t R = (depth > 6) ? 4 : 3;
       MoveLine pline_alt = pline.branch_from_past();
       float score = .0;
       {
+        // TODO variable NM bound
         auto mscope = mline_scope(board::nullmove, pline_alt);
-        score = -score_decay(alpha_beta(-alpha-1e-7, -alpha, depth-R-1, pline_alt, ab_ttable, e_ttable, countermove_table, initdepth, callback_f, false));
+        score = -score_decay(alpha_beta(-alpha-1e-7, -alpha, depth-R-1, pline_alt, ab_ttable, e_ttable, countermove_table, initdepth, callback_f));
       }
       if(score >= beta) {
         depth -= 4;
@@ -820,7 +821,7 @@ public:
             ++nodes_searched;
             score = -1e-4;
           } else {
-            score = -score_decay(alpha_beta(-beta, -alpha, depth - 1, pline_alt, ab_ttable, e_ttable, countermove_table, initdepth, callback_f, allow_nullmoves));
+            score = -score_decay(alpha_beta(-beta, -alpha, depth - 1, pline_alt, ab_ttable, e_ttable, countermove_table, initdepth, callback_f));
           }
         } // end move scope
         debug.update(depth, alpha, beta, bestscore, score, m, pline, pline_alt, "firstmove"s);
@@ -861,10 +862,10 @@ public:
             }
           } else {
 //            const bool lmr_allowed = move_index >= 4 && depth >= 3 && (state.checkline[activePlayer()] != bitmask::full && m_val < 0);
-            score = -score_decay(alpha_beta(-alpha-1e-7, -alpha, depth - 1, pline_alt, ab_ttable, e_ttable, countermove_table, initdepth, callback_f, allow_nullmoves));
+            score = -score_decay(alpha_beta(-alpha-1e-7, -alpha, depth - 1, pline_alt, ab_ttable, e_ttable, countermove_table, initdepth, callback_f));
             if(score > alpha && score < beta) {
               pline_alt.clear();
-              score = -score_decay(alpha_beta(-beta, -alpha, depth - 1, pline_alt, ab_ttable, e_ttable, countermove_table, initdepth, callback_f, allow_nullmoves));
+              score = -score_decay(alpha_beta(-beta, -alpha, depth - 1, pline_alt, ab_ttable, e_ttable, countermove_table, initdepth, callback_f));
               if(score > alpha) {
                 alpha = score;
               }
@@ -966,19 +967,16 @@ public:
     if(idstate.curdepth == 1) {
       std::fill(cmh_table.begin(), cmh_table.end(), .0);
     }
-    MoveLine &pline = idstate.pline;
-    float &eval = idstate.eval;
-    move_t m = idstate.currmove();
     bool should_stop = false;
     for(int16_t d = idstate.curdepth; d <= depth; ++d) {
-      if(!pline.empty() && check_line_terminates(pline) && int(pline.size()) < d) {
-        eval = get_pvline_score(pline);
+      if(!idstate.pline.empty() && check_line_terminates(idstate.pline) && int(idstate.pline.size()) < d) {
+        idstate.eval = get_pvline_score(idstate.pline);
         break;
       }
-      const float eval_prev = eval;
+      const float eval_prev = idstate.eval;
       const std::valarray<float> aspiration_window = {.01, .15, 1.25, MATERIAL_QUEEN - 1};
       pos_t aw_index_alpha = 0, aw_index_beta = 0;
-      MoveLine new_pline = pline;
+      MoveLine new_pline = idstate.pline;
       do {
         float aw_alpha = -MATERIAL_KING, aw_beta = MATERIAL_KING;
         if(aw_index_alpha < aspiration_window.size()) {
@@ -989,35 +987,34 @@ public:
         }
         const bool final_window = (aw_index_alpha == aspiration_window.size() && aw_index_beta == aspiration_window.size());
         str::pdebug("depth:", d, "aw", aw_alpha, aw_beta);
-        int16_t new_depth = d - 1;
         const float new_eval = alpha_beta(aw_alpha, aw_beta, d, new_pline, ab_ttable, e_ttable, cmh_table, d,
           [&](int16_t _depth, float _eval) mutable -> bool {
             const move_t _m = new_pline.front();
-            if(!should_stop && _depth == d && final_window && eval < _eval && _m != board::nullmove) {
-              eval=_eval, m=_m, pline=new_pline, new_depth=d, idstate.curdepth=d;
-              str::pdebug("IDDFS:", d, "pline:", pgn::_line_str(self, pline), "size:", pline.size(), "eval", eval);
-              debug.check_score(d, eval, pline);
+            if(!should_stop && _depth == d && final_window && idstate.eval < _eval && _m != board::nullmove) {
+              idstate.eval=_eval, idstate.pline=new_pline, idstate.curdepth=d;
+              str::pdebug("IDDFS:", d, "pline:", pgn::_line_str(self, idstate.pline), "size:", idstate.pline.size(), "eval", idstate.eval);
+              debug.check_score(d, idstate.eval, idstate.pline);
             }
             return !(should_stop = !callback_f(d == _depth));
-          }, true, searchmoves);
+          }, searchmoves);
         if(new_eval < aw_alpha) {
           ++aw_index_alpha;
         } else if(new_eval > aw_beta) {
           ++aw_index_beta;
         } else {
-          eval=new_eval, m=new_pline.front(), pline=new_pline, new_depth=d, idstate.curdepth=d;
-          debug.check_score(d, eval, pline);
-          if(should_stop || !callback_f(true) || (score_is_mate(eval) && d > 0 && int(pline.size()) < d)) {
+          idstate.eval=new_eval, idstate.pline=new_pline, idstate.curdepth=d;
+          debug.check_score(d, idstate.eval, idstate.pline);
+          if(should_stop || !callback_f(true) || (score_is_mate(idstate.eval) && d > 0 && int(idstate.pline.size()) < d)) {
             should_stop = true;
           }
           break;
         }
         if(should_stop)break;
       } while(1);
-      str::pdebug("IDDFS:", d, "pline:", pgn::_line_str(self, pline), "size:", pline.size(), "eval", eval);
+      str::pdebug("IDDFS:", d, "pline:", pgn::_line_str(self, idstate.pline), "size:", idstate.pline.size(), "eval", idstate.eval);
       if(should_stop)break;
     }
-    return eval;
+    return idstate.eval;
   }
 
   size_t nodes_searched = 0;

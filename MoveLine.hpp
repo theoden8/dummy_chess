@@ -124,7 +124,11 @@ struct MoveLine {
     return mainline->get_mainline();
   }
 
-  INLINE bool find(move_t m, size_t start_index) const {
+  INLINE bool find(move_t m) const {
+    return std::find(begin(), end(), m) != end();
+  }
+
+  INLINE bool find_even(move_t m, size_t start_index) const {
     if(line.empty()) {
       return false;
     }
@@ -134,8 +138,8 @@ struct MoveLine {
     return false;
   }
 
-  INLINE bool find_in_mainline(move_t m) const {
-    return get_mainline().find(m, start & 1);
+  INLINE bool find_even_in_mainline(move_t m) const {
+    return get_mainline().find_even(m, start & 1);
   }
 
   INLINE move_t front_in_mainline() const {
