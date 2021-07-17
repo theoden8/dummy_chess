@@ -352,13 +352,32 @@ public:
     return .0;
   }
 
-  INLINE float move_heuristic_cmt(move_t m, const MoveLine &pline, const std::vector<double> &countermove_table) const {
+  INLINE size_t get_cmt_index(const MoveLine &pline, move_t m) const {
+    constexpr size_t NO_INDEX = SIZE_MAX;
     const move_t p_m = pline.get_previous_move();
     if(p_m != board::nullmove && !(crazyhouse && is_drop_move(bitmask::first(m), bitmask::second(m)))) {
       const pos_t i = bitmask::first(m), _j = bitmask::second(m);
-      const size_t cmt_outer = board::NO_PIECE_INDICES * board::SIZE;
+      const pos_t p_i = bitmask::first(p_m) & board::MOVEMASK;
       const pos_t p_j = bitmask::second(p_m) & board::MOVEMASK;
-      return countermove_table[cmt_outer * (self[p_j].piece_index * board::SIZE + p_j) + self[i].piece_index * board::SIZE + _j];
+      // castling
+      if(self.empty_at_pos(p_j) || is_castling_move(p_i, p_j)) {
+        return NO_INDEX;
+      }
+      // crazyhouse, i is invalid
+      const size_t i_piecevalue = size_t(is_drop_move(i, _j) ? board::get_drop_as(i) : self[i].value);
+      const size_t cmt_outer = size_t(NO_PIECES) * size_t(board::SIZE);
+      const size_t cmt_index = cmt_outer * cmt_outer * size_t(activePlayer() == WHITE ? 0 : 1)
+                                         + cmt_outer * (size_t(self[p_j].value) * size_t(board::SIZE) + p_j)
+                                                     + (i_piecevalue * size_t(board::SIZE) + _j);
+      return cmt_index;
+    }
+    return NO_INDEX;
+  }
+
+  INLINE float move_heuristic_cmt(move_t m, const MoveLine &pline, const std::vector<double> &countermove_table) const {
+    const size_t cmt_index = get_cmt_index(pline, m);
+    if(cmt_index != SIZE_MAX) {
+      return countermove_table[cmt_index];
     }
     return .0;
   }
@@ -815,16 +834,12 @@ public:
               ab_ttable[k] = { .info=state.info, .depth=depth, .lowerbound=beta, .upperbound=FLT_MAX, .exactscore=score,
                                .m=m, .subpline=pline.get_future(), .age=tt_age };
             }
-            const pos_t i = bitmask::first(m), j = bitmask::second(m) & board::MOVEMASK;
-            const move_t p_m = pline.get_previous_move();
-            if(p_m != board::nullmove && !(crazyhouse && is_drop_move(i, j))) {
-              const size_t cmt_outer = board::NO_PIECE_INDICES * board::SIZE;
-              const pos_t p_j = bitmask::second(p_m) & board::MOVEMASK;
-              const size_t cmt_index = cmt_outer * (self[p_j].piece_index * board::SIZE + p_j) + (self[i].piece_index * board::SIZE + j);
+            const size_t cmt_index = get_cmt_index(pline, m);
+            if(cmt_index != SIZE_MAX) {
               countermove_table[cmt_index] += (depth * depth * (double(move_index + 1) / double(moves.size()))) * 1e-8;
               if(countermove_table[cmt_index] > .5) {
                 const double mx = *std::max_element(countermove_table.begin(), countermove_table.end());
-                //str::print("renormalizing countermove table");
+                //str::pdebug("renormalizing countermove table");
                 for(auto &cm : countermove_table) {
                   cm /= (mx * 1e8);
                 }
@@ -866,16 +881,12 @@ public:
               ab_ttable[k] = (tt_ab_entry){ .info=state.info, .depth=depth, .lowerbound=beta, .upperbound=FLT_MAX, .exactscore=score,
                                             .m=m, .subpline=pline.get_future(), .age=tt_age };
             }
-            const pos_t i = bitmask::first(m), j = bitmask::second(m) & board::MOVEMASK;
-            const move_t p_m = pline.get_previous_move();
-            if(p_m != board::nullmove && !(crazyhouse && is_drop_move(i, j))) {
-              const size_t cmt_outer = board::NO_PIECE_INDICES * board::SIZE;
-              const pos_t p_j = bitmask::second(p_m) & board::MOVEMASK;
-              const size_t cmt_index = cmt_outer * (self[p_j].piece_index * board::SIZE + p_j) + (self[i].piece_index * board::SIZE + j);
+            const size_t cmt_index = get_cmt_index(pline, m);
+            if(cmt_index != SIZE_MAX) {
               countermove_table[cmt_index] += (depth * depth * (double(move_index + 1) / double(moves.size()))) * 1e-8;
               if(countermove_table[cmt_index] > .5) {
                 const double mx = *std::max_element(countermove_table.begin(), countermove_table.end());
-                //str::print("renormalizing countermove table");
+                //str::pdebug("renormalizing countermove table");
                 for(auto &cm : countermove_table) {
                   cm /= (mx * 1e8);
                 }
@@ -1030,16 +1041,16 @@ public:
     const size_t mem_ab = size_ab * (sizeof(tt_ab_entry) + 16 * sizeof(move_t));
     const size_t size_e = 0;
     const size_t mem_e = size_e * sizeof(tt_eval_entry);
-    const size_t size_cmh = size_t(board::NO_PIECE_INDICES) * size_t(board::SIZE);
-    const size_t size_cmh_twice = size_cmh * size_cmh;
-    const size_t mem_cmh = size_cmh_twice * sizeof(double);
+    const size_t size_cmh = size_t(NO_PIECES) * size_t(board::SIZE);
+    const size_t size_cmt = size_t(NO_COLORS) * size_cmh * size_cmh;
+    const size_t mem_cmh = size_cmt  * sizeof(double);
     const size_t mem_total = mem_ab+mem_e+mem_cmh;
     str::pdebug("alphabeta scope", "ab:", mem_ab, "e:", mem_e, "cmh:", mem_cmh, "total:", mem_total);
     _printf("MEM: %luMB %luKB %luB\n", mem_total>>20, (mem_total>>10)&((1<<10)-1), mem_total&((1<<10)-1));
     return (ab_storage_t){
       .ab_ttable_scope=zobrist::make_store_object_scope<tt_ab_entry>(ab_ttable, size_ab),
       .e_ttable_scope=zobrist::make_store_object_scope<tt_eval_entry>(e_ttable, size_e),
-      .cmh_table=std::vector<double>(size_cmh_twice, .0)
+      .cmh_table=std::vector<double>(size_cmt, .0)
     };
   }
 
