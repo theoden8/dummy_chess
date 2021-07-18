@@ -12,7 +12,8 @@ $ make
 ## features
 
 * alpha-beta, iddfs, transposition tables, pvsearch
-* uci partially supported
+* null-move reductions, late-move reductions
+* uci partially supported (pondering, hash table size)
 * variants:
     - standard
     - chess960
