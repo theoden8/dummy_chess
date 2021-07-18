@@ -802,12 +802,6 @@ public:
       const auto [m_val, m] = moves[move_index];
       if(!searchmoves.empty() && searchmoves.find(m) == searchmoves.end()) {
         continue;
-      } else if(initdepth <= depth + 1 + (int16_t(pline.line.size()) / 7)) {
-        if(!callback_f(depth, bestscore)) {
-          should_stop = true;
-          str::pdebug("should stop");
-          break;
-        }
       }
       MoveLine pline_alt = pline.branch_from_past();
       float score;
@@ -899,9 +893,12 @@ public:
           bestscore = score;
         }
       }
-    };
-    if(should_stop) {
-      return bestscore;
+      if(initdepth <= depth + 1 + (int16_t(pline.line.size()) / 7)) {
+        if(!callback_f(depth, bestscore)) {
+          str::pdebug("should stop");
+          return bestscore;
+        }
+      }
     }
     if(overwrite && m_best != board::nullmove && !repetitions) {
       if(bestscore <= alpha) {
@@ -991,15 +988,20 @@ public:
         }
         const bool final_window = (aw_index_alpha == aspiration_window.size() && aw_index_beta == aspiration_window.size());
         str::pdebug("depth:", d, "aw", aw_alpha, aw_beta);
+        bool inner_break = false;
         const float new_eval = alpha_beta(aw_alpha, aw_beta, d, new_pline, ab_ttable, e_ttable, cmh_table, d,
           [&](int16_t _depth, float _eval) mutable -> bool {
             const move_t _m = new_pline.front();
-            if(!should_stop && _depth == d && final_window && idstate.eval < _eval && _m != board::nullmove) {
+            if(!inner_break && !should_stop && _depth == d && final_window && idstate.eval < _eval && _m != board::nullmove) {
               idstate.eval=_eval, idstate.pline=new_pline, idstate.curdepth=d;
               str::pdebug("IDDFS:", d, "pline:", pgn::_line_str(self, idstate.pline), "size:", idstate.pline.size(), "eval", idstate.eval);
               debug.check_score(d, idstate.eval, idstate.pline);
             }
-            return !(should_stop = !callback_f(d == _depth));
+            should_stop = !callback_f(d == _depth);
+            if(should_stop && d != _depth) {
+              inner_break = true;
+            }
+            return !should_stop;
           }, searchmoves);
         if(new_eval < aw_alpha) {
           ++aw_index_alpha;
@@ -1008,7 +1010,7 @@ public:
         } else {
           idstate.eval=new_eval, idstate.pline=new_pline, idstate.curdepth=d;
           debug.check_score(d, idstate.eval, idstate.pline);
-          if(should_stop || !callback_f(true) || (score_is_mate(idstate.eval) && d > 0 && int(idstate.pline.size()) < d)) {
+          if(should_stop || (score_is_mate(idstate.eval) && d > 0 && int(idstate.pline.size()) < d)) {
             should_stop = true;
           }
           break;
