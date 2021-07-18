@@ -779,7 +779,7 @@ public:
       {
         // TODO variable NM bound
         auto mscope = mline_scope(board::nullmove, pline_alt);
-        score = -score_decay(alpha_beta(-alpha-1e-7, -alpha, std::max(0, depth-R-1), pline_alt, ab_ttable, e_ttable, cmh_table, initdepth, false, callback_f));
+        score = -score_decay(alpha_beta(-beta, -beta+1e-7, std::max(0, depth-R-1), pline_alt, ab_ttable, e_ttable, cmh_table, initdepth, false, callback_f));
       }
       if(score >= beta) {
         depth -= 4;
