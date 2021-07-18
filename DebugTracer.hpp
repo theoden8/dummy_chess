@@ -45,9 +45,9 @@ struct DebugTracer {
   }
 
   std::string actinfo_mem(double alpha, double beta, const tt_ab_entry &zb) const {
-    if(zb.lowerbound >= beta) {
+    if(zb.alpha >= beta) {
       return "mem-beta-cutoff"s;
-    } else if(zb.upperbound <= alpha) {
+    } else if(zb.beta <= alpha) {
       return "mem-best"s;
     }
     return "mem"s;
@@ -105,13 +105,13 @@ struct DebugTracer {
 
   void update_mem(int16_t depth, double alpha, double beta, const tt_ab_entry &zb, const MoveLine &pline) {
     #ifndef NDEBUG
-    MoveLine pline_alt = pline.branch_from_past();
+    MoveLine pline_alt = pline.get_past().as_past();
     pline_alt.replace_line(zb.subpline);
     if(filter_moveline(pline_alt)) {
       _printf("%sdepth=%d, %s (%.6f, %.6f) %s -- %s (%.6f, %.6f)\n",
           tab(depth).c_str(), depth, pgn::_move_str(engine, zb.m).c_str(), alpha, beta,
           _line_str_full(pline_alt).c_str(), actinfo_mem(alpha, beta, zb).c_str(),
-          zb.lowerbound, zb.upperbound);
+          zb.alpha, zb.beta);
       update_line(depth, alpha, beta, pline_alt);
     }
     assert(engine.check_valid_sequence(pline_alt));
