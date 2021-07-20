@@ -507,8 +507,8 @@ public:
     int16_t depth;
     float alpha, beta, exactscore;
     move_t m;
-    MoveLine subpline;
     ply_index_t age;
+    MoveLine subpline;
 
     INLINE bool can_apply(const board_info &_info, int16_t _depth, ply_index_t _age) const {
       return !is_inactive(_age) && depth >= _depth && info == _info;
@@ -520,6 +520,11 @@ public:
 
     INLINE bool is_inactive(ply_index_t cur_age) const {
       return info.is_unset() || cur_age != age;
+    }
+
+    INLINE void write(board_info &_info, float _alpha, float _beta, int16_t _depth, float _score, move_t _m, ply_index_t _age, const MoveLine &pline) {
+      info=_info, depth=_depth, alpha=_alpha, beta=_beta, exactscore=_score, m=_m, age=_age;
+      subpline=pline.get_future();
     }
   };
 
@@ -556,6 +561,18 @@ public:
            ) & jbit)
            && (~piece::get_sliding_diag_attacks(bits_slid_diag & ~bits_slid_orth & notpinned, bits[c] | bits[ec]) & jbit)
            && piece::size(piece::get_pawn_attack(j, c) & bits[ec] & ~bits_pawns) == 2;
+  }
+
+  INLINE bool has_promoting_pawns() const {
+    const COLOR c = activePlayer();
+    const piece_bitboard_t pawnrank = piece::rank_mask(c == WHITE ? -1+1 : -1+8);
+    const piece_bitboard_t promoting_pawns = bits[c] & bits_pawns & pawnrank;
+    bool has_moves = false;
+    bitmask::foreach_early_stop(promoting_pawns, [&](pos_t i) mutable -> bool {
+      has_moves = state.moves[i];
+      return !has_moves;
+    });
+    return has_moves;
   }
 
   decltype(auto) ab_get_quiesc_moves(int16_t depth, MoveLine &pline, const std::vector<double> &cmh_table, int8_t nchecks, bool king_in_check, move_t firstmove=board::nullmove) const
@@ -609,35 +626,40 @@ public:
     return quiescmoves;
   }
 
-  float alpha_beta_quiescence(float alpha, float beta, int16_t depth, MoveLine &pline,
-                               zobrist::ttable<tt_ab_entry> &ab_ttable,
-                               zobrist::ttable<tt_eval_entry> &e_ttable,
-                               const std::vector<double> &cmh_table,
-                               int8_t nchecks)
-  {
+  struct alpha_beta_state {
+    zobrist::ttable<tt_ab_entry> &ab_ttable;
+    zobrist::ttable<tt_eval_entry> &e_ttable;
+    std::vector<double> &cmh_table;
+    const int16_t initdepth;
+  };
+
+  float alpha_beta_quiescence(float alpha, float beta, int16_t depth, MoveLine &pline, alpha_beta_state &ab_state, int8_t nchecks) {
     float score = -MATERIAL_KING;
     float bestscore = -MATERIAL_KING;
 
     const bool king_in_check = state.checkline[activePlayer()] != bitmask::full;
     if(!king_in_check) {
-      score = e_ttable_probe(e_ttable);
+      score = e_ttable_probe(ab_state.e_ttable);
       debug.update_standpat(depth, alpha, beta, score, pline, nchecks);
       if(score >= beta) {
         ++nodes_searched;
         return score;
       } else if(score > bestscore) {
         bestscore = score;
+        const float BIG_DELTA = MATERIAL_QUEEN + (has_promoting_pawns() ? MATERIAL_QUEEN - MATERIAL_PAWN : .0);
         if(score > alpha) {
           alpha = score;
+        } else if(score < alpha - BIG_DELTA) {
+          return score;
         }
       }
     }
 
     move_t m_best = board::nullmove;
-    const auto [tt_has_entry, k] = ab_ttable_probe(depth, ab_ttable);
+    const auto [tt_has_entry, k] = ab_ttable_probe(depth, ab_state.ab_ttable);
     debug.update_line(depth, alpha, beta, pline);
+    auto &zb = ab_state.ab_ttable[k];
     if(tt_has_entry) {
-      const auto &zb = ab_ttable[k];
       debug.update_mem(depth, alpha, beta, zb, pline);
       if(zb.alpha >= beta || zb.beta <= alpha) {
         ++nodes_searched;
@@ -647,28 +669,33 @@ public:
       alpha = std::max(alpha, zb.alpha);
       beta = std::min(beta, zb.beta);
       m_best = zb.m;
-    } else if(ab_ttable[k].can_use_move(state.info, depth, tt_age)) {
-      const auto &zb = ab_ttable[k];
+    } else if(zb.can_use_move(state.info, depth, tt_age)) {
       m_best = zb.m;
     }
 
     constexpr bool overwrite = true;
-    const bool tt_inactive_entry = ab_ttable[k].is_inactive(tt_age);
-    const bool tt_replace_depth = tt_inactive_entry || depth >= ab_ttable[k].depth;
-    const bool tt_inexact_entry = tt_inactive_entry || ab_ttable[k].alpha != ab_ttable[k].beta;
+    const bool tt_inactive_entry = zb.is_inactive(tt_age);
+    const bool tt_replace_depth = tt_inactive_entry || depth >= zb.depth;
+    const bool tt_inexact_entry = tt_inactive_entry || zb.alpha != zb.beta;
 
-    decltype(auto) quiescmoves = ab_get_quiesc_moves(depth, pline, cmh_table, nchecks, king_in_check, m_best);
+    decltype(auto) quiescmoves = ab_get_quiesc_moves(depth, pline, ab_state.cmh_table, nchecks, king_in_check, m_best);
     if(quiescmoves.empty()) {
       ++nodes_searched;
       if(king_in_check) {
-        score = e_ttable_probe(e_ttable);
+        score = e_ttable_probe(ab_state.e_ttable);
       }
       return score;
     }
     bool repetitions = false;
     for(size_t move_index = 0; move_index < quiescmoves.size(); ++move_index) {
-      const auto &[_, m, reduce_nchecks] = quiescmoves[move_index];
+      const auto [m_val, m, reduce_nchecks] = quiescmoves[move_index];
       MoveLine pline_alt = pline.branch_from_past();
+      if(!king_in_check && piece::size(bits[activePlayer()] & ~bits_pawns) > 5) {
+        constexpr float DELTA = 2.;
+        if(score + m_val < alpha - DELTA) {
+          continue;
+        }
+      }
       {
         auto mscope = mline_scope(m, pline_alt);
         repetitions = can_draw_repetition();
@@ -676,7 +703,7 @@ public:
           ++nodes_searched;
           score = 1e-4;
         } else {
-          score = -score_decay(alpha_beta_quiescence(-beta, -alpha, depth - 1, pline_alt, ab_ttable, e_ttable, cmh_table, reduce_nchecks ? nchecks - 1 : nchecks));
+          score = -score_decay(alpha_beta_quiescence(-beta, -alpha, depth - 1, pline_alt, ab_state, reduce_nchecks ? nchecks - 1 : nchecks));
         }
       }
       debug.update(depth, alpha, beta, bestscore, score, m, pline, pline_alt);
@@ -685,8 +712,7 @@ public:
         pline.replace_line(pline_alt);
         if(overwrite && tt_replace_depth && tt_inexact_entry && !repetitions && !pline.find(board::nullmove)) {
           if(tt_inactive_entry)++zb_occupied;
-          ab_ttable[k] = (tt_ab_entry){ .info=state.info, .depth=depth, .alpha=beta, .beta=FLT_MAX, .exactscore=score,
-                                        .m=m, .subpline=pline.get_future(), .age=tt_age };
+          zb.write(state.info, beta, FLT_MAX, depth, score, m, tt_age, pline);
         }
         return score;
       } else if(score > bestscore) {
@@ -701,12 +727,10 @@ public:
     if(overwrite && m_best != board::nullmove && !repetitions && !pline.find(board::nullmove)) {
       if((tt_replace_depth) && bestscore <= alpha) {
         if(tt_inactive_entry)++zb_occupied;
-        ab_ttable[k] = (tt_ab_entry){ .info=state.info, .depth=depth, .alpha=-FLT_MAX, .beta=alpha, .exactscore=bestscore,
-                                      .m=m_best, .subpline=pline.get_future(), .age=tt_age };
+        zb.write(state.info, -FLT_MAX, alpha, depth, bestscore, m_best, tt_age, pline);
       } else if((tt_replace_depth || tt_inexact_entry) && bestscore > alpha) {
         if(tt_inactive_entry)++zb_occupied;
-        ab_ttable[k] = (tt_ab_entry){ .info=state.info, .depth=depth, .alpha=bestscore, .beta=bestscore, .exactscore=bestscore,
-                                      .m=m_best, .subpline=pline.get_future(), .age=tt_age };
+        zb.write(state.info, bestscore, bestscore, depth, bestscore, m_best, tt_age, pline);
       }
     }
     return bestscore;
@@ -734,22 +758,20 @@ public:
 
   template <typename F>
   float alpha_beta(float alpha, float beta, int16_t depth, MoveLine &pline,
-                   zobrist::ttable<tt_ab_entry> &ab_ttable,
-                   zobrist::ttable<tt_eval_entry> &e_ttable,
-                   std::vector<double> &cmh_table,
-                   int16_t initdepth, bool allow_nullmoves, F &&callback_f,
+                   alpha_beta_state &ab_state, bool allow_nullmoves, F &&callback_f,
                    const std::unordered_set<move_t> &searchmoves={})
   {
     if(depth <= 0) {
       const int nchecks = 0;
-      return alpha_beta_quiescence(alpha, beta, 0, pline, ab_ttable, e_ttable, cmh_table, nchecks);
+      return alpha_beta_quiescence(alpha, beta, 0, pline, ab_state, nchecks);
     }
     move_t m_best = board::nullmove;
-    const auto [tt_has_entry, k] = ab_ttable_probe(depth, ab_ttable);
+    const auto [tt_has_entry, k] = ab_ttable_probe(depth, ab_state.ab_ttable);
     debug.update_line(depth, alpha, beta, pline);
+    auto &zb = ab_state.ab_ttable[k];
     if(tt_has_entry) {
-      const auto &zb = ab_ttable[k];
       debug.update_mem(depth, alpha, beta, zb, pline);
+      debug.check_score(depth, zb.exactscore, zb.subpline);
       if(zb.alpha >= beta || zb.beta <= alpha) {
         pline.replace_line(zb.subpline);
         ++nodes_searched;
@@ -758,15 +780,14 @@ public:
       alpha = std::max(alpha, zb.alpha);
       beta = std::min(beta, zb.beta);
       m_best = zb.m;
-    } else if(ab_ttable[k].can_use_move(state.info, depth, tt_age)) {
-      const auto &zb = ab_ttable[k];
+    } else if(zb.can_use_move(state.info, depth, tt_age)) {
       m_best = zb.m;
     }
 
     constexpr bool overwrite = true;
-    const bool tt_inactive_entry = ab_ttable[k].is_inactive(tt_age);
-    const bool tt_replace_depth = tt_inactive_entry || depth >= ab_ttable[k].depth;
-    const bool tt_inexact_entry = tt_inactive_entry || ab_ttable[k].alpha != ab_ttable[k].beta;
+    const bool tt_inactive_entry = zb.is_inactive(tt_age);
+    const bool tt_replace_depth = tt_inactive_entry || depth >= zb.depth;
+    const bool tt_inexact_entry = tt_inactive_entry || zb.alpha != zb.beta;
 
     // nullmove reduction
     const COLOR c = activePlayer();
@@ -779,21 +800,21 @@ public:
       {
         // TODO variable NM bound
         auto mscope = mline_scope(board::nullmove, pline_alt);
-        score = -score_decay(alpha_beta(-beta, -beta+1e-7, std::max(0, depth-R-1), pline_alt, ab_ttable, e_ttable, cmh_table, initdepth, false, callback_f));
+        score = -score_decay(alpha_beta(-beta, -beta+1e-7, std::max(0, depth-R-1), pline_alt, ab_state, false, callback_f));
       }
       if(score >= beta) {
         depth -= 4;
         if(depth <= 0) {
           const int nchecks = 0;
-          return alpha_beta_quiescence(alpha, beta, 0, pline, ab_ttable, e_ttable, cmh_table, nchecks);
+          return alpha_beta_quiescence(alpha, beta, 0, pline, ab_state, nchecks);
         }
       }
     }
 
-    decltype(auto) moves = ab_get_ordered_moves(pline, m_best, cmh_table);
+    decltype(auto) moves = ab_get_ordered_moves(pline, m_best, ab_state.cmh_table);
     if(moves.empty()) {
       ++nodes_searched;
-      return e_ttable_probe(e_ttable);
+      return e_ttable_probe(ab_state.e_ttable);
     }
     float bestscore = -FLT_MAX;
     bool repetitions = false;
@@ -813,7 +834,7 @@ public:
             ++nodes_searched;
             score = -1e-4;
           } else {
-            score = -score_decay(alpha_beta(-beta, -alpha, depth - 1, pline_alt, ab_ttable, e_ttable, cmh_table, initdepth, allow_nullmoves, callback_f));
+            score = -score_decay(alpha_beta(-beta, -alpha, depth - 1, pline_alt, ab_state, allow_nullmoves, callback_f));
           }
         } // end move scope
         debug.update(depth, alpha, beta, bestscore, score, m, pline, pline_alt, "firstmove"s);
@@ -824,16 +845,16 @@ public:
           if(bestscore >= beta) {
             if(overwrite && tt_replace_depth && tt_inexact_entry && !repetitions) {
               if(tt_inactive_entry)++zb_occupied;
-              ab_ttable[k] = { .info=state.info, .depth=depth, .alpha=beta, .beta=FLT_MAX, .exactscore=score,
-                               .m=m, .subpline=pline.get_future(), .age=tt_age };
+              zb = { .info=state.info, .depth=depth, .alpha=beta, .beta=FLT_MAX, .exactscore=score,
+                     .m=m, .age=tt_age, .subpline=pline.get_future() };
             }
             const size_t cmt_index = get_cmt_index(pline, m);
             if(cmt_index != SIZE_MAX) {
-              cmh_table[cmt_index] += (depth * depth * (double(move_index + 1) / double(moves.size()))) * 1e-8;
-              if(cmh_table[cmt_index] > .5) {
-                const double mx = *std::max_element(cmh_table.begin(), cmh_table.end());
-                //str::pdebug("renormalizing countermove table");
-                for(auto &cm : cmh_table) {
+              ab_state.cmh_table[cmt_index] += (depth * depth * (double(move_index + 1) / double(moves.size()))) * 1e-8;
+              if(ab_state.cmh_table[cmt_index] > .5) {
+                const double mx = *std::max_element(ab_state.cmh_table.begin(), ab_state.cmh_table.end());
+                //str::perror("w: renormalizing countermove table");
+                for(auto &cm : ab_state.cmh_table) {
                   cm /= (mx * 1e8);
                 }
               }
@@ -855,12 +876,13 @@ public:
             const COLOR c = activePlayer();
             const bool lmr_allowed = move_index >= 4 && depth >= 3 && (state.checkline[c] == bitmask::full && m_val < 0);
             if(lmr_allowed) {
-              score = -score_decay(alpha_beta(-alpha-1e-7, -alpha, depth - 2, pline_alt, ab_ttable, e_ttable, cmh_table, initdepth, allow_nullmoves, callback_f));
+              score = -score_decay(alpha_beta(-alpha-1e-7, -alpha, depth - 2, pline_alt, ab_state, allow_nullmoves, callback_f));
             } else {
-              score = -score_decay(alpha_beta(-alpha-1e-7, -alpha, depth - 1, pline_alt, ab_ttable, e_ttable, cmh_table, initdepth, allow_nullmoves, callback_f));
+              score = -score_decay(alpha_beta(-alpha-1e-7, -alpha, depth - 1, pline_alt, ab_state, allow_nullmoves, callback_f));
             }
             if(score > alpha && score < beta) {
-              score = -score_decay(alpha_beta(-beta, -alpha, depth - 1, pline_alt, ab_ttable, e_ttable, cmh_table, initdepth, allow_nullmoves, callback_f));
+              pline_alt.clear();
+              score = -score_decay(alpha_beta(-beta, -alpha, depth - 1, pline_alt, ab_state, allow_nullmoves, callback_f));
               if(score > alpha) {
                 alpha = score;
               }
@@ -874,16 +896,15 @@ public:
           if(score >= beta) {
             if(overwrite && tt_replace_depth && tt_inexact_entry && !repetitions) {
               if(tt_inactive_entry)++zb_occupied;
-              ab_ttable[k] = (tt_ab_entry){ .info=state.info, .depth=depth, .alpha=beta, .beta=FLT_MAX, .exactscore=score,
-                                            .m=m, .subpline=pline.get_future(), .age=tt_age };
+              zb.write(state.info, beta, FLT_MAX, depth, score, m, tt_age, pline);
             }
             const size_t cmt_index = get_cmt_index(pline, m);
             if(cmt_index != SIZE_MAX) {
-              cmh_table[cmt_index] += (depth * depth * (double(move_index + 1) / double(moves.size()))) * 1e-8;
-              if(cmh_table[cmt_index] > .5) {
-                const double mx = *std::max_element(cmh_table.begin(), cmh_table.end());
+              ab_state.cmh_table[cmt_index] += (depth * depth * (double(move_index + 1) / double(moves.size()))) * 1e-8;
+              if(ab_state.cmh_table[cmt_index] > .5) {
+                const double mx = *std::max_element(ab_state.cmh_table.begin(), ab_state.cmh_table.end());
                 //str::pdebug("renormalizing countermove table");
-                for(auto &cm : cmh_table) {
+                for(auto &cm : ab_state.cmh_table) {
                   cm /= (mx * 1e8);
                 }
               }
@@ -893,7 +914,7 @@ public:
           bestscore = score;
         }
       }
-      if(initdepth <= depth + 1 + (int16_t(pline.line.size()) / 7)) {
+      if(ab_state.initdepth <= depth + 1 + (int16_t(pline.line.size()) / 7)) {
         if(!callback_f(depth, bestscore)) {
           str::pdebug("should stop");
           return bestscore;
@@ -903,12 +924,10 @@ public:
     if(overwrite && m_best != board::nullmove && !repetitions) {
       if(bestscore <= alpha) {
         if(tt_inactive_entry)++zb_occupied;
-        ab_ttable[k] = (tt_ab_entry){ .info=state.info, .depth=depth, .alpha=-FLT_MAX, .beta=alpha, .exactscore=bestscore,
-                                       .m=m_best, .subpline=pline.get_future(), .age=tt_age };
+        zb.write(state.info, -FLT_MAX, alpha, depth, bestscore, m_best, tt_age, pline);
       } else if(bestscore > alpha) {
         if(tt_inactive_entry)++zb_occupied;
-        ab_ttable[k] = (tt_ab_entry){ .info=state.info, .depth=depth, .alpha=bestscore, .beta=bestscore, .exactscore=bestscore,
-                                      .m=m_best, .subpline=pline.get_future(), .age=tt_age };
+        zb.write(state.info, bestscore, bestscore, depth, bestscore, m_best, tt_age, pline);
       }
     }
     return bestscore;
@@ -989,7 +1008,8 @@ public:
         const bool final_window = (aw_index_alpha == aspiration_window.size() && aw_index_beta == aspiration_window.size());
         str::pdebug("depth:", d, "aw", aw_alpha, aw_beta);
         bool inner_break = false;
-        const float new_eval = alpha_beta(aw_alpha, aw_beta, d, new_pline, ab_ttable, e_ttable, cmh_table, d, true,
+        alpha_beta_state ab_state = (alpha_beta_state){ .ab_ttable=ab_ttable, .e_ttable=e_ttable, .cmh_table=cmh_table, .initdepth=d, };
+        const float new_eval = alpha_beta(aw_alpha, aw_beta, d, new_pline, ab_state, true,
           [&](int16_t _depth, float _eval) mutable -> bool {
             const move_t _m = new_pline.front();
             if(!inner_break && !should_stop && _depth == d && final_window && idstate.eval < _eval && _m != board::nullmove) {

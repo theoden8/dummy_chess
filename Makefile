@@ -3,7 +3,7 @@ OPTFLAGS = -Ofast -DNDEBUG -flto -fwhole-program -m64 -march=native -DUSE_INTRIN
 PROFFLAGS = -O1 -DNDEBUG -flto -DUSE_INTRIN -pg
 CXXFLAGS = -std=c++20 -I. -Wall -Wextra -Wno-unused -Wno-parentheses
 # clang:
-#CXX = clang++-13
+#CXX = clang++
 #CXXFLAGS += -Wno-unused-parameter -Wno-range-loop-construct -Wno-unknown-attributes -Wno-ignored-optimization-argument
 # CXXFLAGS += -fopt-info
 LDFLAGS = -pthread
@@ -15,6 +15,12 @@ SOURCES = m42.cpp
 CORES = $(shell getconf _NPROCESSORS_ONLN)
 all :; @$(MAKE) _all -j$(CORES)
 _all : dummy_chess dummy_chess_opt dummy_chess_curses dummy_chess_bench dummy_chess_alphabeta dummy_chess_uci dummy_chess_uci_dbg
+
+m42.cpp:
+	$ ./scripts/m42_download
+
+m42.h:
+	$ ./scripts/m42_download
 
 dummy_chess: simple.cpp $(SOURCES) $(HPPFILES) Makefile
 	$(CXX) $(DBGFLAGS) $(CXXFLAGS) simple.cpp $(SOURCES) $(LDFLAGS) -o $@

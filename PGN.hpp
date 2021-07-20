@@ -164,7 +164,7 @@ struct PGN {
   }
 
   void handle_move(move_t m) {
-    assert(board.check_valid_move(m));
+    assert(m == board::nullmove || board.check_valid_move(m));
     write_move(m);
     board.make_move(m);
     const COLOR c = board.activePlayer();
