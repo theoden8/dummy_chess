@@ -619,10 +619,9 @@ public:
         val += move_heuristic_pv(m, pline, firstmove);
       }
       val += move_heuristic_cmt(m, pline, cmh_table);
-      quiescmoves.emplace_back(-val, m, reduce_nchecks);
+      quiescmoves.emplace_back(val, m, reduce_nchecks);
     });
-    std::sort(quiescmoves.begin(), quiescmoves.end());
-    // no need for reverse sort: values are already negated
+    std::sort(quiescmoves.begin(), quiescmoves.end(), std::greater<>());
     return quiescmoves;
   }
 
@@ -687,14 +686,13 @@ public:
       return score;
     }
     bool repetitions = false;
+    const bool delta_prune_allowed = !king_in_check && piece::size(bits[activePlayer()] & ~bits_pawns) > 5;
+    constexpr float DELTA = 2.;
     for(size_t move_index = 0; move_index < quiescmoves.size(); ++move_index) {
       const auto [m_val, m, reduce_nchecks] = quiescmoves[move_index];
       MoveLine pline_alt = pline.branch_from_past();
-      if(!king_in_check && piece::size(bits[activePlayer()] & ~bits_pawns) > 5) {
-        constexpr float DELTA = 2.;
-        if(score + m_val < alpha - DELTA) {
-          continue;
-        }
+      if(delta_prune_allowed && score + m_val < alpha - DELTA) {
+        continue;
       }
       {
         auto mscope = mline_scope(m, pline_alt);
@@ -750,9 +748,9 @@ public:
         val += move_heuristic_see(i, j, edefendmap);
         val += move_heuristic_cmt(m, pline, cmh_table);
       }
-      moves.emplace_back(-val, m);
+      moves.emplace_back(val, m);
     });
-    std::sort(moves.begin(), moves.end());
+    std::sort(moves.begin(), moves.end(), std::greater<>());
     return moves;
   }
 
