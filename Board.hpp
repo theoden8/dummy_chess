@@ -776,7 +776,7 @@ public:
     for(const move_t &m : mline) {
       rec.scope(m);
     }
-    return is_draw() || !can_move() || can_draw_repetition();
+    return is_draw() || !can_move() || is_draw_repetition();
   }
 
   using board_mailbox_t = std::array <piece_bitboard_t, board::SIZE>;
@@ -959,7 +959,7 @@ public:
   }
 
   INLINE bool is_draw() const {
-    return is_draw_halfmoves() || is_draw_material() || is_draw_stalemate();
+    return is_draw_halfmoves() || is_draw_material() || is_draw_stalemate() || is_draw_repetition();
   }
 
   INLINE void update_state_repetitions() {
@@ -983,13 +983,13 @@ public:
     return;
   }
 
-  INLINE bool can_draw_repetition() const {
+  INLINE bool is_draw_repetition() const {
     return state_hist_repetitions <= self.get_current_ply();
   }
 
   void init_state_moves() {
     for(auto&m:state.moves)m=0x00;
-    if(is_draw_halfmoves()||is_draw_material())return;
+    //if(is_draw_halfmoves()||is_draw_material())return;
 //    for(const COLOR c : {WHITE, BLACK}) {
     const COLOR c = activePlayer(); {
       init_state_checkline(c);

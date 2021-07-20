@@ -182,7 +182,7 @@ struct PGN {
     } else if(no_checks > 0) {
       ply.back()+='+';
       if(no_checks>1)ply.back()+='+';
-    } else if(board.can_draw_repetition()) {
+    } else if(board.is_draw_repetition()) {
       ending = "1/2 - 1/2 (repetitions)";
     }
   }
