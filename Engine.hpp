@@ -898,7 +898,7 @@ public:
             }
           } else {
             const COLOR c = activePlayer();
-            const bool lmr_allowed = ENABLE_SELECTIVITY && move_index >= 4 && depth >= 3 && (state.checkline[c] == bitmask::full && m_val < 0);
+            const bool lmr_allowed = ENABLE_SELECTIVITY && move_index >= 4 && depth >= 3 && (state.checkline[c] == bitmask::full && m_val < .01);
             if(lmr_allowed) {
               score = -score_decay(alpha_beta(-alpha-1e-7, -alpha, depth - 2, pline_alt, ab_state, allow_nullmoves, callback_f));
             } else {
