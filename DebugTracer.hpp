@@ -12,6 +12,7 @@ struct DebugTracer {
 
   EngineT &engine;
   bool show_everything = false;
+  bool exact_line = false;
   MoveLine debug_moveline = MoveLine(std::vector<move_t>{
   });
   board_info debug_board_info;
@@ -45,12 +46,12 @@ struct DebugTracer {
   }
 
   std::string actinfo_mem(double alpha, double beta, const tt_ab_entry &zb) const {
-    if(zb.alpha >= beta) {
-      return "mem-beta-cutoff"s;
-    } else if(zb.beta <= alpha) {
-      return "mem-best"s;
+    if(zb.ndtype == EngineT::TT_CUTOFF) {
+      return "tt_cutoff"s;
+    } else if(zb.ndtype == EngineT::TT_ALLNODE) {
+      return "tt_allnode"s;
     }
-    return "mem"s;
+    return "tt_exact"s;
   }
 
   std::string actinfo_standpat(double alpha, double beta, double score, int nchecks) const {
@@ -61,7 +62,7 @@ struct DebugTracer {
     } else if(score > alpha) {
       return "q-new-best"s;
     }
-    return "q-continue"s;
+    return "q-ignored"s;
   }
 
   std::string _line_str_full(const MoveLine &mline) const {
@@ -73,7 +74,7 @@ struct DebugTracer {
 
   void update_line(int16_t depth, double alpha, double beta, const MoveLine &pline) {
     #ifndef NDEBUG
-    if(!debug_moveline.empty() && engine.state.info == debug_board_info && !pline.startswith(debug_moveline)) {
+    if(!exact_line && !debug_moveline.empty() && engine.state.info == debug_board_info && !pline.startswith(debug_moveline)) {
       _printf("%s depth=%d <changed moveline> %s (%.6f, %.6f) from %s\n",
               tab(depth).c_str(), depth, _line_str_full(pline).c_str(), alpha, beta,
               _line_str_full(debug_moveline.as_past()).c_str());
@@ -83,8 +84,13 @@ struct DebugTracer {
   }
 
   bool filter_moveline(const MoveLine &pline_alt) {
-    return (!debug_moveline.empty() && pline_alt.full().startswith(debug_moveline))
-      || engine.state.info == debug_board_info || show_everything;
+    if(show_everything || engine.state.info == debug_board_info) {
+      return true;
+    }
+    return !debug_moveline.empty() && (
+        (!exact_line && pline_alt.full().startswith(debug_moveline))
+        || (exact_line && pline_alt.full() == debug_moveline)
+    );
   }
 
   void update(int16_t depth, double alpha, double beta, double bestscore, double score, move_t m,
@@ -108,10 +114,10 @@ struct DebugTracer {
     MoveLine pline_alt = pline.get_past().as_past();
     pline_alt.replace_line(zb.subpline);
     if(filter_moveline(pline_alt)) {
-      _printf("%sdepth=%d, %s (%.6f, %.6f) %s -- %s (%.6f, %.6f)\n",
+      _printf("%s depth=%d, %s (%.6f, %.6f) %s -- %s (score=%.6f)\n",
           tab(depth).c_str(), depth, pgn::_move_str(engine, zb.m).c_str(), alpha, beta,
           _line_str_full(pline_alt).c_str(), actinfo_mem(alpha, beta, zb).c_str(),
-          zb.alpha, zb.beta);
+          zb.score);
       update_line(depth, alpha, beta, pline_alt);
     }
     assert(engine.check_valid_sequence(pline_alt));
@@ -122,7 +128,7 @@ struct DebugTracer {
     #ifndef NDEBUG
     if(filter_moveline(pline)) {
       const char ast = (pline.full().startswith(debug_moveline)) ? ' ' : '*';
-      _printf("%s%cdepth=%d, score=%.6f (%.6f, %.6f) %s -- %s\n",
+      _printf("%s%cdepth=%d, score=%.6f (%.6f, %.6f) %s -- %s (standpat)\n",
         tab(depth).c_str(), ast, depth, score, beta, alpha,
         _line_str_full(pline).c_str(), actinfo_standpat(alpha, beta, score, nchecks).c_str());
       update_line(depth, alpha, beta, pline);
@@ -136,9 +142,9 @@ struct DebugTracer {
     const float adraw = std::abs(-1e-4);
     const float pvscore = engine.get_pvline_score(pline);
     if(!engine.check_pvline_score(pline, score) && std::abs(std::abs(score) - adraw) > 1e-6 && std::abs(std::abs(pvscore) - adraw) > 1e-6) {
-      str::pdebug(tab(depth), "pvline", _line_str_full(pline));
-      str::pdebug(tab(depth), "score", score);
-      str::pdebug(tab(depth), "pvscore", pvscore);
+      _printf("%s pvline %s\n", tab(depth).c_str(), _line_str_full(pline).c_str());
+      _printf("%s score %.6f\n", tab(depth).c_str(), score);
+      _printf("%s pvscore %.6f\n", tab(depth).c_str(), pvscore);
       abort();
     }
     assert(engine.check_pvline_score(pline, score) || std::abs(std::abs(score) - adraw) < 1e-6 || std::abs(std::abs(pvscore) - adraw) < 1e-6);
