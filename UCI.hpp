@@ -1,6 +1,8 @@
 #pragma once
 
 
+#include <cfloat>
+
 #include <string>
 #include <vector>
 #include <map>
@@ -473,7 +475,7 @@ struct UCI {
     );
   }
 
-  std::string get_score_type_string(double score) const {
+  std::string get_score_type_string(int32_t score) const {
     std::string s = ""s;
     if(!engine->score_is_mate(score)) {
       s += "cp"s;
@@ -482,7 +484,7 @@ struct UCI {
     }
     s += " "s;
     if(!engine->score_is_mate(score)) {
-      s += std::to_string(int(round(score * 1e2)));
+      s += std::to_string(score / Engine::CENTIPAWN);
     } else {
       int16_t mate_in_ply = engine->score_mate_in(score);
       mate_in_ply -= (mate_in_ply < 0) ? 1 : -1;
@@ -503,7 +505,7 @@ struct UCI {
     inctime = std::max(inctime - 2., inctime * .3);
     double tottime = (c == WHITE) ? args.wtime : args.btime;
     tottime = std::max(std::max(tottime - 2., (tottime - .2) * .7), tottime * .5);
-    return std::min(60., tottime / 40. + inctime);
+    return std::min(3600., tottime / 40. + inctime);
   }
 
   void respond_full_iddfs(const Engine::iddfs_state &engine_idstate, size_t nps, double time_spent) {

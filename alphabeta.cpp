@@ -18,10 +18,10 @@ int main(int argc, char *argv[]) {
     const auto stop = system_clock::now();
     const long dur = duration_cast<nanoseconds>(stop-start).count();
     const double sec = 1e-9*dur;
-    const double eval = e.evaluation;
+    const float eval = Engine::score_float(e.evaluation);
     const double kndssec = (double(nds)/sec)*1e-3;
     const double hit_rate = double(e.zb_hit) / double(1e-9+e.zb_hit + e.zb_miss);
     printf("move=%s, depth=%d, eval=%.5f\ttime=%.3f\traw=%.3f kN/sec\tnodes=%lu\thit_rate=%.3f\n",
-            board::_move_str(m).c_str(), depth, eval, sec, kndssec, nds, hit_rate);
+            pgn::_move_str(e, m).c_str(), depth, eval, sec, kndssec, nds, hit_rate);
   }
 }

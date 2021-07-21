@@ -11,8 +11,8 @@ $ make
 
 ## features
 
-* alpha-beta, iddfs, transposition tables, pvsearch
-* null-move reductions, late-move reductions
+* fail-soft alpha-beta, iddfs, transposition tables, pvsearch
+* null-move pruning, late-move reductions, delta pruning
 * uci partially supported (pondering, hash table size)
 * variants:
     - standard

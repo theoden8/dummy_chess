@@ -250,11 +250,22 @@ NEVER_INLINE std::string _line_str_full(Board &b, const MoveLine &mline) {
   std::string s = ""s;
   if(mline.start > 0) {
     s += "["s + str::join(pgn.ply, " "s) + "]"s;
+    if(!mline.empty()) {
+      s += " "s;
+    }
   }
   if(!mline.empty()) {
-    s += " "s + _line_str(b, mline.get_future());
+    s += _line_str(b, mline.get_future());
   }
   return s;
 }
 
 } // namespace pgn
+
+NEVER_INLINE std::string MoveLine::pgn(Board &b) const {
+  return pgn::_line_str(b, *this);
+}
+
+NEVER_INLINE std::string MoveLine::pgn_full(Board &b) const {
+  return pgn::_line_str_full(b, *this);
+}

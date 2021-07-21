@@ -16,6 +16,7 @@ struct Interface {
       CELL_MH = 1,
       CELL_PMW = 1,
       CELL_PMH = 0;
+  float evaluation = .0;
 
   Interface(Engine &board):
     board(board), pgn(board)
@@ -271,7 +272,7 @@ struct Interface {
 
   void draw_pgn(const int LEFT, const int TOP, int &top) {
     move(top, LEFT);
-    printw("Evaluation: %.5f", board.evaluation == DBL_MAX ? 0 : board.evaluation);
+    printw("Evaluation: %.5f", evaluation);
     move(++top, LEFT);
     int turn = 1;
     constexpr size_t initial_margin = 5,
@@ -386,7 +387,7 @@ struct Interface {
         }
       break;
       case 'e':
-        board.evaluation = board.evaluate();
+        evaluation = Engine::score_float(board.evaluate());
         break;
       case ' ':
         pgn.handle_move(board::nullmove);

@@ -8,6 +8,9 @@
 #include <Bitboard.hpp>
 
 
+class Board;
+
+
 struct MoveLine {
   std::vector<move_t> line;
   size_t start = 0;
@@ -179,7 +182,12 @@ struct MoveLine {
     return mline;
   }
 
-  INLINE MoveLine branch_from_past() const {
+  INLINE MoveLine branch_from_past(move_t m=board::nullmove) const {
+    if(m != board::nullmove && front() == m && is_mainline()) {
+      MoveLine mline = *this;
+      mline.mainline = nullptr;
+      return mline;
+    }
     MoveLine mline = get_past();
     mline.start = start;
     mline.mainline = &get_mainline();
@@ -189,4 +197,7 @@ struct MoveLine {
   INLINE void clear() {
     line.resize(start);
   }
+
+  NEVER_INLINE std::string pgn(Board &engine) const;
+  NEVER_INLINE std::string pgn_full(Board &engine) const;
 };

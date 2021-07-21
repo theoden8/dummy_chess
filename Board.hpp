@@ -760,10 +760,11 @@ public:
     return check_valid_move(bitmask::first(m), bitmask::second(m));
   }
 
-  INLINE bool check_valid_sequence(const MoveLine &mline) {
+  INLINE bool check_valid_sequence(const MoveLine &mline, bool strict=false) {
     auto rec = self.recursive_move_scope();
     for(const move_t &m : mline) {
-      if(!check_valid_move(m)) {
+      if(!check_valid_move(m) && (strict || m != board::nullmove)) {
+        str::pdebug("[invalid "s, _line_str_full(mline), "]"s);
         return false;
       }
       rec.scope(m);
