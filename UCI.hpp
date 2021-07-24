@@ -524,7 +524,7 @@ struct UCI {
     const double hashfull = double(engine->zb_occupied) / double(engine->zobrist_size);
     respond(RESP_INFO, "seldepth"s, engine_idstate.pline.size(),
                        "nodes"s, engine->nodes_searched,
-                       "score"s, get_score_type_string(engine->evaluation),
+                       "score"s, get_score_type_string(engine_idstate.eval),
                        "pv"s, engine->_line_str(engine_idstate.pline, true),
                        "time"s, int(round(time_spent * 1e3)),
                        "hashfull"s, int(round(hashfull * 1e3)));

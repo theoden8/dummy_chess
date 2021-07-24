@@ -96,7 +96,7 @@ public:
 
   struct board_state {
     using board_mailbox_t = std::array<piece_bitboard_t, board::SIZE>;
-    bool null_move_state : 1;
+    bool null_move_state;
     board_info info;
     board_mailbox_t attacks;
     std::array<piece_bitboard_t, NO_COLORS> checkline = {0x00,0x00};
@@ -197,6 +197,7 @@ public:
     init_state_attacks();
     init_state_moves();
     update_state_info();
+    state.null_move_state = false;
   }
 
   INLINE constexpr COLOR activePlayer() const {

@@ -117,13 +117,13 @@ public:
     return moves[rand() % moves.size()];
   }
 
-  static constexpr int32_t CENTIPAWN = 1e2,
-                           MATERIAL_PAWN = 1e4,
-                           MATERIAL_KNIGHT = 3.25e4,
-                           MATERIAL_BISHOP = 3.25e4,
-                           MATERIAL_ROOK = 5e4,
-                           MATERIAL_QUEEN = 10e4,
-                           MATERIAL_KING = 1e7;
+  static constexpr int32_t CENTIPAWN = 256,
+                           MATERIAL_PAWN = 100*CENTIPAWN,
+                           MATERIAL_KNIGHT = 325*CENTIPAWN,
+                           MATERIAL_BISHOP = 325*CENTIPAWN,
+                           MATERIAL_ROOK = 500*CENTIPAWN,
+                           MATERIAL_QUEEN = 1000*CENTIPAWN,
+                           MATERIAL_KING = 1000*MATERIAL_PAWN;
   std::vector<PIECE> MATERIAL_PIECE_ORDERING;
 
   static constexpr int32_t MATERIALS[] = {
@@ -188,7 +188,7 @@ public:
 
     decltype(auto) h_add = [&](pos_t i, int32_t mat) mutable -> void {
       auto a = state.attacks[i];
-      h += (piece::size(a & occupied) + piece::size(a)) * 1e4 / mat;
+      h += (piece::size(a & occupied) + piece::size(a)) * MATERIAL_PAWN / mat;
     };
     bitmask::foreach(bits[c] & bits_pawns, [&](pos_t i) mutable -> void {
       h_add(i, MATERIAL_PAWN);
@@ -219,28 +219,43 @@ public:
 
   INLINE int32_t h_pawn_structure(COLOR c) const {
     int32_t h = 0;
+    // zero/doubled/tripple pawns
     for(pos_t f = 0; f < board::LEN; ++f) {
       const piece_bitboard_t pawns_file = piece::file_mask(f) & bits_pawns & bits[c];
       if(!pawns_file) {
         h -= 2*CENTIPAWN;
       } else {
-        h += 1*CENTIPAWN * (2 - piece::size(pawns_file));
+        h += 1*CENTIPAWN * (3 - piece::size(pawns_file) * 2);
       }
     }
-    for(pos_t f = B; f <= G; ++f) {
+    for(pos_t f = A; f <= H; ++f) {
       const piece_bitboard_t pawns_file = piece::file_mask(f) & bits_pawns & bits[c];
       if(!pawns_file)continue;
       const piece_bitboard_t furthest_pawn = (c == WHITE) ? bitmask::highest_bit(pawns_file) : bitmask::lowest_bit(pawns_file);
       const pos_t pawnr = (c == WHITE) ? board::_y(bitmask::log2(pawns_file))
                                        : board::_y(bitmask::log2_msb(pawns_file));
-      const piece_bitboard_t adjacent_files = (piece::file_mask(f - 1) | piece::file_mask(f) | piece::file_mask(f + 1));
+      piece_bitboard_t adjacent_files = piece::file_mask(f);
+      int32_t sidepawn_decay = 1;
+      if(f != A)adjacent_files |= piece::file_mask(f - 1);
+      if(f != H)adjacent_files |= piece::file_mask(f + 1);
+      if(f == A || f == H) {
+        sidepawn_decay = 2;
+      }
+      // isolated pawns
+      if(!(adjacent_files & ~pawns_file & bits_pawns & bits[c])) {
+        h -= CENTIPAWN / 4 / sidepawn_decay;
+      } else {
+        h += CENTIPAWN / 4 / sidepawn_decay;
+      }
+      // pass-pawns
       const piece_bitboard_t ahead = (c == WHITE) ? adjacent_files << (board::LEN * (1+pawnr))
                                                   : adjacent_files >> (board::LEN * (8-pawnr));
       assert(~ahead & furthest_pawn);
       if((ahead & bits_pawns & ~bits[c]))continue;
       const int32_t pawnr_abs = ((c == WHITE) ? pawnr : 7 - pawnr);
-      h += (CENTIPAWN / 10) * pawnr_abs * pawnr_abs;
+      h += (CENTIPAWN / 10) * pawnr_abs * pawnr_abs / sidepawn_decay;
     }
+    // pawn strucure coverage
     h += (CENTIPAWN / 2) * piece::size(piece::get_pawn_attacks(bits_pawns & bits[c], c) & bits[c]);
     return h;
   }
@@ -269,9 +284,9 @@ public:
     const pos_t _j = j & board::MOVEMASK;
     if(crazyhouse && is_drop_move(i, j)) {
     } else if(is_promotion_move(i, _j)) {
-      return float(material_of(board::get_promotion_as(j)) - material_of(PAWN)) * 1e-4;
+      return float(material_of(board::get_promotion_as(j)) - material_of(PAWN)) / MATERIAL_PAWN;
     } else if(is_enpassant_take_move(i, _j)) {
-      return float(material_of(PAWN)) * 1e-4;
+      return float(material_of(PAWN)) / MATERIAL_PAWN;
     }
     return .0;
   }
@@ -288,7 +303,7 @@ public:
   INLINE float move_heuristic_attacker_decay(pos_t i, pos_t j, piece_bitboard_t edefendmap) const {
     float val = .0;
     const PIECE frompiece = self[i].value;
-    const float mat_from = (frompiece == KING ? 50. : float(material_of(frompiece)) * 1e-4);
+    const float mat_from = (frompiece == KING ? 50. : float(material_of(frompiece)) / MATERIAL_PAWN);
     const pos_t _j = j & board::MOVEMASK;
     if(self.empty_at_pos(_j) || (edefendmap & piece::pos_mask(_j))) {
       const float decay_i = (edefendmap & piece::pos_mask(_j)) ? .02 : .05;
@@ -309,14 +324,14 @@ public:
     } else if(val > 0 || is_castling_move(i, _j)) {
       return val;
     }
-    const float mat_i = float(material_of(self[i].value)) * 1e-4,
-                mat_j = float(material_of(self[_j].value)) * 1e-4;
+    const float mat_i = float(material_of(self[i].value)) / MATERIAL_PAWN,
+                mat_j = float(material_of(self[_j].value)) / MATERIAL_PAWN;
     if(~edefendmap & piece::pos_mask(_j)) {
       return mat_j;
     } else if(mat_i < mat_j) {
       return mat_j - mat_i - extra_val;
     }
-    const float see = float(static_exchange_evaluation(i, _j)) * 1e-4;
+    const float see = float(static_exchange_evaluation(i, _j)) / MATERIAL_PAWN;
     val += see;
     if(see < 0) {
       val -= extra_val;
@@ -332,10 +347,10 @@ public:
     } else if(is_castling_move(i, _j)) {
       val += .5;
     } else if(is_naively_capture_move(i, _j)) {
-      const float mat_to = float(material_of(self[_j].value))*1e-4;
+      const float mat_to = float(material_of(self[_j].value)) / MATERIAL_PAWN;
       val += mat_to;
       const PIECE frompiece = self[i].value;
-      const float mat_from = (frompiece == KING ? 50. : float(material_of(frompiece))*1e-4);
+      const float mat_from = (frompiece == KING ? 50. : float(material_of(frompiece)) / MATERIAL_PAWN);
       if(edefendmap & piece::pos_mask(_j)) {
         val -= mat_from;
       }
@@ -348,9 +363,9 @@ public:
 
   INLINE float move_heuristic_pv(move_t m, const MoveLine &pline, move_t firstmove=board::nullmove) const {
     if(pline.is_mainline() && m == pline.front_in_mainline()) {
-      return 200.;
+      return 2000.;
     } else if(m == firstmove) {
-      return 100.;
+      return 1000.;
     }
     return .0;
   }
@@ -386,7 +401,7 @@ public:
   }
 
   static INLINE float score_float(int32_t score) {
-    return float(score) * 1e-4;
+    return float(score)  / MATERIAL_PAWN;
   }
 
   static INLINE bool score_is_mate(int32_t score) {
@@ -729,13 +744,13 @@ public:
       return score;
     }
     bool isdraw_pathdep = false;
+    constexpr int32_t DELTA = 300 * CENTIPAWN;
     const bool delta_prune_allowed = ENABLE_SELECTIVITY && !king_in_check && piece::size(bits[c] & ~bits_pawns) > 5;
-    constexpr int32_t DELTA = 200 * CENTIPAWN;
     TT_NODE_TYPE ndtype = TT_ALLNODE;
     for(size_t move_index = 0; move_index < quiescmoves.size(); ++move_index) {
       const auto [m_val, m, reduce_nchecks] = quiescmoves[move_index];
       MoveLine pline_alt = pline.branch_from_past();
-      if(delta_prune_allowed && score + std::round(m_val * 1e4) < alpha - DELTA) {
+      if(delta_prune_allowed && score + std::round(m_val * MATERIAL_PAWN) < alpha - DELTA) {
         continue;
       }
       {
@@ -784,7 +799,7 @@ public:
       const move_t m = bitmask::_pos_pair(i, j);
       float val = .0;
       val += move_heuristic_pv(m, pline, firstmove);
-      if(val < 100.) {
+      if(val < 1000.) {
         val += move_heuristic_see(i, j, edefendmap);
         val += move_heuristic_cmt(m, pline, cmh_table);
       }
@@ -843,7 +858,7 @@ public:
     // nullmove pruning
     // perform this inside a scout
     const COLOR c = activePlayer();
-    const bool nullmove_allowed = ENABLE_SELECTIVITY && !pline.is_mainline() && allow_nullmoves && (state.checkline[c] == bitmask::full)
+    const bool nullmove_allowed = ENABLE_SELECTIVITY && scoutsearch && allow_nullmoves && (state.checkline[c] == bitmask::full)
                                 && piece::size((bits_slid_diag | get_knight_bits() | bits_slid_orth) & bits[c]) > 0;
     if(nullmove_allowed) {
       const int16_t R = (depth > 6) ? 4 : 3;
@@ -852,12 +867,13 @@ public:
       int32_t score = 0;
       {
         auto mscope = mline_scope(board::nullmove, pline_alt);
-        score = -score_decay(alpha_beta_pv(-(beta-1), -beta, std::max(0, depth-R-1), pline_alt, ab_state, false, true, callback_f));
+        score = -score_decay(alpha_beta_pv(-beta-1, -beta, std::max(0, depth-R-1), pline_alt, ab_state, false, true, callback_f));
       }
       if(score >= beta) {
         depth -= DR;
         if(depth <= 0) {
           const int nchecks = 0;
+          // TODO zug-zwang will fail low
           return alpha_beta_quiescence(beta-1, beta, 0, pline, ab_state, nchecks);
         } else {
           {
@@ -887,49 +903,54 @@ public:
       MoveLine pline_alt = pline.branch_from_past(m);
       int32_t score;
       // first move should be the pv search
-      if(move_index == 0) {
+      // TODO IID when no PV move
+      if(m_val > 999. && !scoutsearch) {
         { // move scope
           auto mscope = mline_scope(m, pline_alt);
           isdraw_pathdep = is_draw_halfmoves() || is_draw_repetition();
-          score = -score_decay(alpha_beta_pv(-beta, -alpha, depth - 1, pline_alt, ab_state, allow_nullmoves, false, callback_f));
+          score = -score_decay(alpha_beta_pv(-beta, -alpha, depth - 1, pline_alt, ab_state, allow_nullmoves, scoutsearch, callback_f));
         } // end move scope
         debug.update_pv(depth, alpha, beta, bestscore, score, m, pline, pline_alt, "firstmove"s);
         debug.check_score(depth, score, pline_alt);
-        bestscore = score;
 //        debug.log_pv(depth, pline, "move "s + pgn::_move_str(self, m) + " score "s + std::to_string(score_float(score)));
-        pline.replace_line(pline_alt);
-        if(bestscore > alpha) {
-          if(bestscore >= beta) {
-            if(overwrite && tt_replace_depth && tt_inexact_entry && !isdraw_pathdep) {
-              if(tt_inactive_entry)++zb_occupied;
-              zb.write(state.info, score, depth, m, tt_age, TT_CUTOFF, pline);
+        if(score > bestscore) {
+          pline.replace_line(pline_alt);
+          bestscore = score;
+          if(score > alpha) {
+            if(score >= beta) {
+              if(overwrite && tt_replace_depth && tt_inexact_entry && !isdraw_pathdep) {
+                if(tt_inactive_entry)++zb_occupied;
+                zb.write(state.info, score, depth, m, tt_age, TT_CUTOFF, pline);
+              }
+              const size_t cmt_index = get_cmt_index(pline, m);
+              if(cmt_index != SIZE_MAX) {
+                ab_state.cmh_table[cmt_index] += (depth * depth * (double(move_index + 1) / double(moves.size()))) * 1e-8;
+                ab_state.normalize_cmh_table(cmt_index);
+              }
+              return bestscore;
             }
-            const size_t cmt_index = get_cmt_index(pline, m);
-            if(cmt_index != SIZE_MAX) {
-              ab_state.cmh_table[cmt_index] += (depth * depth * (double(move_index + 1) / double(moves.size()))) * 1e-8;
-              ab_state.normalize_cmh_table(cmt_index);
-            }
+            alpha = bestscore;
+            ndtype = TT_EXACT;
+          } else if(ab_state.initdepth == depth) {
+            // fail low on aspiration. re-do the search
             return bestscore;
           }
-          alpha = bestscore;
-          ndtype = TT_EXACT;
-        } else if(ab_state.initdepth == depth) {
-          // fail low on aspiration. re-do the search
-          return bestscore;
         }
       } else {
         { // move scope
           auto mscope = mline_scope(m, pline_alt);
           isdraw_pathdep = is_draw_halfmoves() || is_draw_repetition();
-          const bool lmr_allowed = false;//ENABLE_SELECTIVITY && move_index >= (pline.is_mainline() ? 15 : 4) && depth >= 3 && state.checkline[c] == bitmask::full && m_val < -float(MATERIAL_QUEEN)/MATERIAL_PAWN;
+          pos_t i = bitmask::first(m), j = bitmask::second(m) & board::MOVEMASK;
+          const bool interesting_move = (is_drop_move(i, j) || is_castling_move(i, j) || is_promotion_move(i, j) || (is_naively_capture_move(i, j) && m_val > -3.5) || (is_naively_checking_move(i, j) && m_val > -9.));
+          const bool lmr_allowed = false && ENABLE_SELECTIVITY && !scoutsearch && move_index >= (pline.is_mainline() ? 15 : 4) && depth >= 3 && state.checkline[c] == bitmask::full && m_val < .1 && !interesting_move;
           MoveLine pline_alt2 = pline_alt;
           if(lmr_allowed) {
-            score = -score_decay(alpha_beta_pv(-(alpha-1), -alpha, depth - 2, pline_alt2, ab_state, allow_nullmoves, true, callback_f));
+            score = -score_decay(alpha_beta_pv(-alpha-1, -alpha, depth - 2, pline_alt2, ab_state, allow_nullmoves, true, callback_f));
           } else {
-            score = -score_decay(alpha_beta_pv(-(alpha-1), -alpha, depth - 1, pline_alt2, ab_state, allow_nullmoves, true, callback_f));
+            score = -score_decay(alpha_beta_pv(-alpha-1, -alpha, depth - 1, pline_alt2, ab_state, allow_nullmoves, true, callback_f));
           }
-          if(score > alpha && score < beta) {
-            score = -score_decay(alpha_beta_pv(-beta, -alpha, depth - 1, pline_alt, ab_state, allow_nullmoves, false, callback_f));
+          if(!scoutsearch && score > alpha) {
+            score = -score_decay(alpha_beta_pv(-beta, -alpha, depth - 1, pline_alt, ab_state, allow_nullmoves, scoutsearch, callback_f));
             if(score > alpha) {
               alpha = score;
               ndtype = TT_EXACT;
@@ -1102,7 +1123,6 @@ public:
   }
 
   size_t nodes_searched = 0;
-  int32_t evaluation = MATERIAL_KING;
   ply_index_t tt_age = 0;
   size_t zb_hit = 0, zb_miss = 0, zb_occupied = 0;
   size_t ezb_hit = 0, ezb_miss = 0, ezb_occupied = 0;
@@ -1145,7 +1165,7 @@ public:
     decltype(auto) ab_storage = get_zobrist_alphabeta_scope();
     assert(ab_ttable != nullptr && e_ttable != nullptr);
     debug.set_depth(depth);
-    evaluation = iterative_deepening_dfs(depth, ab_storage, idstate, searchmoves, std::forward<F>(callback_f));
+    iterative_deepening_dfs(depth, ab_storage, idstate, searchmoves, std::forward<F>(callback_f));
     return idstate.currmove();
   }
 

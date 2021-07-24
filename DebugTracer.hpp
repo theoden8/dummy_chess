@@ -11,15 +11,15 @@ struct DebugTracer {
   using tt_ab_entry = typename EngineT::tt_ab_entry;
 
   EngineT &engine;
-  static constexpr int16_t show_maxdepth = 0;
   static constexpr bool show_pv = true;
   static constexpr bool show_q = false;
   static constexpr bool show_mem = false;
   static constexpr bool show_everything = show_pv && false;
   static constexpr bool change_line_to_info = false;
-  static constexpr bool exact_line = false;
+  static constexpr bool exact_line = true;
   MoveLine debug_moveline = MoveLine(std::vector<move_t>{
   });
+  static constexpr int16_t show_maxdepth = 0;
   board_info debug_board_info;
   int16_t debug_depth = 0;
 
@@ -94,8 +94,8 @@ struct DebugTracer {
       return true;
     }
     return (
-        (!exact_line && pline_alt.get_past().startswith(debug_moveline))
-        || (exact_line && pline_alt.full() == debug_moveline)
+        (!exact_line && pline_alt.full().startswith(debug_moveline))
+        || (exact_line && debug_moveline.startswith(pline_alt.full()))
     ) && (debug_depth < depth + show_maxdepth);
   }
 
@@ -155,7 +155,7 @@ struct DebugTracer {
   }
 
   void update_pv(int16_t depth, int32_t alpha, int32_t beta, int32_t bestscore, int32_t score, move_t m,
-              const MoveLine &pline, const MoveLine &pline_alt, std::string extra_inf=""s)
+              const MoveLine &pline, const MoveLine &pline_alt, const std::string &extra_inf=""s)
   {
     #ifndef NDEBUG
     if(filter_moveline(depth, pline_alt) && show_pv) {
