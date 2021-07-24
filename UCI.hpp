@@ -584,7 +584,7 @@ struct UCI {
         pondering = false;
       }
     }
-    if(!args.ponder || !should_stop) {
+    if(!pondering && !should_stop) {
       respond_final_iddfs(engine_idstate, bestmove, time_spent);
     }
 		if(engine_idstate.pondermove() != board::nullmove) {
