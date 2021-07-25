@@ -14,6 +14,8 @@ int main(int argc, char *argv[]) {
 //  const fen::FEN f = fen::load_from_string("2rqkb1r/p2b1pp1/2n5/1p1n2Pp/N3p2P/1PPp4/P2P1P2/R1BQKBNR w KQk - 0 15"s);
 //  const fen::FEN f = fen::load_from_string("1r4k1/1r3pp1/3b3p/3p1qnP/Q1pP3R/2P2PP1/PP4K1/R1B3N1 b - - 2 24"s);
 //  const fen::FEN f = fen::load_from_string("1r4k1/1r3pp1/3b1q1p/3p2nP/p1pP3R/2P2PP1/PPQ3K1/1RB3N1 w - - 0 1"s);
+//  const fen::FEN f = fen::load_from_string("1R6/P1n5/2p5/2k5/r7/3B4/3K4/8 w - - 1 82"s);
+//  const fen::FEN f = fen::load_from_string("2k5/2p2Q2/1p2p2p/pP2r1p1/4q1P1/1P4R1/2KP1P2/8 w - - 4 47"s);
 //  const fen::FEN f = fen::load_from_string("4b3/8/PB1k4/2N5/1N4P1/8/7K/8 w - - 5 59"s);
 //  const fen::FEN f = fen::load_from_string("r3kb1r/p1p1ppp1/pq2Nn1p/4N3/3P1B2/8/PPP2PPP/R2Q1RK1 b kq - 0 12");
 //  const fen::FEN f = fen::load_from_string("6k1/8/5KP1/8/8/8/8 b - - 4 71");
@@ -49,22 +51,30 @@ int main(int argc, char *argv[]) {
   {
     Engine e(f);
     decltype(auto) ab_storage = e.get_zobrist_alphabeta_scope();
-    for(int depth = 1; depth <= 200; ++depth) {
+    {
       ab_storage.reset();
       const auto start = system_clock::now();
       Engine::iddfs_state idstate;
-      move_t m = e.get_fixed_depth_move_iddfs(depth, idstate);
-      const size_t nds = e.nodes_searched;
-      const auto stop = system_clock::now();
-      const long dur = duration_cast<nanoseconds>(stop-start).count();
-      const double sec = 1e-9*dur;
-      const double eval = Engine::score_float(idstate.eval);
-      const double kndssec = (double(nds)/sec)*1e-3;
-      const double hit_rate = double(e.zb_hit) / double(1e-9+e.zb_hit + e.zb_miss);
-      const double hashfull = double(e.zb_occupied) / ZOBRIST_SIZE;
-      printf("move=%s, depth=%d/%lu, eval=%.5f\ttime=%.3f\traw=%.3f kN/sec\tnodes=%lu\thit_rate=%.3f\thashfull=%.3f\n",
-              pgn::_move_str(e, m).c_str(), depth, idstate.pline.size(), eval, sec, kndssec, nds, hit_rate, hashfull);
-      fflush(stdout);
+      int16_t lastdepth = 0;
+      move_t lastmove = board::nullmove;
+      e.start_thinking(20, idstate, [&](bool verbose) mutable -> bool {
+        if(!verbose)return true;
+        if(idstate.curdepth == lastdepth && idstate.currmove() == lastmove)return true;
+        const size_t nds = e.nodes_searched;
+        const auto stop = system_clock::now();
+        const long dur = duration_cast<nanoseconds>(stop-start).count();
+        const double sec = 1e-9*dur;
+        const double eval = Engine::score_float(idstate.eval);
+        const double kndssec = (double(nds)/sec)*1e-3;
+        const double hit_rate = double(e.zb_hit) / double(1e-9+e.zb_hit + e.zb_miss);
+        const double hashfull = double(e.zb_occupied) / ZOBRIST_SIZE;
+        printf("move=%s, depth=%d/%lu, eval=%.5f\ttime=%.3f\traw=%.3f kN/sec\tnodes=%lu\thit_rate=%.3f\thashfull=%.3f\n",
+                pgn::_move_str(e, idstate.pline.front()).c_str(), idstate.curdepth, idstate.pline.size(), eval, sec, kndssec, nds, hit_rate, hashfull);
+        fflush(stdout);
+        lastdepth = idstate.curdepth;
+        lastmove = idstate.currmove();
+        return true;
+      }, {});
     }
   }
 #endif

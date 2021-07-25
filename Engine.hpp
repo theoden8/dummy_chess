@@ -261,7 +261,7 @@ public:
   }
 
   INLINE int32_t heuristic_of(COLOR c) const {
-    int32_t h = .0;
+    int32_t h = 0;
     h += h_material(c);
     h += h_pawn_structure(c);
 //    h -= count_material(state.pins[c]);
@@ -1009,6 +1009,11 @@ public:
       ab_ttable_scope.reset();
       e_ttable_scope.reset();
     }
+
+    void end_scope() {
+      ab_ttable_scope.end_scope();
+      e_ttable_scope.end_scope();
+    }
   };
 
   typedef struct _iddfs_state {
@@ -1160,7 +1165,7 @@ public:
   }
 
   template <typename F>
-  move_t get_fixed_depth_move_iddfs(int16_t depth, iddfs_state &idstate, F &&callback_f, const std::unordered_set<move_t> &searchmoves) {
+  move_t start_thinking(int16_t depth, iddfs_state &idstate, F &&callback_f, const std::unordered_set<move_t> &searchmoves) {
     reset_planning();
     decltype(auto) ab_storage = get_zobrist_alphabeta_scope();
     assert(ab_ttable != nullptr && e_ttable != nullptr);
@@ -1169,13 +1174,13 @@ public:
     return idstate.currmove();
   }
 
-  INLINE move_t get_fixed_depth_move_iddfs(int16_t depth, iddfs_state &idstate, const std::unordered_set<move_t> &searchmoves={}) {
-    return get_fixed_depth_move_iddfs(depth, idstate, make_callback_f(), searchmoves);
+  INLINE move_t start_thinking(int16_t depth, iddfs_state &idstate, const std::unordered_set<move_t> &searchmoves={}) {
+    return start_thinking(depth, idstate, make_callback_f(), searchmoves);
   }
 
-  INLINE move_t get_fixed_depth_move_iddfs(int16_t depth, const std::unordered_set<move_t> &searchmoves={}) {
+  INLINE move_t start_thinking(int16_t depth, const std::unordered_set<move_t> &searchmoves={}) {
     iddfs_state idstate;
-    return get_fixed_depth_move_iddfs(depth, idstate, searchmoves);
+    return start_thinking(depth, idstate, searchmoves);
   }
 
   struct tt_perft_entry {

@@ -256,7 +256,7 @@ namespace fen {
   constexpr fen::lazyFEN search_explosion_pos("q2k2q1/2nqn2b/1n1P1n1b/2rnr2Q/1NQ1QN1Q/3Q3B/2RQR2B/Q2K2Q1 w - -");
   constexpr fen::lazyFEN quiesc_fork_position("r1b1k2r/pp1p1ppp/3pp3/1Nb4q/1n2PPnN/1P1P2P1/P1P4P/R1BQKB1R w KQkq - 0 1");
   // crazyhouse
-  const fen::FEN starting_pos_ch = fen::load_from_string("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR[] w KQkq - 0 1");
+  constexpr fen::lazyFEN starting_pos_ch("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR[] w KQkq - 0 1");
 
   fen::FEN export_from_board(const Board &board);
 

@@ -21,11 +21,11 @@ protected:
   COLOR activePlayer_;
   size_t current_ply_ = 0;
 public:
-  const bool chess960;
+  const bool chess960 = false;
   pos_t kcastlrook[NO_COLORS] = {0xff, 0xff},
         qcastlrook[NO_COLORS] = {0xff, 0xff};
 
-  const bool crazyhouse;
+  const bool crazyhouse = false;
   piece_bitboard_t bits_promoted_pawns = 0ULL;
 
   struct board_info {

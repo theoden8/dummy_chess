@@ -57,10 +57,10 @@ struct UCI {
     lock_guard guard(engine_mtx);
     if(engine != nullptr) {
       _printf("destroy\n");
-      delete engine;
-      engine = nullptr;
       delete engine_ab_storage;
       engine_ab_storage = nullptr;
+      delete engine;
+      engine = nullptr;
     }
   }
 
@@ -263,7 +263,7 @@ struct UCI {
       return;
       case CMD_ISREADY:
       {
-        lock_guard guard(engine_mtx);
+        join_engine_thread();
         respond(RESP_READYOK);
       }
       return;
@@ -327,7 +327,6 @@ struct UCI {
       return;
       case CMD_POSITION:
       {
-        lock_guard guard(engine_mtx);
         join_engine_thread();
         fen::FEN f;
         size_t ind = 1;
@@ -365,7 +364,6 @@ struct UCI {
       return;
       case CMD_DISPLAY:
       {
-        lock_guard guard(engine_mtx);
         join_engine_thread();
         const fen::FEN f = engine->export_as_fen();
         respond(RESP_DISPLAY, "fen"s, fen::export_as_string(f));
@@ -522,7 +520,8 @@ struct UCI {
 
   void respond_final_iddfs(const Engine::iddfs_state &engine_idstate, move_t bestmove, double time_spent) {
     const double hashfull = double(engine->zb_occupied) / double(engine->zobrist_size);
-    respond(RESP_INFO, "seldepth"s, engine_idstate.pline.size(),
+    respond(RESP_INFO, "depth"s, engine_idstate.curdepth,
+                       "seldepth"s, engine_idstate.pline.size(),
                        "nodes"s, engine->nodes_searched,
                        "score"s, get_score_type_string(engine_idstate.eval),
                        "pv"s, engine->_line_str(engine_idstate.pline, true),
@@ -560,7 +559,7 @@ struct UCI {
     }
     bool pondering = args.ponder;
     bool return_from_search = false;
-    const move_t bestmove = engine->get_fixed_depth_move_iddfs(args.depth, engine_idstate, [&](bool verbose) mutable -> bool {
+    const move_t bestmove = engine->start_thinking(args.depth, engine_idstate, [&](bool verbose) mutable -> bool {
       if(engine_idstate.pline.empty()) {
         return true;
       } else if(return_from_search) {

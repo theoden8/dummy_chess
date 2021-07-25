@@ -14,7 +14,7 @@ int main(int argc, char *argv[]) {
     decltype(auto) store_scopes = e.get_zobrist_alphabeta_scope();
     const auto start = system_clock::now();
     Engine::iddfs_state idstate;
-    move_t m = e.get_fixed_depth_move_iddfs(depth, idstate);
+    move_t m = e.start_thinking(depth, idstate);
     const size_t nds = e.nodes_searched;
     const auto stop = system_clock::now();
     const long dur = duration_cast<nanoseconds>(stop-start).count();
