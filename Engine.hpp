@@ -373,7 +373,7 @@ public:
   INLINE size_t get_cmt_index(const MoveLine &pline, move_t m) const {
     constexpr size_t NO_INDEX = SIZE_MAX;
     const move_t p_m = pline.get_previous_move();
-    if(p_m != board::nullmove && !(crazyhouse && is_drop_move(bitmask::first(m), bitmask::second(m)))) {
+    if(m != board::nullmove && p_m != board::nullmove && !(crazyhouse && is_drop_move(bitmask::first(m), bitmask::second(m)))) {
       const pos_t i = bitmask::first(m), _j = bitmask::second(m);
       const pos_t p_i = bitmask::first(p_m) & board::MOVEMASK;
       const pos_t p_j = bitmask::second(p_m) & board::MOVEMASK;
@@ -628,7 +628,7 @@ public:
         return;
       } else if(is_promotion_move(i, j) || is_enpassant_take_move(i, j)) {
         val = move_heuristic_see(i, j, edefendmap);
-        if(val < 0)return;
+        if(val < -1e-9)return;
       } else if(is_naively_capture_move(i, j)) {
         if(material_of(self[i].value) + 1e-9 < material_of(self[j].value) && (~edefendmap & piece::pos_mask(j))) {
           val = move_heuristic_mvv_lva(i, j, edefendmap) + .01;
@@ -877,9 +877,11 @@ public:
           return alpha_beta_quiescence(beta-1, beta, 0, pline, ab_state, nchecks);
         } else {
           {
-            pline_alt.shift_start();
-            const size_t cmt_index = get_cmt_index(pline, board::nullmove);
+            pline_alt.premove(board::nullmove);
+            const move_t nextmove = pline_alt.get_next_move();
+            const size_t cmt_index = get_cmt_index(pline_alt, nextmove);
             if(cmt_index != SIZE_MAX) {
+              assert(cmt_index < ab_state.cmh_table.size());
               ab_state.cmh_table[cmt_index] += ((depth + 2) * (depth + 2)) * 1e-8;
               ab_state.normalize_cmh_table(cmt_index);
             }
@@ -1119,7 +1121,7 @@ public:
     if(idstate.pline.empty() || idstate.pline.find(board::nullmove)) {
       const move_t m = get_random_move();
       if(m != board::nullmove) {
-        str::print("replace move with random move", _move_str(m));
+        str::pdebug("replace move with random move", _move_str(m));
         idstate.curdepth = 0;
         idstate.pline = MoveLine(std::vector<move_t>(m));
       }

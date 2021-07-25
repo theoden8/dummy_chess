@@ -217,7 +217,7 @@ struct PGN {
 };
 
 std::string _move_str(Board &b, move_t m) {
-  assert(b.check_valid_move(m));
+  assert(m == board::nullmove || b.check_valid_move(m));
   pgn::PGN pgn(b);
   pgn.handle_move(m);
   std::string s = pgn.ply.front();

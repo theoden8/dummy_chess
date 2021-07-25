@@ -176,6 +176,11 @@ struct MoveLine {
     return line[start - 3];
   }
 
+  INLINE move_t get_next_move() const {
+    if(empty())return board::nullmove;
+    return line[start];
+  }
+
   INLINE MoveLine as_past() const {
     MoveLine mline = *this;
     mline.start = line.size();

@@ -375,7 +375,7 @@ struct UCI {
         should_stop = false;
         // perft command
         size_t ind = 1;
-        if(cmd[ind] == "perft"s) {
+        if(cmd.size() > ind && cmd[ind] == "perft"s) {
           ++ind;
           if(cmd.size() != 3) {
             str::perror("error: unknown subcommand"s, cmd[ind]);
