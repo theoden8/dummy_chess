@@ -58,7 +58,7 @@ class UCISession:
         self.commands += ['uciok']
 
     def setoption(self, optname: str, optvalue):
-        assert not self.position_is_set, 'please set position before setting options'
+        assert not self.position_is_set, 'please set options before setting position'
         self.commands += [f'setoption name {optname} value {optvalue}']
 
     def position(self, fen=None, moves=[]) -> None:
@@ -98,6 +98,9 @@ class UCISession:
     def do_time(self) -> None:
         self.commands += [['time']]
 
+    def do_print(self, *args) -> None:
+        self.commands += [['print', args]]
+
     def run(self, uci_exec, info_func=print) -> typing.Any:
         active_time = time.time()
         p = subprocess.Popen(uci_exec, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
@@ -125,6 +128,9 @@ class UCISession:
                             break
                 elif cmd[0] == 'time':
                     yield time.time()
+                elif cmd[0] == 'print':
+                    _, args = cmd
+                    print(*args)
         #print('> close stdin')
         p.stdin.close()
         s += ''.join(p.stdout.readlines())

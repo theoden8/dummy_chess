@@ -43,14 +43,7 @@ dummy_chess_alphabeta: alphabeta.cpp $(SOURCES) $(HPPFILES) Makefile
 
 dummy_chess_uci: uci.cpp $(SOURCES) $(HPPFILES) Makefile
 	$(CXX) $(OPTFLAGS_PG) $(CXXFLAGS) uci.cpp $(SOURCES) $(LDFLAGS) -o $@
-	( \
-		echo "position fen 1r4k1/1r3pp1/3b3p/3p1qnP/Q1pP3R/2P2PP1/PP4K1/R1B3N1 b - - 2 24"; \
-		echo "go movetime 5000"; \
-		sleep 5; \
-		echo "position fen 1r4k1/1r3pp1/3b3p/3p1qnP/Q1pP3R/2P2PP1/PP4K1/R1B3N1 b - - 2 24 moves b7b2"; \
-		echo "go movetime 5000"; \
-		sleep 5; \
-	) | ./dummy_chess_uci
+	./scripts/pgo_bench.py "./dummy_chess_uci"
 	$(CXX) $(OPTFLAGS_PGO) $(CXXFLAGS) uci.cpp $(SOURCES) $(LDFLAGS) -o $@
 
 dummy_chess_uci_dbg: uci.cpp $(SOURCES) $(HPPFILES) Makefile
