@@ -1,5 +1,7 @@
 DBGFLAGS = -g3
 OPTFLAGS = -Ofast -DNDEBUG -flto -fwhole-program -m64 -march=native -DUSE_INTRIN -fno-exceptions
+OPTFLAGS_PG = $(OPTFLAGS) -fprofile-generate
+OPTFLAGS_PGO = $(OPTFLAGS) -fprofile-use
 PROFFLAGS = -O1 -DNDEBUG -flto -DUSE_INTRIN -pg
 CXXFLAGS = -std=c++20 -I. -Wall -Wextra -Wno-unused -Wno-parentheses
 # clang:
@@ -32,17 +34,28 @@ dummy_chess_curses: ui.cpp $(SOURCES) $(HPPFILES) Makefile
 	$(CXX) $(OPTFLAGS) $(CXXFLAGS) $(NC_CFLAGS) ui.cpp $(SOURCES) $(LDFLAGS) $(NC_LDFLAGS) $(LDFLAGS) -o $@
 
 dummy_chess_bench: bench.cpp $(SOURCES) $(HPPFILES) Makefile
-	$(CXX) $(OPTFLAGS) $(CXXFLAGS) bench.cpp $(SOURCES) $(LDFLAGS) -o $@
+	$(CXX) $(OPTFLAGS_PG) $(CXXFLAGS) bench.cpp $(SOURCES) $(LDFLAGS) -o $@
+	./dummy_chess_bench 10 '1r4k1/1r3pp1/3b3p/3p1qnP/Q1pP3R/2P2PP1/PP4K1/R1B3N1 b - - 2 24'
+	$(CXX) $(OPTFLAGS_PGO) $(CXXFLAGS) bench.cpp $(SOURCES) $(LDFLAGS) -o $@
 
 dummy_chess_alphabeta: alphabeta.cpp $(SOURCES) $(HPPFILES) Makefile
 	$(CXX) $(PROFFLAGS) $(CXXFLAGS) alphabeta.cpp $(SOURCES) $(LDFLAGS) -o $@
 
 dummy_chess_uci: uci.cpp $(SOURCES) $(HPPFILES) Makefile
-	$(CXX) $(OPTFLAGS) $(CXXFLAGS) uci.cpp $(SOURCES) $(LDFLAGS) -o $@
+	$(CXX) $(OPTFLAGS_PG) $(CXXFLAGS) uci.cpp $(SOURCES) $(LDFLAGS) -o $@
+	( \
+		echo "position fen 1r4k1/1r3pp1/3b3p/3p1qnP/Q1pP3R/2P2PP1/PP4K1/R1B3N1 b - - 2 24"; \
+		echo "go movetime 5000"; \
+		sleep 5; \
+		echo "position fen 1r4k1/1r3pp1/3b3p/3p1qnP/Q1pP3R/2P2PP1/PP4K1/R1B3N1 b - - 2 24 moves b7b2"; \
+		echo "go movetime 5000"; \
+		sleep 5; \
+	) | ./dummy_chess_uci
+	$(CXX) $(OPTFLAGS_PGO) $(CXXFLAGS) uci.cpp $(SOURCES) $(LDFLAGS) -o $@
 
 dummy_chess_uci_dbg: uci.cpp $(SOURCES) $(HPPFILES) Makefile
 	$(CXX) $(DBGFLAGS) $(CXXFLAGS) uci.cpp $(SOURCES) $(LDFLAGS) -o $@
 
 clean:
-	rm -vf *.o
+	rm -vf *.o *.gcda
 	rm -vf dummy_chess dummy_chess_opt dummy_chess_curses dummy_chess_bench dummy_chess_alphabeta dummy_chess_uci dummy_chess_uci_dbg
