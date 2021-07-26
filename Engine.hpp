@@ -1087,12 +1087,14 @@ public:
         const int32_t new_eval = alpha_beta_pv(aw_alpha, aw_beta, d, new_pline, ab_state, true, false,
           [&](int16_t _depth, int32_t _eval) mutable -> bool {
             const move_t _m = new_pline.front();
+            bool verbose = false;
             if(!inner_break && _depth == d && final_window && idstate.eval < _eval && _m != board::nullmove) {
               idstate.eval=_eval, idstate.pline=new_pline, idstate.curdepth=d;
+              verbose = true;
               str::pdebug("IDDFS:", d, "pline:", idstate.pline.pgn(self), "size:", idstate.pline.size(), "eval", score_float(idstate.eval));
               debug.check_score(d, idstate.eval, idstate.pline);
             }
-            should_stop = !callback_f(d == _depth);
+            should_stop = !callback_f(verbose);
             if(should_stop && d != _depth) {
               inner_break = true;
             }
@@ -1106,6 +1108,7 @@ public:
         } else {
           if(!should_stop || new_eval >= idstate.eval) {
             idstate.eval=new_eval, idstate.pline=new_pline, idstate.curdepth=d;
+            should_stop = !callback_f(true);
           }
           debug.check_score(d, idstate.eval, idstate.pline);
           if(should_stop || (score_is_mate(idstate.eval) && d > 0 && int(idstate.pline.size()) < d)) {
