@@ -4,6 +4,8 @@ dummy_chess*
 *.out
 *.dSYM
 *.gcda
+default*.profraw
+default*.profdata
 m42.*
 
 !/scripts/m42_download
