@@ -3,10 +3,13 @@ dummy_chess*
 *.o
 *.out
 *.dSYM
+*.gcda
 m42.*
 
 !/scripts/m42_download
 !/scripts/perft_compare.py
+!/scripts/uci_utilities.py
+!/scripts/bench.py
 scripts/
 
 tempfile

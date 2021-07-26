@@ -1,78 +1,56 @@
 #!/usr/bin/env python3
 
 
-import os
-import sys
-import subprocess
-import random
-import time
-from pprint import pprint
+from uci_utilities import *
 
 
-def get_file_content_str(filename):
-    s = ""
-    with open(filename) as f:
-       for line in f:
-           s += line
-    return s
-
-
-def get_output(command):
-    tempfile = "tempfile"
-    subprocess.call(command + " 2>&1 > " + tempfile, shell=True)
-    s = get_file_content_str(tempfile)
-    subprocess.call("rm -f " + tempfile, shell=True)
-    return s
-
-
-[STANDARD, CHESS960, CRAZYHOUSE] = range(3)
-def get_setoption_uci(variant=STANDARD):
-    if variant == STANDARD:
-        return ''
-    if variant == CHESS960:
-        return f"echo 'setoption name UCI_CHESS960 value true';"
-    elif variant == CRAZYHOUSE:
-        return f"echo 'setoption name UCI_Variant value crazyhouse';"
-    return ''
-
-
-startingpos = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
-def get_output_uci(uci_exec, depth: int, fen=startingpos, variant=STANDARD) -> dict:
-    start = time.time()
-    s = get_output(f"({get_setoption_uci(variant=variant)} echo 'position fen {fen}'; echo 'go perft {depth}') | {uci_exec}")
-    dur = time.time() - start
+def get_output_uci(uci_exec, depth: int, fen=None, variant=STANDARD) -> dict:
+    sess = UCISession(variant=variant)
+    sess.position(fen)
+    sess.do_time()
+    sess.go_perft(depth=depth)
+    sess.do_expect('Nodes')
+    sess.do_time()
+    gen = sess.run(uci_exec, info_func=noprint)
+    start = next(gen)
+    dur = next(gen) - start
+    s = next(gen)
     print(f'{uci_exec + " " * (30 - len(uci_exec))}: {dur:.3f}s')
     turnmaps = {}
     for line in s.split('\n'):
         if ':' in line:
             left, right = line.split(':')
             left = left.replace('Nodes searched', 'total')
-            turnmaps[left.strip()] = right.strip();
+            turnmaps[left.strip()] = right.strip()
     return turnmaps
 
 
-def get_uciexec(variant=STANDARD):
+def get_uciexec(variant=STANDARD) -> str:
     if variant in [STANDARD, CHESS960]:
         return 'stockfish'
     return 'fairy-stockfish'
 
 
-def get_output_stockfish(depth=5, fen=startingpos, variant=STANDARD) -> dict:
+def get_output_stockfish(depth=5, fen=None, variant=STANDARD) -> dict:
     return get_output_uci(get_uciexec(variant=variant), depth=depth, fen=fen, variant=variant)
 
 
-def get_output_dummy_chess(depth=5, fen=startingpos, variant=STANDARD) -> dict:
+def get_output_dummy_chess(depth=5, fen=None, variant=STANDARD) -> dict:
     return get_output_uci('./dummy_chess_uci', depth=depth, fen=fen, variant=variant)
 
 
-def get_next_fen(fen, move, variant=STANDARD):
+def get_next_fen(fen, move, variant=STANDARD) -> str:
     uciexec = get_uciexec(variant=variant)
-    s = get_output(f"({get_setoption_uci(variant=variant)} echo 'position fen {fen} moves {move}'; echo 'd') | {uciexec} | grep Fen")
+    sess = UCISession(variant=variant)
+    sess.position(fen, moves=[move])
+    sess.special_command('d')
+    s = next(sess.run(uciexec))
+    s = ''.join([ss for ss in s.split() if 'Fen' in ss])
     s = s.replace('Fen: ', '')
     return s.strip()
 
 
-def compare_outputs(depth=5, fen=startingpos, path=[], variant=STANDARD):
+def compare_outputs(depth=5, fen=None, path=[], variant=STANDARD) -> bool:
     if depth < 1:
         return True
     print(f"path={path}, depth={depth}, fen={fen}")
@@ -102,18 +80,18 @@ def compare_outputs(depth=5, fen=startingpos, path=[], variant=STANDARD):
     return False
 
 
-def compare_outputs_960(depth: int, fen: str, path=[]):
+def compare_outputs_960(depth: int, fen: str, path=[]) -> bool:
     return compare_outputs(depth=depth, fen=fen, path=path, variant=CHESS960)
 
 
-def compare_outputs_ch(depth: int, fen: str, path=[]):
+def compare_outputs_ch(depth: int, fen: str, path=[]) -> bool:
     return compare_outputs(depth=depth, fen=fen, path=path, variant=CRAZYHOUSE)
 
 
-def check_traditional():
+def check_traditional() -> None:
     # https://github.com/official-stockfish/Stockfish/blob/master/tests/perft.sh
     # https://www.chessprogramming.org/Perft_Results
-    compare_outputs(depth=6, fen=startingpos)
+    compare_outputs(depth=6, fen=None)
     compare_outputs(depth=5, fen='r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 0')
     compare_outputs(depth=6, fen='8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 0')
     compare_outputs(depth=5, fen='r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1')
@@ -124,7 +102,7 @@ def check_traditional():
     compare_outputs(depth=4, fen='q2k2q1/2nqn2b/1n1P1n1b/2rnr2Q/1NQ1QN1Q/3Q3B/2RQR2B/Q2K2Q1 w - -')
 
 
-def check_chess960():
+def check_chess960() -> None:
     compare_outputs_960(depth=1, fen='4k3/8/8/8/8/8/8/rR2K1N1 w Q - 0 1')
     compare_outputs_960(depth=5, fen='r2k2rB/ppp2b1p/3n3b/3p1pp1/4p3/P2P2P1/1PP1PPBP/RN3RKQ b kq - 0 11')
     # https://www.chessprogramming.org/Chess960_Perft_Results
@@ -174,10 +152,11 @@ def check_chess960():
     compare_outputs_960(depth=5, fen='nb1qbrkr/p1pppp2/1p1n2pp/8/1P6/2PN3P/P2PPPP1/NB1QBRKR w HFhf - 0 9')
 
 
-def check_crazyhouse():
+def check_crazyhouse() -> None:
     compare_outputs_ch(depth=6, fen='rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR/ w KQkq - 0 1')
     compare_outputs_ch(depth=4, fen='r1bq1rk1/pppp1p2/2n2p1p/2b1p3/2B1P3/2NP1N2/PPP2PPP/R2Q1RK1/Nb b - - 1 8')
     compare_outputs_ch(depth=4, fen='r2q2k1/p1Pp1r2/bpn2p1p/2b1p3/2B4N/PPN4P/2PbpPP1/R2Q1RK1/PNp w - - 0 17')
+    compare_outputs_ch(depth=4, fen='rq2kb1N/2b3p1/2Pp2Pp/1P1Pp3/bP2p1b1/PPnPP1P1/4P2R/1R1QK3/RNN w q - 0 44')
 
 
 if __name__ == "__main__":

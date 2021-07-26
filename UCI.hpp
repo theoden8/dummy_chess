@@ -366,7 +366,12 @@ struct UCI {
       {
         join_engine_thread();
         const fen::FEN f = engine->export_as_fen();
-        respond(RESP_DISPLAY, "fen"s, fen::export_as_string(f));
+        respond(RESP_DISPLAY, "fen:"s, fen::export_as_string(f));
+        const double hashfull = double(engine->zb_occupied) / double(engine->zobrist_size);
+        const double hit_rate = double(engine->zb_hit) / double(1e-9 + engine->zb_hit + engine->zb_miss);
+        respond(RESP_DISPLAY, "stat_hashfull:"s, hashfull);
+        respond(RESP_DISPLAY, "stat_hit_rate:"s, hit_rate);
+        respond(RESP_DISPLAY, "stat_nodes_searched:"s, engine->nodes_searched);
       }
       return;
       case CMD_GO:
