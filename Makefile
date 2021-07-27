@@ -1,5 +1,5 @@
 DBGFLAGS = -g3
-OPTFLAGS = -Ofast -DNDEBUG -flto -fwhole-program -fno-trapping-math -m64 -march=native -DUSE_INTRIN -fno-exceptions
+OPTFLAGS = -Ofast -DNDEBUG -flto -fwhole-program -fno-trapping-math -fno-signed-zeros -m64 -march=native -DUSE_INTRIN -fno-exceptions
 OPTFLAGS_PG = $(OPTFLAGS) -fprofile-generate
 OPTFLAGS_PGO = $(OPTFLAGS) -fprofile-use
 OPTFLAGS_PGO_MT = $(OPTFLAGS_PGO) -fprofile-correction
@@ -20,10 +20,10 @@ all :; @$(MAKE) _all -j$(CORES)
 _all : dummy_chess dummy_chess_opt dummy_chess_curses dummy_chess_bench dummy_chess_alphabeta dummy_chess_uci dummy_chess_uci_dbg
 
 m42.cpp:
-	$ ./scripts/m42_download
+	./scripts/m42_download
 
 m42.h:
-	$ ./scripts/m42_download
+	./scripts/m42_download
 
 dummy_chess: simple.cpp $(SOURCES) $(HPPFILES) Makefile
 	$(CXX) $(DBGFLAGS) $(CXXFLAGS) simple.cpp $(SOURCES) $(LDFLAGS) -o $@
@@ -37,13 +37,10 @@ dummy_chess_curses: ui.cpp $(SOURCES) $(HPPFILES) Makefile
 dummy_chess_bench: bench.cpp $(SOURCES) $(HPPFILES) Makefile dummy_chess_uci
 	$(CXX) $(OPTFLAGS_PGO) $(CXXFLAGS) bench.cpp $(SOURCES) $(LDFLAGS) -o $@
 
-dummy_chess_alphabeta: alphabeta.cpp $(SOURCES) $(HPPFILES) Makefile
-	rm -vf *.gcda
-	$(CXX) $(PROFFLAGS) -fprofile-generate $(CXXFLAGS) alphabeta.cpp $(SOURCES) $(LDFLAGS) -o $@
-	./dummy_chess_alphabeta 10 '1r4k1/1r3pp1/3b3p/3p1qnP/Q1pP3R/2P2PP1/PP4K1/R1B3N1 b - - 2 24'
-	$(CXX) $(PROFFLAGS) -fprofile-use $(CXXFLAGS) alphabeta.cpp $(SOURCES) $(LDFLAGS) -o $@
+dummy_chess_alphabeta: alphabeta.cpp $(SOURCES) $(HPPFILES) Makefile dummy_chess_uci
+	$(CXX) $(PROFFLAGS) -fprofile-use -fprofile-correction $(CXXFLAGS) alphabeta.cpp $(SOURCES) $(LDFLAGS) -o $@
 
-dummy_chess_uci: uci.cpp $(SOURCES) $(HPPFILES) Makefile dummy_chess_alphabeta
+dummy_chess_uci: uci.cpp $(SOURCES) $(HPPFILES) Makefile
 	rm -vf *.gcda
 	$(CXX) $(OPTFLAGS_PG) $(CXXFLAGS) uci.cpp $(SOURCES) $(LDFLAGS) -o $@
 	./scripts/pgo_bench.py "./dummy_chess_uci"

@@ -91,7 +91,8 @@ struct MoveLine {
     } else if(m == front()) {
       ;
     } else {
-      abort();
+      clear();
+      put(m);
     }
     shift_start();
   }
@@ -116,10 +117,22 @@ struct MoveLine {
 
   INLINE void replace_line(const MoveLine &other) {
     resize(other.size());
-    for(pos_t i = 0; i < other.size(); ++i) {
+    for(size_t i = 0; i < other.size(); ++i) {
       (*this)[i] = other[i];
     }
     assert(full().size() == start + other.size());
+  }
+
+  template <size_t N>
+  INLINE void draft_line(const std::array<move_t, N> &m_hint) {
+    size_t sz = 0;
+    for(sz = 0; sz < m_hint.size(); ++sz) {
+      if(m_hint[sz] == board::nullmove)break;
+      premove(m_hint[sz]);
+    }
+    for(size_t i = 0; i < sz; ++i) {
+      recall();
+    }
   }
 
   INLINE bool is_mainline() const {
@@ -177,8 +190,8 @@ struct MoveLine {
   }
 
   INLINE move_t get_next_move() const {
-    if(empty())return board::nullmove;
-    return line[start];
+    if(size() < 2)return board::nullmove;
+    return line[start + 1];
   }
 
   INLINE MoveLine as_past() const {
@@ -188,10 +201,8 @@ struct MoveLine {
   }
 
   INLINE MoveLine branch_from_past(move_t m=board::nullmove) const {
-    if(m != board::nullmove && front() == m && is_mainline()) {
-      MoveLine mline = *this;
-      mline.mainline = nullptr;
-      return mline;
+    if(front() == m) {
+      return *this;
     }
     MoveLine mline = get_past();
     mline.start = start;

@@ -12,8 +12,8 @@ struct DebugTracer {
 
   EngineT &engine;
   static constexpr bool show_pv = true;
-  static constexpr bool show_q = false;
-  static constexpr bool show_mem = false;
+  static constexpr bool show_q = true;
+  static constexpr bool show_mem = true;
   static constexpr bool show_everything = show_pv && false;
   static constexpr bool change_line_to_info = false;
   static constexpr bool exact_line = true;
@@ -105,7 +105,7 @@ struct DebugTracer {
       const char ast = (pline.get_past().startswith(debug_moveline)) ? ' ' : '*';
       _printf("%s%cdepth=%d, score=%.5f (%.5f, %.5f) %s -- %s (standpat)\n",
         tab(depth).c_str(), ast, depth,
-        EngineT::score_float(score), EngineT::score_float(beta), EngineT::score_float(alpha),
+        EngineT::score_float(score), EngineT::score_float(alpha), EngineT::score_float(beta),
         _line_str_full(pline).c_str(), actinfo_standpat(alpha, beta, score, nchecks).c_str());
       update_line(depth, alpha, beta, pline);
     }
@@ -177,9 +177,9 @@ struct DebugTracer {
     const int32_t adraw = std::abs(0);
     const int32_t pvscore = engine.get_pvline_score(pline);
     if(!engine.check_pvline_score(pline, score) && std::abs(score) != adraw && std::abs(pvscore) != adraw) {
-      _printf("%s pvline %s\n", tab(depth).c_str(), _line_str_full(pline).c_str());
-      _printf("%s score %.5f\n", tab(depth).c_str(), EngineT::score_float(score));
-      _printf("%s pvscore %.5f\n", tab(depth).c_str(), EngineT::score_float(pvscore));
+      _printf("%s pvline %s\n", tab(depth).c_str(), pline.pgn_full(engine).c_str());
+      _printf("%s score %.5f (%d)\n", tab(depth).c_str(), EngineT::score_float(score), score);
+      _printf("%s pvscore %.5f (%d)\n", tab(depth).c_str(), EngineT::score_float(pvscore), pvscore);
       abort();
     }
     assert(engine.check_pvline_score(pline, score) || std::abs(score) == adraw || std::abs(pvscore) == adraw);
