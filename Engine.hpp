@@ -536,7 +536,7 @@ public:
     int16_t depth;
     int32_t score;
   #ifndef NDEBUG
-    std::array<move_t, 4> m_hint;
+    std::array<move_t, 3> m_hint;
   #else
     std::array<move_t, 20> m_hint;
   #endif
@@ -712,6 +712,8 @@ public:
       pline.clear();
       return -MATERIAL_KING;
     }
+    assert(check_valid_move(pline.front()) || pline.front() == board::nullmove);
+    assert(check_valid_sequence(pline));
 
     int32_t score = -MATERIAL_KING;
     int32_t bestscore = -MATERIAL_KING;
@@ -759,18 +761,21 @@ public:
           if(m==board::nullmove)break;
           make_move(m);
           ++R;
+          pline.premove(m);
           if(is_draw_repetition() || is_draw_halfmoves()) {
             break;
           }
-          pline.premove(m);
           _alpha=-_beta;
           _beta=-_alpha;
+          assert(check_valid_sequence(pline));
         }
         int32_t score = alpha_beta_pv(_alpha,_beta,zb.depth-R,pline,ab_state,false,alpha+1==beta,make_callback_f());
+        assert(check_valid_sequence(pline));
         for(int16_t i = 0; i < R; ++i) {
           pline.recall();
           retract_move();
           score = -score_decay(score);
+          assert(check_valid_sequence(pline));
         }
         debug.check_score(zb.depth, score, pline);
         return score;
@@ -888,6 +893,8 @@ public:
       pline.clear();
       return -MATERIAL_KING;
     }
+    assert(check_valid_move(pline.front()) || pline.front() == board::nullmove);
+    assert(check_valid_sequence(pline));
     // drop to quiescence search
     if(depth <= 0) {
       const int nchecks = 0;
@@ -917,10 +924,10 @@ public:
           if(m==board::nullmove)break;
           make_move(m);
           ++R;
+          pline.premove(m);
           if(is_draw_repetition() || is_draw_halfmoves()) {
             break;
           }
-          pline.premove(m);
           _alpha=-_beta;
           _beta=-_alpha;
         }
@@ -1018,7 +1025,7 @@ public:
     for(size_t move_index = 0; move_index < moves.size(); ++move_index) {
       const auto [m_val, m] = moves[move_index];
       // searchmoves filtering (UCI)
-      if(ab_state.initdepth == depth && !ab_state.searchmoves.empty() && ab_state.searchmoves.find(m) == ab_state.searchmoves.end()) {
+      if(ab_state.initdepth == depth && !ab_state.searchmoves.empty() && !ab_state.searchmoves.contains(m)) {
         continue;
       }
       MoveLine pline_alt = pline.branch_from_past(m);
@@ -1190,14 +1197,7 @@ public:
         const int32_t new_eval = alpha_beta_pv(aw_alpha, aw_beta, d, new_pline, ab_state, true, false,
           [&](int16_t _depth, int32_t _eval) mutable -> bool {
             const move_t _m = new_pline.front();
-            bool verbose = false;
-            if(!inner_break && _depth == d && final_window && idstate.eval < _eval && _m != board::nullmove) {
-              idstate.eval=_eval, idstate.pline=new_pline, idstate.curdepth=d;
-              verbose = true;
-              str::pdebug("IDDFS:", d, "pline:", idstate.pline.pgn(self), "size:", idstate.pline.size(), "eval", score_float(idstate.eval));
-              debug.check_score(d, idstate.eval, idstate.pline);
-            }
-            should_stop = !callback_f(verbose);
+            should_stop = !callback_f(false);
             if(should_stop && d != _depth) {
               inner_break = true;
             }
@@ -1209,7 +1209,7 @@ public:
         } else if(new_eval >= aw_beta) {
           ++aw_index_beta;
         } else {
-          if(!should_stop || new_eval >= idstate.eval) {
+          if(!should_stop) {
             idstate.eval=new_eval, idstate.pline=new_pline, idstate.curdepth=d;
             should_stop = !callback_f(true);
           }

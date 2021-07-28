@@ -228,7 +228,7 @@ struct UCI {
 
   void process_cmd(std::vector<std::string> cmd) {
     str::pdebug("processing cmd", to_string(cmd));
-    while(cmdmap.find(cmd.front()) == std::end(cmdmap)) {
+    while(!cmdmap.contains(cmd.front())) {
       str::perror("error: unknown command", cmd.front());
       cmd.erase(cmd.begin());
       if(cmd.empty()) {
@@ -281,7 +281,7 @@ struct UCI {
           }
         }
         if(optname.has_value() && optvalue.has_value()) {
-          if(boolOptions.find(optname.value()) != boolOptions.end()) {
+          if(boolOptions.contains(optname.value())) {
             bool val = boolOptions.at(optname.value());
             if(optvalue.value() == "true"s) {
               val = true;
@@ -295,12 +295,12 @@ struct UCI {
             if(optname.value() == "UCI_Chess960"s) {
               engine_options.chess960 = val;
             }
-          } else if(spinOptions.find(optname.value()) != spinOptions.end()) {
+          } else if(spinOptions.contains(optname.value())) {
             auto &[_lo, _hi, val] = spinOptions.at(optname.value());
             int v = atoi(optvalue.value().c_str());
             val = std::min(_hi, std::max(_lo, v));
             str::pdebug("set option", optname.value(), val);
-          } else if(comboOptions.find(optname.value()) != comboOptions.end()) {
+          } else if(comboOptions.contains(optname.value())) {
             auto &[_vals, val] = comboOptions.at(optname.value());
             if(std::find(_vals.begin(), _vals.end(), optvalue.value()) == std::end(_vals)) {
               str::perror("error: unknown optvalue", optvalue.value(), "for option", optname.value());

@@ -14,7 +14,6 @@ struct DebugTracer {
   static constexpr bool show_pv = true;
   static constexpr bool show_q = true;
   static constexpr bool show_mem = true;
-  static constexpr bool show_everything = show_pv && false;
   static constexpr bool change_line_to_info = false;
   static constexpr bool exact_line = true;
   MoveLine debug_moveline = MoveLine(std::vector<move_t>{
@@ -90,7 +89,7 @@ struct DebugTracer {
   }
 
   bool filter_moveline(int16_t depth, const MoveLine &pline_alt) const {
-    if(show_everything || engine.state.info == debug_board_info) {
+    if(engine.state.info == debug_board_info) {
       return true;
     }
     return (
