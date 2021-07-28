@@ -136,7 +136,7 @@ struct DebugTracer {
     pline_alt.replace_line(zb.subpline);
     if(filter_moveline(depth, pline_alt) && show_mem) {
       _printf("%s depth=%d, %s (%.5f, %.5f) %s -- %s (score=%.5f)\n",
-          tab(depth).c_str(), depth, pgn::_move_str(engine, zb.m).c_str(),
+          tab(depth).c_str(), depth, pgn::_move_str(engine, zb.m_hint.front()).c_str(),
           EngineT::score_float(alpha), EngineT::score_float(beta),
           _line_str_full(pline_alt).c_str(), actinfo_mem(alpha, beta, zb).c_str(),
           EngineT::score_float(zb.score));

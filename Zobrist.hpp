@@ -15,7 +15,7 @@
 
 
 #ifndef ZOBRIST_SIZE
-#define ZOBRIST_SIZE (1ULL << 18)
+#define ZOBRIST_SIZE (1ULL << 19)
 #endif
 
 namespace zobrist {

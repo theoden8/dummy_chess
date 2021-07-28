@@ -123,6 +123,11 @@ struct MoveLine {
     assert(full().size() == start + other.size());
   }
 
+  INLINE void draft(move_t m) {
+    premove(m);
+    recall();
+  }
+
   template <size_t N>
   INLINE void draft_line(const std::array<move_t, N> &m_hint) {
     size_t sz = 0;
@@ -201,7 +206,7 @@ struct MoveLine {
   }
 
   INLINE MoveLine branch_from_past(move_t m=board::nullmove) const {
-    if(front() == m) {
+    if(front() == m && m != board::nullmove) {
       return *this;
     }
     MoveLine mline = get_past();

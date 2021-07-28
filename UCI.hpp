@@ -48,7 +48,7 @@ struct UCI {
     lock_guard guard(engine_mtx);
     destroy();
     _printf("init\n");
-    const size_t zobrist_size = (engine_options.hash_mb << (20 - 8));
+    const size_t zobrist_size = (engine_options.hash_mb << (20 - 7));
     engine = new Engine(f, zobrist_size);
     engine_ab_storage = new typename Engine::ab_storage_t(engine->get_zobrist_alphabeta_scope());
   }
