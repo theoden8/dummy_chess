@@ -4,9 +4,8 @@
 #include <cctype>
 #include <strings.h>
 
-#include <Bitboard.hpp>
-#include <Piece.hpp>
 #include <String.hpp>
+#include <Piece.hpp>
 
 
 class Board;

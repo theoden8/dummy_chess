@@ -1,7 +1,7 @@
 #pragma once
 
 
-#include <Bitboard.hpp>
+#include <Piece.hpp>
 #include <MoveLine.hpp>
 
 

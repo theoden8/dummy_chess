@@ -10,7 +10,6 @@
 #include <vector>
 
 #include <Optimizations.hpp>
-#include <Bitboard.hpp>
 #include <Piece.hpp>
 
 

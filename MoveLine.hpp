@@ -5,7 +5,7 @@
 
 #include <Optimizations.hpp>
 #include <Bitmask.hpp>
-#include <Bitboard.hpp>
+#include <Piece.hpp>
 
 
 class Board;
