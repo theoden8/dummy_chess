@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <valarray>
 #include <map>
+#include <optional>
 
 #include <FEN.hpp>
 #include <PGN.hpp>
