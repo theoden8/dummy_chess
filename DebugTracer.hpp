@@ -10,6 +10,9 @@ struct DebugTracer {
   using board_info = typename EngineT::board_info;
   using tt_ab_entry = typename EngineT::tt_ab_entry;
 
+  using score_t = typename EngineT::score_t;
+  using depth_t = typename EngineT::depth_t;
+
   EngineT &engine;
   static constexpr bool show_pv = true;
   static constexpr bool show_q = true;
@@ -18,9 +21,9 @@ struct DebugTracer {
   static constexpr bool exact_line = true;
   MoveLine debug_moveline = MoveLine(std::vector<move_t>{
   });
-  static constexpr int16_t show_maxdepth = 0;
+  static constexpr depth_t show_maxdepth = 0;
   board_info debug_board_info;
-  int16_t debug_depth = 0;
+  depth_t debug_depth = 0;
 
   DebugTracer(EngineT &engine):
     engine(engine)
@@ -32,15 +35,15 @@ struct DebugTracer {
     }
   }
 
-  void set_depth(int16_t depth) {
+  void set_depth(depth_t depth) {
     debug_depth = depth;
   }
 
-  std::string tab(int16_t depth) const {
+  std::string tab(depth_t depth) const {
     return std::string(debug_depth - depth, ' ');
   }
 
-  std::string actinfo(int32_t alpha, int32_t beta, int32_t bestscore, int32_t score) const {
+  std::string actinfo(score_t alpha, score_t beta, score_t bestscore, score_t score) const {
     if(score >= beta) {
       return "beta-cutoff"s;
     } else if(score > bestscore) {
@@ -49,7 +52,7 @@ struct DebugTracer {
     return "ignored"s;
   }
 
-  std::string actinfo_mem(int32_t alpha, int32_t beta, const tt_ab_entry &zb) const {
+  std::string actinfo_mem(score_t alpha, score_t beta, const tt_ab_entry &zb) const {
     if(zb.ndtype == EngineT::TT_CUTOFF) {
       return "tt_cutoff"s;
     } else if(zb.ndtype == EngineT::TT_ALLNODE) {
@@ -58,7 +61,7 @@ struct DebugTracer {
     return "tt_exact"s;
   }
 
-  std::string actinfo_standpat(int32_t alpha, int32_t beta, int32_t score, int nchecks) const {
+  std::string actinfo_standpat(score_t alpha, score_t beta, score_t score, int nchecks) const {
     if(score >= beta) {
       return "q-beta-cutoff"s;
     } else if(nchecks < 0) {
@@ -76,7 +79,7 @@ struct DebugTracer {
     return mline.pgn_full(engine);
   }
 
-  void update_line(int16_t depth, int32_t alpha, int32_t beta, const MoveLine &pline) {
+  void update_line(depth_t depth, score_t alpha, score_t beta, const MoveLine &pline) {
     #ifndef NDEBUG
     if(!exact_line && change_line_to_info && !debug_moveline.empty() && engine.state.info == debug_board_info && !pline.startswith(debug_moveline)) {
       _printf("%s depth=%d <changed moveline> %s (%.5f, %.5f) from %s\n",
@@ -88,7 +91,7 @@ struct DebugTracer {
     #endif
   }
 
-  bool filter_moveline(int16_t depth, const MoveLine &pline_alt) const {
+  bool filter_moveline(depth_t depth, const MoveLine &pline_alt) const {
     if(engine.state.info == debug_board_info) {
       return true;
     }
@@ -98,7 +101,7 @@ struct DebugTracer {
     ) && (debug_depth < depth + show_maxdepth);
   }
 
-  void update_standpat(int16_t depth, int32_t alpha, int32_t beta, int32_t score, const MoveLine &pline, int nchecks) {
+  void update_standpat(depth_t depth, score_t alpha, score_t beta, score_t score, const MoveLine &pline, int nchecks) {
     #ifndef NDEBUG
     if(filter_moveline(depth, pline) && show_q) {
       const char ast = (pline.get_past().startswith(debug_moveline)) ? ' ' : '*';
@@ -112,7 +115,7 @@ struct DebugTracer {
     #endif
   }
 
-  void update_q(int16_t depth, int32_t alpha, int32_t beta, int32_t bestscore, int32_t score, move_t m,
+  void update_q(depth_t depth, score_t alpha, score_t beta, score_t bestscore, score_t score, move_t m,
               const MoveLine &pline, const MoveLine &pline_alt, std::string extra_inf=""s)
   {
     #ifndef NDEBUG
@@ -129,7 +132,7 @@ struct DebugTracer {
     #endif
   }
 
-  void update_mem(int16_t depth, int32_t alpha, int32_t beta, const tt_ab_entry &zb, const MoveLine &pline) {
+  void update_mem(depth_t depth, score_t alpha, score_t beta, const tt_ab_entry &zb, const MoveLine &pline) {
     #ifndef NDEBUG
     MoveLine pline_alt = pline.get_past().as_past();
     pline_alt.replace_line(zb.subpline);
@@ -145,7 +148,7 @@ struct DebugTracer {
     #endif
   }
 
-  void log_pv(int16_t depth, const MoveLine &pline, const std::string &message) {
+  void log_pv(depth_t depth, const MoveLine &pline, const std::string &message) {
     #ifndef NDEBUG
     if(filter_moveline(depth, pline) && show_pv) {
       _printf("%s depth=%d, %s\n", tab(depth).c_str(), depth, message.c_str());
@@ -153,7 +156,7 @@ struct DebugTracer {
     #endif
   }
 
-  void update_pv(int16_t depth, int32_t alpha, int32_t beta, int32_t bestscore, int32_t score, move_t m,
+  void update_pv(depth_t depth, score_t alpha, score_t beta, score_t bestscore, score_t score, move_t m,
               const MoveLine &pline, const MoveLine &pline_alt, const std::string &extra_inf=""s)
   {
     #ifndef NDEBUG
@@ -171,10 +174,10 @@ struct DebugTracer {
     #endif
   }
 
-  void check_score(int16_t depth, int32_t score, const MoveLine &pline) const {
+  void check_score(depth_t depth, score_t score, const MoveLine &pline) const {
     #ifndef NDEBUG
-    const int32_t adraw = std::abs(0);
-    const int32_t pvscore = engine.get_pvline_score(pline);
+    const score_t adraw = std::abs(0);
+    const score_t pvscore = engine.get_pvline_score(pline);
     if(!engine.check_pvline_score(pline, score) && std::abs(score) != adraw && std::abs(pvscore) != adraw) {
       _printf("%s pvline %s\n", tab(depth).c_str(), pline.pgn_full(engine).c_str());
       _printf("%s score %.5f (%d)\n", tab(depth).c_str(), EngineT::score_float(score), score);
@@ -185,7 +188,7 @@ struct DebugTracer {
     #endif
   }
 
-  void check_length(int16_t depth, const MoveLine &pline) const {
+  void check_length(depth_t depth, const MoveLine &pline) const {
     assert(pline.size() >= size_t(depth) || engine.check_line_terminates(pline));
   }
 };

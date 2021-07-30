@@ -24,6 +24,9 @@ struct UCI {
   typename Engine::ab_storage_t *engine_ab_storage = nullptr;
   Engine::iddfs_state engine_idstate;
 
+  using score_t = typename Engine::score_t;
+  using depth_t = typename Engine::depth_t;
+
   std::atomic<bool> debug_mode = false;
   std::atomic<bool> should_quit = false;
   std::atomic<bool> should_stop = false;
@@ -187,7 +190,7 @@ struct UCI {
     double winc = 0;
     double binc = 0;
     int movestogo = 0;
-    int16_t depth = INT16_MAX;
+    depth_t depth = INT16_MAX;
     size_t nodes = SIZE_MAX;
     size_t mate = SIZE_MAX;
     double movetime = DBL_MAX;
@@ -195,7 +198,7 @@ struct UCI {
   } go_command;
 
   typedef struct _go_perft_command {
-    int16_t depth;
+    depth_t depth;
   } go_perft_command;
 
   void join_engine_thread() {
@@ -387,7 +390,7 @@ struct UCI {
             return;
           }
           go_perft_command g = (go_perft_command){
-            .depth = int16_t(atoi(cmd[ind].c_str()))
+            .depth = depth_t(atoi(cmd[ind].c_str()))
           };
           job_started = true;
           engine_thread = std::thread([&](auto g) mutable -> void {
@@ -478,7 +481,7 @@ struct UCI {
     );
   }
 
-  std::string get_score_type_string(int32_t score) const {
+  std::string get_score_type_string(score_t score) const {
     std::string s = ""s;
     if(!engine->score_is_mate(score)) {
       s += "cp"s;
@@ -489,7 +492,7 @@ struct UCI {
     if(!engine->score_is_mate(score)) {
       s += std::to_string(score / Engine::CENTIPAWN);
     } else {
-      int16_t mate_in_ply = engine->score_mate_in(score);
+      depth_t mate_in_ply = engine->score_mate_in(score);
       mate_in_ply -= (mate_in_ply < 0) ? 1 : -1;
       s += std::to_string(mate_in_ply / 2);
     }
@@ -603,7 +606,7 @@ struct UCI {
 
   void perform_go_perft(go_perft_command args) {
     lock_guard guard(engine_mtx);
-    const int16_t depth = args.depth;
+    const depth_t depth = args.depth;
     size_t total = 0;
     {
       decltype(auto) store_scope = engine->get_zobrist_perft_scope();

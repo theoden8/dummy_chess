@@ -14,9 +14,16 @@
 class Engine : public Board {
 public:
   static constexpr bool ENABLE_TT = true;
-  static constexpr bool ENABLE_TT_RETURN = ENABLE_TT && true;
+  static constexpr bool ENABLE_TT_RETURN = true && ENABLE_TT;
   static constexpr bool ENABLE_SELECTIVITY = true;
+  static constexpr bool ENABLE_SEL_BIGDELTA = true && ENABLE_SELECTIVITY,
+                        ENABLE_SEL_DELTA = true && ENABLE_SELECTIVITY,
+                        ENABLE_SEL_NMR = true && ENABLE_SELECTIVITY,
+                        ENABLE_SEL_LMR = false && ENABLE_SELECTIVITY;
   static constexpr bool ENABLE_IID = false;
+
+  using score_t = int32_t;
+  using depth_t = int16_t;
 
   static constexpr std::array<pos_t, 4> PROMOTION_PIECES = {
     board::PROMOTE_KNIGHT, board::PROMOTE_BISHOP,
@@ -70,7 +77,7 @@ public:
 
   INLINE size_t count_moves(COLOR c) const {
     assert(c < NO_COLORS);
-    int16_t no_moves = 0;
+    uint16_t no_moves = 0;
     bitmask::foreach(bits[c], [&](pos_t i) mutable -> void {
       pos_t moves_from = bitmask::count_bits(state.moves[i]);
       if(piece::is_set(bits_pawns, i) && (board::_y(i) == 2-1 || board::_y(i) == 7-1)
@@ -119,7 +126,7 @@ public:
     return moves[rand() % moves.size()];
   }
 
-  static constexpr int32_t CENTIPAWN = 256,
+  static constexpr score_t CENTIPAWN = 256,
                            MATERIAL_PAWN = 100*CENTIPAWN,
                            MATERIAL_KNIGHT = 325*CENTIPAWN,
                            MATERIAL_BISHOP = 325*CENTIPAWN,
@@ -128,15 +135,15 @@ public:
                            MATERIAL_KING = 1000*MATERIAL_PAWN;
   std::vector<PIECE> MATERIAL_PIECE_ORDERING;
 
-  static constexpr int32_t MATERIALS[] = {
+  static constexpr score_t MATERIALS[] = {
     MATERIAL_PAWN, MATERIAL_KNIGHT, MATERIAL_BISHOP,
     MATERIAL_ROOK, MATERIAL_QUEEN, MATERIAL_KING, 0};
-  INLINE constexpr int32_t material_of(PIECE p) const {
+  INLINE constexpr score_t material_of(PIECE p) const {
     return MATERIALS[int(p)];
   }
 
-  INLINE int32_t count_material(piece_bitboard_t mask) const {
-    int32_t m = 0;
+  INLINE score_t count_material(piece_bitboard_t mask) const {
+    score_t m = 0;
     m += piece::size(mask & bits_pawns) * material_of(PAWN);
     m += piece::size(mask & bits_slid_diag & ~bits_slid_orth) * material_of(BISHOP);
     m += piece::size(mask & ~bits_slid_diag & bits_slid_orth) * material_of(ROOK);
@@ -160,8 +167,8 @@ public:
     hstate_hist.pop_back();
   }
 
-  INLINE int32_t h_material(COLOR c) const {
-    int32_t h = count_material(bits[c]);
+  INLINE score_t h_material(COLOR c) const {
+    score_t h = count_material(bits[c]);
     const piece_bitboard_t bishops = bits[c] & bits_slid_diag & ~bits_slid_orth;
     // bishop pair
     if((bishops & bitmask::wcheckers) && (bishops & bitmask::bcheckers)) {
@@ -184,11 +191,11 @@ public:
     return h;
   }
 
-  INLINE int32_t h_attack_cells(COLOR c) const {
+  INLINE score_t h_attack_cells(COLOR c) const {
     const piece_bitboard_t occupied = bits[WHITE] | bits[BLACK];
-    int32_t h = 0;
+    score_t h = 0;
 
-    decltype(auto) h_add = [&](pos_t i, int32_t mat) mutable -> void {
+    decltype(auto) h_add = [&](pos_t i, score_t mat) mutable -> void {
       auto a = state.attacks[i];
       h += (piece::size(a & occupied) + piece::size(a)) * MATERIAL_PAWN / mat;
     };
@@ -211,16 +218,16 @@ public:
     return h;
   }
 
-  INLINE int32_t h_mobility(COLOR c) const {
-    int32_t h = 0;
+  INLINE score_t h_mobility(COLOR c) const {
+    score_t h = 0;
     bitmask::foreach(bits[c] & ~bits_pawns, [&](pos_t i) mutable -> void {
       h += std::sqrt(piece::size(state.moves[i]));
     });
     return h;
   }
 
-  INLINE int32_t h_pawn_structure(COLOR c) const {
-    int32_t h = 0;
+  INLINE score_t h_pawn_structure(COLOR c) const {
+    score_t h = 0;
     // zero/doubled/tripple pawns
     for(pos_t f = 0; f < board::LEN; ++f) {
       const piece_bitboard_t pawns_file = piece::file_mask(f) & bits_pawns & bits[c];
@@ -237,7 +244,7 @@ public:
       const pos_t pawnr = (c == WHITE) ? board::_y(bitmask::log2(pawns_file))
                                        : board::_y(bitmask::log2_msb(pawns_file));
       piece_bitboard_t adjacent_files = piece::file_mask(f);
-      int32_t sidepawn_decay = 1;
+      score_t sidepawn_decay = 1;
       if(f != A)adjacent_files |= piece::file_mask(f - 1);
       if(f != H)adjacent_files |= piece::file_mask(f + 1);
       if(f == A || f == H) {
@@ -254,7 +261,7 @@ public:
                                                   : adjacent_files >> (board::LEN * (8-pawnr));
       assert(~ahead & furthest_pawn);
       if((ahead & bits_pawns & ~bits[c]))continue;
-      const int32_t pawnr_abs = ((c == WHITE) ? pawnr : 7 - pawnr);
+      const score_t pawnr_abs = ((c == WHITE) ? pawnr : 7 - pawnr);
       h += (CENTIPAWN / 10) * pawnr_abs * pawnr_abs / sidepawn_decay;
     }
     // pawn strucure coverage
@@ -262,8 +269,8 @@ public:
     return h;
   }
 
-  INLINE int32_t heuristic_of(COLOR c) const {
-    int32_t h = 0;
+  INLINE score_t heuristic_of(COLOR c) const {
+    score_t h = 0;
     h += h_material(c);
     h += h_pawn_structure(c);
 //    h -= count_material(state.pins[c]);
@@ -272,7 +279,7 @@ public:
     return h;
   }
 
-  INLINE int32_t evaluate() const {
+  INLINE score_t evaluate() const {
     if(self.is_draw()){
       return 0;
     } else if(self.is_checkmate()) {
@@ -347,7 +354,7 @@ public:
     if(is_drop_move(i, _j)) {
       ;
     } else if(is_castling_move(i, _j)) {
-      val += .5;
+      ;
     } else if(is_naively_capture_move(i, _j)) {
       const float mat_to = float(material_of(self[_j].value)) / MATERIAL_PAWN;
       val += mat_to;
@@ -363,10 +370,10 @@ public:
     return val;
   }
 
-  INLINE float move_heuristic_pv(move_t m, const MoveLine &pline, move_t hashmove=board::nullmove) const {
-    if(pline.is_mainline() && m == pline.front_in_mainline()) {
+  INLINE float move_heuristic_pv(move_t m, const MoveLine &pline, move_t hashmove=board::nullmove, move_t threatmove=board::nullmove) const {
+    if(pline.is_mainline() && m == pline.front()) {
       return 2000.;
-    } else if(m == hashmove || pline.front() == m) {
+    } else if(m == hashmove || m == threatmove || pline.front() == m) {
       return 1000.;
     }
     return .0;
@@ -394,7 +401,7 @@ public:
     return NO_INDEX;
   }
 
-  INLINE float move_heuristic_cmt(move_t m, const MoveLine &pline, const std::vector<double> &cmh_table) const {
+  INLINE float move_heuristic_cmt(move_t m, const MoveLine &pline, const std::vector<float> &cmh_table) const {
     const size_t cmt_index = get_cmt_index(pline, m);
     if(cmt_index != SIZE_MAX) {
       return cmh_table[cmt_index];
@@ -402,41 +409,41 @@ public:
     return .0;
   }
 
-  static INLINE float score_float(int32_t score) {
+  static INLINE float score_float(score_t score) {
     return float(score)  / MATERIAL_PAWN;
   }
 
-  static INLINE bool score_is_mate(int32_t score) {
+  static INLINE bool score_is_mate(score_t score) {
     return std::abs(score) > MATERIAL_KING - 2000;
   }
 
-  static INLINE int32_t score_decay(int32_t score) {
+  static INLINE score_t score_decay(score_t score) {
     if(score_is_mate(score)) {
       score -= score / std::abs(score);
     }
     return score;
   }
 
-  static INLINE int16_t score_mate_in(int32_t score) {
+  static INLINE depth_t score_mate_in(score_t score) {
     assert(score_is_mate(score));
     const int mate_in = int(MATERIAL_KING - std::abs(score));
     return (score < 0) ? -mate_in : mate_in;
   }
 
-  INLINE int32_t get_pvline_score(const MoveLine &pline) {
+  INLINE score_t get_pvline_score(const MoveLine &pline) {
     assert(check_valid_sequence(pline));
     auto rec = self.recursive_move_scope();
     for(const move_t &m : pline) {
       rec.scope(m);
     }
-    int32_t pvscore = evaluate();
+    score_t pvscore = evaluate();
     for(size_t i = 0; i < pline.size(); ++i) {
       pvscore = -score_decay(pvscore);
     }
     return pvscore;
   }
 
-  INLINE bool check_pvline_score(const MoveLine &pline, int32_t score) {
+  INLINE bool check_pvline_score(const MoveLine &pline, score_t score) {
     return score == get_pvline_score(pline);
   }
 
@@ -461,12 +468,12 @@ public:
     return std::make_pair(UINT64_C(0), EMPTY);
   }
 
-  int32_t static_exchange_evaluation(pos_t i, pos_t j) const {
+  score_t static_exchange_evaluation(pos_t i, pos_t j) const {
     assert(j <= board::MOVEMASK);
 //    str::pdebug("move", pgn::_move_str(self, bitmask::_pos_pair(i, j)));
 //    str::pdebug(fen::export_as_string(export_as_fen()));
-    std::array<int32_t, 37> gain;
-    int16_t depth = 0;
+    std::array<score_t, 37> gain;
+    uint8_t depth = 0;
     const piece_bitboard_t may_xray = bits_slid_diag | bits_slid_orth | bits_pawns;
     piece_bitboard_t from_set = piece::pos_mask(i);
     piece_bitboard_t occupied = bits[WHITE] | bits[BLACK];
@@ -501,11 +508,11 @@ public:
       const COLOR c = self.color_at_pos((depth & 1) ? j : i);
       std::tie(from_set, curpiece) = get_least_valuable_piece(attadef & bits[c]);
     } while(from_set);
-//    int16_t maxdepth = depth;
+//    uint8_t maxdepth = depth;
     while(--depth) {
       gain[depth-1] = -std::max(-gain[depth-1], gain[depth]);
     }
-//    for(int16_t i = 0; i < maxdepth; ++i) {
+//    for(uint8_t i = 0; i < maxdepth; ++i) {
 //      str::pdebug("gain[", i, "] = ", gain[i]);
 //    }
     return gain[0];
@@ -513,16 +520,16 @@ public:
 
   struct tt_eval_entry {
     board_info info;
-    int32_t eval;
+    score_t eval;
   };
 
-  INLINE int32_t e_ttable_probe(zobrist::ttable<tt_eval_entry> &e_ttable) {
+  INLINE score_t e_ttable_probe(zobrist::ttable<tt_eval_entry> &e_ttable) {
     return evaluate();
 //    const zobrist::key_t k = zb_hash();
 //    if(e_ttable[k].info == state.info) {
 //      return e_ttable[k].eval;
 //    }
-//    const int32_t eval = evaluate();
+//    const score_t eval = evaluate();
 //    const bool overwrite = true;
 //    if(overwrite) {
 //      e_ttable[k] = { .info=state.info, .eval=eval };
@@ -533,8 +540,8 @@ public:
   typedef enum { TT_EXACT, TT_ALLNODE, TT_CUTOFF } TT_NODE_TYPE;
   struct tt_ab_entry {
     board_info info;
-    int16_t depth;
-    int32_t score;
+    depth_t depth;
+    score_t score;
   #ifndef NDEBUG
     std::array<move_t, 3> m_hint;
   #else
@@ -546,11 +553,11 @@ public:
     MoveLine subpline;
   #endif
 
-    INLINE bool can_apply(const board_info &_info, int16_t _depth, ply_index_t _age) const {
+    INLINE bool can_apply(const board_info &_info, depth_t _depth, ply_index_t _age) const {
       return !is_inactive(_age) && depth >= _depth && info == _info;
     }
 
-    INLINE bool can_use_move(const board_info &_info, int16_t _depth, ply_index_t _age) const {
+    INLINE bool can_use_move(const board_info &_info, depth_t _depth, ply_index_t _age) const {
       if(is_inactive(_age))return false;
       if(depth <= 0) {
         return info == _info;
@@ -559,7 +566,7 @@ public:
         && info == _info;
     }
 
-    INLINE bool should_replace(int16_t _depth, TT_NODE_TYPE _ndtype, int16_t _age) {
+    INLINE bool should_replace(depth_t _depth, TT_NODE_TYPE _ndtype, int16_t _age) const {
       if(is_inactive(_age))return true;
       switch(_ndtype) {
         case TT_CUTOFF: return _depth >= depth && ndtype != TT_EXACT;
@@ -574,7 +581,7 @@ public:
       return info.is_unset() || cur_age != age;
     }
 
-    INLINE void write(board_info &_info, int32_t _score, int16_t _depth, ply_index_t _age, TT_NODE_TYPE _ndtype, const MoveLine &pline) {
+    INLINE void write(board_info &_info, score_t _score, depth_t _depth, ply_index_t _age, TT_NODE_TYPE _ndtype, const MoveLine &pline) {
       info=_info, depth=_depth, score=_score, age=_age, ndtype=_ndtype;
       for(size_t i = 0; i < m_hint.size(); ++i) {
         m_hint[i] = (pline.size() > i) ? pline[i] : board::nullmove;
@@ -585,15 +592,105 @@ public:
     }
   };
 
-  INLINE decltype(auto) ab_ttable_probe(int16_t depth, const zobrist::ttable<tt_ab_entry> &ab_ttable) {
+  struct alpha_beta_state {
+    zobrist::ttable<tt_ab_entry> &ab_ttable;
+    zobrist::ttable<tt_eval_entry> &e_ttable;
+    std::vector<float> &cmh_table;
+    const depth_t initdepth;
+    const std::unordered_set<move_t> &searchmoves;
+
+    void normalize_cmh_table(size_t cmt_index) {
+      if(cmh_table[cmt_index] > .5) {
+        const float mx = *std::max_element(cmh_table.begin(), cmh_table.end());
+        str::pdebug("renormalizing countermove table");
+        for(auto &cm : cmh_table) {
+          cm /= (mx * 1e7);
+        }
+      }
+    }
+  };
+
+  INLINE decltype(auto) make_callback_f() {
+    return [&](...) -> bool { return true; };
+  }
+
+  decltype(auto) ab_ttable_probe(score_t &alpha, score_t &beta, depth_t depth, move_t &hashmove, MoveLine &pline,
+                                  alpha_beta_state &ab_state, bool allow_nullmoves, int8_t nchecks=0)
+  {
     const zobrist::key_t k = zb_hash();
-    const bool tt_has_entry = ab_ttable[k].can_apply(state.info, depth, tt_age);
+    const bool tt_has_entry = ab_state.ab_ttable[k].can_apply(state.info, depth, tt_age);
     if(tt_has_entry) {
       ++zb_hit;
     } else {
       ++zb_miss;
     }
-    return std::make_tuple(tt_has_entry, k);
+
+    auto &zb = ab_state.ab_ttable[k];
+    debug.update_line(depth, alpha, beta, pline);
+    std::optional<score_t> maybe_result;
+    if(tt_has_entry) {
+      debug.update_mem(depth, alpha, beta, zb, pline);
+      if(zb.ndtype == TT_EXACT || (zb.score < alpha && zb.ndtype == TT_ALLNODE) || (zb.score >= beta && zb.ndtype == TT_CUTOFF)) {
+        if(ENABLE_TT_RETURN && zb.m_hint[zb.m_hint.size() - 1] == board::nullmove) {
+          ++nodes_searched;
+          pline.clear();
+          pline.draft_line(zb.m_hint);
+          maybe_result.emplace(zb.score);
+          return std::make_pair(k, maybe_result);
+        }
+//        pline.draft_line(zb.m_hint);
+        depth_t R = 0;
+        for(auto m : zb.m_hint) {
+          if(m==board::nullmove)break;
+          make_move(m);
+          ++R;
+          pline.premove(m);
+          if(is_draw_repetition() || is_draw_halfmoves()) {
+            break;
+          }
+          assert(check_valid_sequence(pline));
+        }
+        const bool can_return_score = (zb.depth - R < depth || get_halfmoves() < R) && (state.info != zb.info);
+        score_t score = 0;
+        if(can_return_score) {
+          score_t _alpha=alpha, _beta=beta;
+          if(R & 1)_alpha=-beta,_beta=-alpha;
+          depth_t subdepth = zb.depth - R;
+          if(subdepth >= 0) {
+            score = alpha_beta_pv(_alpha,_beta,subdepth,pline,ab_state,allow_nullmoves,make_callback_f());
+          } else {
+            score = alpha_beta_quiescence(_alpha,_beta,subdepth,pline,ab_state,nchecks);
+          }
+          assert(check_valid_sequence(pline));
+        }
+        for(depth_t i = 0; i < R; ++i) {
+          pline.recall();
+          retract_move();
+          if(can_return_score) {
+            score = -score_decay(score);
+          }
+          assert(check_valid_sequence(pline));
+        }
+        if(can_return_score) {
+          debug.check_score(zb.depth, score, pline);
+          maybe_result.emplace(score);
+          return std::make_pair(k, maybe_result);
+        }
+      } else if(alpha < zb.score && zb.score < beta) {
+        if(zb.ndtype == TT_CUTOFF) {
+          alpha = zb.score;
+        } else if(zb.ndtype == TT_ALLNODE) {
+          beta = zb.score;
+        } else {
+          str::perror("error: unknown node type");
+          abort();
+        }
+      }
+      hashmove = zb.m_hint.front();
+    } else if(zb.can_use_move(state.info, depth, tt_age)) {
+      hashmove = zb.m_hint.front();
+    }
+    return std::make_pair(k, maybe_result);
   }
 
   INLINE bool is_knight_fork_move(pos_t i, pos_t j) const {
@@ -631,7 +728,7 @@ public:
     return has_moves;
   }
 
-  decltype(auto) ab_get_quiesc_moves(int16_t depth, MoveLine &pline, const std::vector<double> &cmh_table, int8_t nchecks, bool king_in_check, move_t hashmove=board::nullmove) const
+  decltype(auto) ab_get_quiesc_moves(depth_t depth, MoveLine &pline, const std::vector<float> &cmh_table, int8_t nchecks, bool king_in_check, move_t hashmove=board::nullmove) const
   {
     std::vector<std::tuple<float, move_t, bool>> quiescmoves;
     quiescmoves.reserve(8);
@@ -660,14 +757,14 @@ public:
           if(val < -1e-9)return;
         }
       } else if((~pawn_attacks & piece::pos_mask(j)) && (is_knight_fork_move(i, j) || is_pawn_fork_move(i, j))) {
-        const int32_t see = static_exchange_evaluation(i, j);
+        const score_t see = static_exchange_evaluation(i, j);
         if(see < 0)return;
         val = .0;
       } else if((allow_checking && is_naively_checking_move(i, j))) {
-        const int32_t see = static_exchange_evaluation(i, j);
+        const score_t see = static_exchange_evaluation(i, j);
         if(see < 0)return;
         reduce_nchecks = (m != hashmove);
-        val = .5;
+        val += .1;
       } else {
         return;
       }
@@ -681,29 +778,8 @@ public:
     return quiescmoves;
   }
 
-  struct alpha_beta_state {
-    zobrist::ttable<tt_ab_entry> &ab_ttable;
-    zobrist::ttable<tt_eval_entry> &e_ttable;
-    std::vector<double> &cmh_table;
-    const int16_t initdepth;
-    const std::unordered_set<move_t> &searchmoves;
-
-    void normalize_cmh_table(size_t cmt_index) {
-      if(cmh_table[cmt_index] > .5) {
-        const double mx = *std::max_element(cmh_table.begin(), cmh_table.end());
-        str::pdebug("renormalizing countermove table");
-        for(auto &cm : cmh_table) {
-          cm /= (mx * 1e8);
-        }
-      }
-    }
-  };
-
-  INLINE decltype(auto) make_callback_f() {
-    return [&](...) -> bool { return true; };
-  }
-
-  int32_t alpha_beta_quiescence(int32_t alpha, int32_t beta, int16_t depth, MoveLine &pline, alpha_beta_state &ab_state, int8_t nchecks) {
+  score_t alpha_beta_quiescence(score_t alpha, score_t beta, depth_t depth, MoveLine &pline, alpha_beta_state &ab_state, int8_t nchecks) {
+    assert(alpha < beta);
     // check draw and checkmate
     if(is_draw()) {
       pline.clear();
@@ -715,8 +791,8 @@ public:
     assert(check_valid_move(pline.front()) || pline.front() == board::nullmove);
     assert(check_valid_sequence(pline));
 
-    int32_t score = -MATERIAL_KING;
-    int32_t bestscore = -MATERIAL_KING;
+    score_t score = -MATERIAL_KING;
+    score_t bestscore = -MATERIAL_KING;
     const COLOR c = activePlayer();
 
     // stand pat score
@@ -731,10 +807,10 @@ public:
       } else if(score > bestscore) {
         bestscore = score;
         // big delta pruning: the position is irrecoverable
-        const int32_t BIG_DELTA = MATERIAL_QUEEN + (has_promoting_pawns() ? MATERIAL_QUEEN - MATERIAL_PAWN : 0);
+        const score_t BIG_DELTA = MATERIAL_QUEEN + (has_promoting_pawns() ? MATERIAL_QUEEN - MATERIAL_PAWN : 0);
         if(score > alpha) {
           alpha = score;
-        } else if(ENABLE_SELECTIVITY && score < alpha - BIG_DELTA) {
+        } else if(ENABLE_SEL_BIGDELTA && score < alpha - BIG_DELTA) {
           pline.clear();
           return score;
         }
@@ -743,61 +819,13 @@ public:
 
     // ttable probe
     move_t hashmove = board::nullmove;
-    const auto [tt_has_entry, k] = ab_ttable_probe(depth, ab_state.ab_ttable);
-    debug.update_line(depth, alpha, beta, pline);
+    const auto [k, maybe_score] = ab_ttable_probe(alpha, beta, depth, hashmove, pline, ab_state, false, nchecks);
     auto &zb = ab_state.ab_ttable[k];
-    if(tt_has_entry) {
-      debug.update_mem(depth, alpha, beta, zb, pline);
-      if(zb.ndtype == TT_EXACT || (zb.score < alpha && zb.ndtype == TT_ALLNODE) || (zb.score >= beta && zb.ndtype == TT_CUTOFF)) {
-        if(ENABLE_TT_RETURN && zb.m_hint[zb.m_hint.size() - 1] == board::nullmove) {
-          pline.clear();
-          pline.draft_line(zb.m_hint);
-          return zb.score;
-        }
-//        pline.draft_line(zb.m_hint);
-        int32_t _alpha=alpha, _beta=beta;
-        int16_t R = 0;
-        for(auto m : zb.m_hint) {
-          if(m==board::nullmove)break;
-          make_move(m);
-          ++R;
-          pline.premove(m);
-          if(is_draw_repetition() || is_draw_halfmoves()) {
-            break;
-          }
-          _alpha=-_beta;
-          _beta=-_alpha;
-          assert(check_valid_sequence(pline));
-        }
-        int32_t score = alpha_beta_pv(_alpha,_beta,zb.depth-R,pline,ab_state,false,alpha+1==beta,make_callback_f());
-        assert(check_valid_sequence(pline));
-        for(int16_t i = 0; i < R; ++i) {
-          pline.recall();
-          retract_move();
-          score = -score_decay(score);
-          assert(check_valid_sequence(pline));
-        }
-        debug.check_score(zb.depth, score, pline);
-        return score;
-//        ++nodes_searched;
-//        pline.replace_line(zb.subpline);
-//        return zb.score;
-      } else if(alpha < zb.score && zb.score < beta) {
-        if(zb.ndtype == TT_CUTOFF) {
-          alpha = zb.score;
-        } else if(zb.ndtype == TT_ALLNODE) {
-          beta = zb.score;
-        } else {
-          str::perror("error: unknown node type");
-          abort();
-        }
-      }
-      hashmove = zb.m_hint.front();
-    } else if(zb.can_use_move(state.info, depth, tt_age)) {
-      hashmove = zb.m_hint.front();
+    if(maybe_score.has_value()) {
+      return maybe_score.value();
     }
 
-    constexpr bool overwrite = ENABLE_TT;
+    constexpr bool overwrite = true && ENABLE_TT;
 
     // filter out and order quiescent moves
     decltype(auto) quiescmoves = ab_get_quiesc_moves(depth, pline, ab_state.cmh_table, nchecks, king_in_check, hashmove);
@@ -818,8 +846,8 @@ public:
       const auto [m_val, m, reduce_nchecks] = quiescmoves[move_index];
       MoveLine pline_alt = pline.branch_from_past(m);
       // delta pruning: if a move won't come as close as 3 pawns to alpha, ignore
-      constexpr int32_t DELTA = 300 * CENTIPAWN;
-      const bool delta_prune_allowed = ENABLE_SELECTIVITY && !king_in_check && piece::size(bits[c] & ~bits_pawns) > 5;
+      constexpr score_t DELTA = 300 * CENTIPAWN;
+      const bool delta_prune_allowed = ENABLE_SEL_DELTA && !king_in_check && piece::size(bits[c] & ~bits_pawns) > 5;
       if(delta_prune_allowed && score + std::round(m_val * MATERIAL_PAWN) < alpha - DELTA) {
         continue;
       }
@@ -861,7 +889,7 @@ public:
     return bestscore;
   }
 
-  decltype(auto) ab_get_ordered_moves(const MoveLine &pline, move_t hashmove, const std::vector<double> &cmh_table) {
+  decltype(auto) ab_get_ordered_moves(const MoveLine &pline, move_t hashmove, move_t threatmove, const std::vector<float> &cmh_table) {
     std::vector<std::pair<float, move_t>> moves;
     moves.reserve(32);
     const COLOR c = activePlayer();
@@ -870,8 +898,8 @@ public:
     iter_moves([&](pos_t i, pos_t j) mutable -> void {
       const move_t m = bitmask::_pos_pair(i, j);
       float val = .0;
-      val += move_heuristic_pv(m, pline, hashmove);
-      if(val < 1000.) {
+      val += move_heuristic_pv(m, pline, hashmove, threatmove);
+      if(val < 999.) {
         val += move_heuristic_see(i, j, edefendmap);
         val += move_heuristic_cmt(m, pline, cmh_table);
       }
@@ -882,9 +910,11 @@ public:
   }
 
   template <typename F>
-  int32_t alpha_beta_pv(int32_t alpha, int32_t beta, int16_t depth, MoveLine &pline, alpha_beta_state &ab_state,
-                        bool allow_nullmoves, bool scoutsearch, F &&callback_f)
+  score_t alpha_beta_pv(score_t alpha, score_t beta, depth_t depth, MoveLine &pline, alpha_beta_state &ab_state,
+                        bool allow_nullmoves, F &&callback_f, move_t threatmove=board::nullmove)
   {
+    const bool scoutsearch = (alpha + 1 == beta);
+    assert(alpha < beta);
     // check draw and checkmate
     if(is_draw()) {
       pline.clear();
@@ -901,117 +931,70 @@ public:
       return alpha_beta_quiescence(alpha, beta, 0, pline, ab_state, nchecks);
     }
     // ttable probe
-    const auto [tt_has_entry, k] = ab_ttable_probe(depth, ab_state.ab_ttable);
-    debug.update_line(depth, alpha, beta, pline);
+    move_t hashmove = threatmove;
+    move_t _threatmove = board::nullmove;
+    const auto [k, maybe_score] = ab_ttable_probe(alpha, beta, depth, hashmove, pline, ab_state, allow_nullmoves, 0);
     auto &zb = ab_state.ab_ttable[k];
-    move_t hashmove = board::nullmove;
-    if(tt_has_entry) {
-      debug.update_mem(depth, alpha, beta, zb, pline);
-      #ifndef NDEBUG
-      debug.check_score(depth, zb.score, zb.subpline);
-      #endif
-      if(zb.ndtype == TT_EXACT || (zb.score < alpha && zb.ndtype == TT_ALLNODE) || (zb.score >= beta && zb.ndtype == TT_CUTOFF)) {
-        if(ENABLE_TT_RETURN && zb.m_hint[zb.m_hint.size() - 1] == board::nullmove) {
-          pline.clear();
-          pline.draft_line(zb.m_hint);
-          return zb.score;
-        }
-//        pline.draft_line(zb.m_hint);
-        int32_t _alpha=alpha, _beta=beta;
-        int16_t _depth=zb.depth;
-        int16_t R = 0;
-        for(auto m : zb.m_hint) {
-          if(m==board::nullmove)break;
-          make_move(m);
-          ++R;
-          pline.premove(m);
-          if(is_draw_repetition() || is_draw_halfmoves()) {
-            break;
-          }
-          _alpha=-_beta;
-          _beta=-_alpha;
-        }
-        int32_t score = alpha_beta_pv(_alpha,_beta,zb.depth-R,pline,ab_state,allow_nullmoves,scoutsearch,callback_f);
-        for(int16_t i = 0; i < R; ++i) {
-          pline.recall();
-          retract_move();
-          score = -score_decay(score);
-        }
-        debug.check_score(zb.depth, score, pline);
-        return score;
-//        ++nodes_searched;
-//        pline.replace_line(zb.subpline);
-//        return zb.score;
-      } else if(alpha < zb.score && zb.score < beta) {
-        if(zb.ndtype == TT_CUTOFF) {
-          alpha = zb.score;
-        } else if(zb.ndtype == TT_ALLNODE) {
-          beta = zb.score;
-        } else {
-          str::perror("error: unknown node type");
-          abort();
-        }
-      }
-      hashmove = zb.m_hint.front();
-    } else if(zb.can_use_move(state.info, depth, tt_age)) {
-      hashmove = zb.m_hint.front();
+    if(maybe_score.has_value()) {
+      return maybe_score.value();
     }
 
-    constexpr bool overwrite = ENABLE_TT;
+    constexpr bool overwrite = true && ENABLE_TT;
 
     // nullmove pruning
     const COLOR c = activePlayer();
-    const bool nullmove_allowed = ENABLE_SELECTIVITY && scoutsearch && allow_nullmoves && (state.checkline[c] == bitmask::full)
+    const bool nullmove_allowed = ENABLE_SEL_NMR && scoutsearch && allow_nullmoves && (state.checkline[c] == bitmask::full)
                                   && piece::size((bits_slid_diag | get_knight_bits() | bits_slid_orth) & bits[c]) > 0;
     if(nullmove_allowed) {
-      const int16_t R = (depth > 6) ? 4 : 3;
-      const int16_t DR = 4;
+      const depth_t R = (depth > 6) ? 4 : 3;
+      const depth_t DR = 4;
       MoveLine pline_alt = pline.branch_from_past();
-      int32_t score = 0;
+      score_t score = 0;
       {
         auto mscope = mline_scope(board::nullmove, pline_alt);
-        score = -score_decay(alpha_beta_pv(-beta-1, -beta, std::max(0, depth-R-1), pline_alt, ab_state, false, true, callback_f));
+        score = -score_decay(alpha_beta_pv(-beta-1, -beta, std::max(0, depth-R-1), pline_alt, ab_state, false, callback_f));
       }
       if(score >= beta) {
+        _threatmove = pline_alt.get_next_move();
+        {
+          pline_alt.premove(board::nullmove);
+          const move_t nextmove = pline_alt.front();
+          const size_t cmt_index = get_cmt_index(pline_alt, nextmove);
+          if(cmt_index != SIZE_MAX) {
+            assert(cmt_index < ab_state.cmh_table.size());
+            const depth_t cmh_depth = std::max(0, depth - R + 2);
+            ab_state.cmh_table[cmt_index] += (cmh_depth*cmh_depth) * 1e-7;
+            ab_state.normalize_cmh_table(cmt_index);
+          }
+          pline_alt.recall();
+        }
         depth -= DR;
         if(depth <= 0) {
           const int nchecks = 0;
           // TODO zug-zwang will fail low
           return alpha_beta_quiescence(beta-1, beta, 0, pline, ab_state, nchecks);
-        } else {
-          {
-            pline_alt.premove(board::nullmove);
-            const move_t nextmove = pline_alt.front();
-            const size_t cmt_index = get_cmt_index(pline_alt, nextmove);
-            if(cmt_index != SIZE_MAX) {
-              assert(cmt_index < ab_state.cmh_table.size());
-              ab_state.cmh_table[cmt_index] += ((depth + 2) * (depth + 2)) * 1e-8;
-              ab_state.normalize_cmh_table(cmt_index);
-            }
-            pline_alt.recall();
-          }
         }
       }
     }
 
     // move ordering: PV | hashmove | SEE | CMH
     // | means breaks ties
-    decltype(auto) moves = ab_get_ordered_moves(pline, hashmove, ab_state.cmh_table);
+    decltype(auto) moves = ab_get_ordered_moves(pline, hashmove, threatmove, ab_state.cmh_table);
     // this is nonempty - draw and checkmate checks are above
     assert(!moves.empty());
 
     // internal iterative deepening
-    const bool iid_allow = ENABLE_IID && !scoutsearch && moves.front().first < 999. && depth >= 5
-                            && e_ttable_probe(ab_state.e_ttable) >= beta - CENTIPAWN;
+    const bool iid_allow = ENABLE_IID && !scoutsearch && moves.front().first < 999. && depth >= 5;
     if(iid_allow) {
       MoveLine internal_pline = pline;
-      alpha_beta_pv(alpha, beta, depth - 2, internal_pline, ab_state, false, false, callback_f);
+      alpha_beta_pv(alpha, beta, depth / 2, internal_pline, ab_state, true, callback_f);
       const move_t m = internal_pline.front();
       for(size_t move_index = 0; move_index < moves.size(); ++move_index) {
         if(moves[move_index].second == m) {
           moves[move_index].first += 1000.;
           std::sort(moves.begin(), moves.end());
           pline.replace_line(internal_pline);
+          str::perror("iid allowed", depth);
           break;
         }
       }
@@ -1019,7 +1002,7 @@ public:
     }
 
     // pvsearch main loop
-    int32_t bestscore = -MATERIAL_KING;
+    score_t bestscore = -MATERIAL_KING;
     bool isdraw_pathdep = false;
     TT_NODE_TYPE ndtype = TT_ALLNODE;
     for(size_t move_index = 0; move_index < moves.size(); ++move_index) {
@@ -1029,13 +1012,13 @@ public:
         continue;
       }
       MoveLine pline_alt = pline.branch_from_past(m);
-      int32_t score = 0;
+      score_t score = 0;
       // PV or hash move, full window
       if(m_val > 999. && !scoutsearch) {
         {
           auto mscope = mline_scope(m, pline_alt);
           isdraw_pathdep = is_draw_halfmoves() || is_draw_repetition();
-          score = -score_decay(alpha_beta_pv(-beta, -alpha, depth - 1, pline_alt, ab_state, allow_nullmoves, scoutsearch, callback_f));
+          score = -score_decay(alpha_beta_pv(-beta, -alpha, depth - 1, pline_alt, ab_state, allow_nullmoves, callback_f, _threatmove));
         }
         debug.update_pv(depth, alpha, beta, bestscore, score, m, pline, pline_alt, "hashmove"s);
         debug.check_score(depth, score, pline_alt);
@@ -1054,19 +1037,21 @@ public:
           isdraw_pathdep = is_draw_halfmoves() || is_draw_repetition();
           pos_t i = bitmask::first(m), j = bitmask::second(m) & board::MOVEMASK;
           const bool interesting_move = (is_drop_move(i, j) || is_castling_move(i, j) || is_promotion_move(i, j) || (is_naively_capture_move(i, j) && m_val > -3.5) || (is_naively_checking_move(i, j) && m_val > -9.));
-          const bool lmr_allowed = false && ENABLE_SELECTIVITY && !scoutsearch && move_index >= (pline.is_mainline() ? 15 : 4) && depth >= 3 && state.checkline[c] == bitmask::full && m_val < .1 && !interesting_move;
+          const bool lmr_allowed = ENABLE_SEL_LMR && !scoutsearch && move_index >= (pline.is_mainline() ? 15 : 4) && depth >= 3 && state.checkline[c] == bitmask::full && m_val < .1 && !interesting_move;
           MoveLine pline_alt2 = pline_alt;
           if(lmr_allowed) {
-            score = -score_decay(alpha_beta_pv(-alpha-1, -alpha, depth - 2, pline_alt2, ab_state, allow_nullmoves, true, callback_f));
+            score = -score_decay(alpha_beta_pv(-alpha-1, -alpha, depth - 2, pline_alt2, ab_state, allow_nullmoves, callback_f, _threatmove));
           } else {
-            score = -score_decay(alpha_beta_pv(-alpha-1, -alpha, depth - 1, pline_alt2, ab_state, allow_nullmoves, true, callback_f));
+            score = -score_decay(alpha_beta_pv(-alpha-1, -alpha, depth - 1, pline_alt2, ab_state, allow_nullmoves, callback_f, _threatmove));
           }
           if(!scoutsearch && score > alpha && score < beta) {
             pline_alt = pline_alt2;
-            score = -score_decay(alpha_beta_pv(-beta, -alpha, depth - 1, pline_alt, ab_state, allow_nullmoves, scoutsearch, callback_f));
+            score = -score_decay(alpha_beta_pv(-beta, -alpha, depth - 1, pline_alt, ab_state, allow_nullmoves, callback_f, _threatmove));
             if(score > alpha) {
               alpha = score;
               ndtype = TT_EXACT;
+            } else {
+              _threatmove = pline_alt.get_next_move();
             }
           } else {
             pline_alt.replace_line(pline_alt2);
@@ -1086,13 +1071,13 @@ public:
           }
           const size_t cmt_index = get_cmt_index(pline, m);
           if(cmt_index != SIZE_MAX) {
-            ab_state.cmh_table[cmt_index] += (depth * depth * (double(move_index + 1) / double(moves.size()))) * 1e-8;
+            ab_state.cmh_table[cmt_index] += (depth * depth * (float(move_index + 1) / float(moves.size()))) * 1e-7;
             ab_state.normalize_cmh_table(cmt_index);
           }
           return score;
         }
       }
-      if(ab_state.initdepth <= depth + 1 + (int16_t(pline.line.size()) / 7) && move_index + 1 != moves.size()) {
+      if(ab_state.initdepth <= depth + 1 + (depth_t(pline.line.size()) / 7) && move_index + 1 != moves.size()) {
         if(!callback_f(depth, bestscore)) {
           return bestscore;
         }
@@ -1115,7 +1100,7 @@ public:
   struct ab_storage_t {
     zobrist::StoreScope<tt_ab_entry> ab_ttable_scope;
     zobrist::StoreScope<tt_eval_entry> e_ttable_scope;
-    std::vector<double> cmh_table;
+    std::vector<float> cmh_table;
 
     void reset() {
       ab_ttable_scope.reset();
@@ -1129,8 +1114,8 @@ public:
   };
 
   typedef struct _iddfs_state {
-    int16_t curdepth = 1;
-    int32_t eval = 0;
+    depth_t curdepth = 1;
+    score_t eval = 0;
     MoveLine pline;
 
     INLINE void reset() {
@@ -1161,7 +1146,7 @@ public:
   } iddfs_state;
 
   template <typename F>
-  decltype(auto) iterative_deepening_dfs(int16_t depth, ab_storage_t &ab_storage, iddfs_state &idstate, const std::unordered_set<move_t> &searchmoves, F &&callback_f) {
+  decltype(auto) iterative_deepening_dfs(depth_t depth, ab_storage_t &ab_storage, iddfs_state &idstate, const std::unordered_set<move_t> &searchmoves, F &&callback_f) {
     auto &ab_ttable = ab_storage.ab_ttable_scope.get_object();
     auto &e_ttable = ab_storage.e_ttable_scope.get_object();
     auto &cmh_table = ab_storage.cmh_table;
@@ -1172,17 +1157,17 @@ public:
       std::fill(cmh_table.begin(), cmh_table.end(), .0);
     }
     bool should_stop = false;
-    for(int16_t d = idstate.curdepth; d <= depth; ++d) {
+    for(depth_t d = idstate.curdepth; d <= depth; ++d) {
       if(!idstate.pline.empty() && check_line_terminates(idstate.pline) && int(idstate.pline.size()) < d) {
         idstate.eval = get_pvline_score(idstate.pline);
         break;
       }
-      const int32_t eval_prev = idstate.eval;
-      const std::valarray<int32_t> aspiration_window = {CENTIPAWN, 15*CENTIPAWN, 125*CENTIPAWN, MATERIAL_QUEEN - MATERIAL_PAWN};
+      const score_t eval_prev = idstate.eval;
+      const std::valarray<score_t> aspiration_window = {CENTIPAWN, 15*CENTIPAWN, 125*CENTIPAWN, MATERIAL_QUEEN - MATERIAL_PAWN};
       pos_t aw_index_alpha = 0, aw_index_beta = 0;
       MoveLine new_pline = idstate.pline;
       do {
-        int32_t aw_alpha = -MATERIAL_KING, aw_beta = MATERIAL_KING;
+        score_t aw_alpha = -MATERIAL_KING, aw_beta = MATERIAL_KING;
         if(aw_index_alpha < aspiration_window.size()) {
           aw_alpha = eval_prev - aspiration_window[aw_index_alpha];
         }
@@ -1194,8 +1179,8 @@ public:
         bool inner_break = false;
         alpha_beta_state ab_state = (alpha_beta_state){ .ab_ttable=ab_ttable, .e_ttable=e_ttable, .cmh_table=cmh_table,
                                                         .initdepth=d, .searchmoves=searchmoves };
-        const int32_t new_eval = alpha_beta_pv(aw_alpha, aw_beta, d, new_pline, ab_state, true, false,
-          [&](int16_t _depth, int32_t _eval) mutable -> bool {
+        const score_t new_eval = alpha_beta_pv(aw_alpha, aw_beta, d, new_pline, ab_state, true,
+          [&](depth_t _depth, score_t _eval) mutable -> bool {
             const move_t _m = new_pline.front();
             should_stop = !callback_f(false);
             if(should_stop && d != _depth) {
@@ -1221,7 +1206,7 @@ public:
         }
         if(should_stop)break;
       } while(1);
-      str::pdebug("IDDFS:", d, "pline:", idstate.pline.pgn(self), "size:", idstate.pline.size(), "eval", score_float(idstate.eval));
+      str::pdebug("IDDFS:", d, "pline:", idstate.pline.pgn(self), "size:", idstate.pline.size(), "eval", score_float(idstate.eval), "nodes", nodes_searched);
       if(should_stop)break;
     }
     if(idstate.pline.empty() || idstate.pline.find(board::nullmove)) {
@@ -1258,19 +1243,19 @@ public:
     const size_t mem_e = size_e * sizeof(tt_eval_entry);
     const size_t size_cmh = size_t(NO_PIECES) * size_t(board::SIZE);
     const size_t size_cmt = size_t(NO_COLORS) * size_cmh * size_cmh;
-    const size_t mem_cmh = size_cmt  * sizeof(double);
+    const size_t mem_cmh = sizeof(std::vector<float>{}) + size_cmt  * sizeof(float);
     const size_t mem_total = mem_ab+mem_e+mem_cmh;
     str::pdebug("alphabeta scope", "ab:", mem_ab, "e:", mem_e, "cmh:", mem_cmh, "total:", mem_total);
     _printf("MEM: %luMB %luKB %luB\n", mem_total>>20, (mem_total>>10)&((1<<10)-1), mem_total&((1<<10)-1));
     return (ab_storage_t){
       .ab_ttable_scope=zobrist::make_store_object_scope<tt_ab_entry>(ab_ttable, size_ab),
       .e_ttable_scope=zobrist::make_store_object_scope<tt_eval_entry>(e_ttable, size_e),
-      .cmh_table=std::vector<double>(size_cmt, .0)
+      .cmh_table=std::vector<float>(size_cmt, .0)
     };
   }
 
   template <typename F>
-  move_t start_thinking(int16_t depth, iddfs_state &idstate, F &&callback_f, const std::unordered_set<move_t> &searchmoves) {
+  move_t start_thinking(depth_t depth, iddfs_state &idstate, F &&callback_f, const std::unordered_set<move_t> &searchmoves) {
     reset_planning();
     decltype(auto) ab_storage = get_zobrist_alphabeta_scope();
     assert(ab_ttable != nullptr && e_ttable != nullptr);
@@ -1279,18 +1264,18 @@ public:
     return idstate.currmove();
   }
 
-  INLINE move_t start_thinking(int16_t depth, iddfs_state &idstate, const std::unordered_set<move_t> &searchmoves={}) {
+  INLINE move_t start_thinking(depth_t depth, iddfs_state &idstate, const std::unordered_set<move_t> &searchmoves={}) {
     return start_thinking(depth, idstate, make_callback_f(), searchmoves);
   }
 
-  INLINE move_t start_thinking(int16_t depth, const std::unordered_set<move_t> &searchmoves={}) {
+  INLINE move_t start_thinking(depth_t depth, const std::unordered_set<move_t> &searchmoves={}) {
     iddfs_state idstate;
     return start_thinking(depth, idstate, searchmoves);
   }
 
   struct tt_perft_entry {
     board_info info;
-    int16_t depth;
+    depth_t depth;
     size_t nodes;
   };
 
@@ -1300,7 +1285,7 @@ public:
     const size_t mem_perft = size_perft * sizeof(tt_perft_entry);
     return zobrist::make_store_object_scope<tt_perft_entry>(perft_ttable, size_perft);
   }
-  size_t _perft(int16_t depth, std::vector<tt_perft_entry> &perft_ttable) {
+  size_t _perft(depth_t depth, std::vector<tt_perft_entry> &perft_ttable) {
     if(depth == 1 || depth == 0) {
       return count_moves(activePlayer());
     }
@@ -1327,7 +1312,7 @@ public:
     return nodes;
   }
 
-  inline size_t perft(int16_t depth=1) {
+  inline size_t perft(depth_t depth=1) {
     decltype(auto) store_scope = get_zobrist_perft_scope();
     zb_hit = 0, zb_miss = 0, zb_occupied = 0;
     return _perft(depth, store_scope.get_object());
@@ -1338,7 +1323,7 @@ public:
     Board(fen, zbsize), debug(*this)
   {
     const std::vector<PIECE> piece_types = {PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING};
-    std::vector<std::pair<int32_t, PIECE>> pieces;
+    std::vector<std::pair<score_t, PIECE>> pieces;
     for(PIECE p : piece_types) {
       pieces.emplace_back(material_of(p), p);
     }

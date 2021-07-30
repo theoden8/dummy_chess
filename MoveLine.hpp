@@ -14,12 +14,12 @@ class Board;
 struct MoveLine {
   std::vector<move_t> line;
   size_t start = 0;
-  const MoveLine *mainline = nullptr;
+  bool mainline = true;
 
   INLINE MoveLine()
   {}
 
-  explicit INLINE MoveLine(const std::vector<move_t> &line, const MoveLine *mainline=nullptr, bool shrink=false):
+  explicit INLINE MoveLine(const std::vector<move_t> &line, bool mainline=true, bool shrink=false):
     line(line), mainline(mainline)
   {
     if(!shrink) {
@@ -111,8 +111,8 @@ struct MoveLine {
     return f;
   }
 
-  INLINE void set_mainline(const MoveLine *other) {
-    mainline = other;
+  INLINE void set_mainline(bool ismainline) {
+    mainline = ismainline;
   }
 
   INLINE void replace_line(const MoveLine &other) {
@@ -120,7 +120,7 @@ struct MoveLine {
     for(size_t i = 0; i < other.size(); ++i) {
       (*this)[i] = other[i];
     }
-    assert(full().size() == start + other.size());
+    assert(line.size() == start + other.size());
   }
 
   INLINE void draft(move_t m) {
@@ -141,14 +141,7 @@ struct MoveLine {
   }
 
   INLINE bool is_mainline() const {
-    return mainline == nullptr;
-  }
-
-  INLINE const MoveLine &get_mainline() const {
-    if(is_mainline()) {
-      return *this;
-    }
-    return mainline->get_mainline();
+    return mainline;
   }
 
   INLINE bool find(move_t m) const {
@@ -163,18 +156,6 @@ struct MoveLine {
       if(line[i] == m)return true;
     }
     return false;
-  }
-
-  INLINE bool find_even_in_mainline(move_t m) const {
-    return get_mainline().find_even(m, start & 1);
-  }
-
-  INLINE move_t front_in_mainline() const {
-    const auto &m_line = get_mainline().line;
-    if(start >= m_line.size()) {
-      return board::nullmove;
-    }
-    return m_line[start];
   }
 
   INLINE MoveLine get_future() const {
@@ -211,7 +192,7 @@ struct MoveLine {
     }
     MoveLine mline = get_past();
     mline.start = start;
-    mline.mainline = &get_mainline();
+    mline.mainline = false;
     return mline;
   }
 
