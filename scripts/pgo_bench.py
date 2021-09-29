@@ -16,7 +16,7 @@ def run_fen(sess: UCISession, movetime=5., fen=None) -> UCISession:
 
 def run_traditional_pgo(uci_exec: str) -> None:
     sess = UCISession(variant=STANDARD)
-    sess.setoption('Hash', 1024)
+    sess.setoption('Hash', 256)
     run_fen(sess, fen='1r4k1/1r3pp1/3b3p/3p1qnP/Q1pP3R/2P2PP1/PP4K1/R1B3N1 b - - 2 24')
     run_fen(sess, fen='r1b1kb1r/pp2pp2/n1p1q1p1/1N1nN2p/2BP4/4BQ2/PPP2PPP/R4RK1 b kq - 1 11')
     run_fen(sess, fen='8/5k2/2pBp2p/6p1/pP2P3/P1R1K2P/2P5/3r4 w - - 3 49')

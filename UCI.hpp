@@ -573,14 +573,15 @@ struct UCI {
       } else if(return_from_search) {
         return false;
       }
+      const size_t nps = update_nodes_per_second(start, time_spent, nodes_searched);
       if(pondering && movetime > 1e9 && should_ponderhit) {
         pondering = false;
         const double new_movetime = time_control_movetime(args, false);
         movetime = std::max(new_movetime / 3, new_movetime - time_spent / 4);
+        time_spent = .0;
         str::pdebug("changed time", movetime);
       }
       return_from_search = return_from_search || check_if_should_stop(args, time_spent, movetime);
-      const size_t nps = update_nodes_per_second(start, time_spent, nodes_searched);
 			if(verbose && !pondering && !should_stop) {
         respond_full_iddfs(engine_idstate, nps, time_spent);
 			}

@@ -191,6 +191,193 @@ struct PGN {
     handle_move(bitmask::_pos_pair(i, j));
   }
 
+  void read_move(const std::string &s) {
+    assert(!s.empty());
+    COLOR c = board.activePlayer();
+    // castlings
+    if(s == "O-O"s || s == "O-O+"s || s == "O-O#") {
+      // short castling
+      const pos_t castlrank = (c == WHITE) ? 1 : 8;
+      pos_t k_move_to = board::_pos(G, castlrank);
+      if(board.chess960) {
+        k_move_to = board::_pos(board.kcastlrook[c], castlrank);
+      }
+      handle_move(bitmask::_pos_pair(board.pos_king[c], k_move_to));
+      return;
+    } else if(s == "O-O-O"s || s == "O-O-O+"s || s == "O-O-O#"s) {
+      // long castling
+      const pos_t castlrank = (c == WHITE) ? 1 : 8;
+      pos_t k_move_to = board::_pos(C, castlrank);
+      if(board.chess960) {
+        k_move_to = board::_pos(board.qcastlrook[c], castlrank);
+      }
+      handle_move(bitmask::_pos_pair(board.pos_king[c], k_move_to));
+      return;
+    }
+    long long i = 0, j = s.length() - 1;
+    // [P] [ @ | [F][R][x] | [R][F][x] ] FR [=P] [+|#]
+    // first, read piece
+    PIECE p = PAWN;
+    if(isupper(s[i])) {
+      // Nxd4 N@d5 Bg6
+      // determine piece type, in case this is a drop move
+      switch(s[i]) {
+        case 'P':p=PAWN;break;
+        case 'N':p=KNIGHT;break;
+        case 'B':p=BISHOP;break;
+        case 'R':p=ROOK;break;
+        case 'Q':p=QUEEN;break;
+        case 'K':p=KING;break;
+        default:abort();
+      }
+      //++i;
+    }
+    // second, read destination
+    bool assert_capture = false, assert_check = false, assert_mate = false;
+    if(s[j] == '+') {
+      assert_check = true;
+      --j;
+    } else if(s[j] == '#') {
+      assert_check = true, assert_mate = true;
+      --j;
+    }
+    PIECE move_promotion_as = PAWN;
+    if(index("NBRQ", s[j]) != nullptr) {
+      switch(s[j]) {
+        case 'N':move_promotion_as=KNIGHT;break;
+        case 'B':move_promotion_as=BISHOP;break;
+        case 'R':move_promotion_as=ROOK;break;
+        case 'Q':move_promotion_as=QUEEN;break;
+        default:abort();
+      }
+      --j;
+      assert(s[j] == '=');
+      --j;
+    }
+    assert(index("123456789", s[j]) != nullptr);
+    const pos_t to_rank = s[j] - '1';
+    --j;
+    assert(index("abcdefgh", s[j]) != nullptr);
+    const pos_t to_file = s[j] - 'a';
+    pos_t move_to = board::_pos(A+to_file, 1+to_rank);
+    switch(move_promotion_as) {
+      case KNIGHT:move_to|=board::PROMOTE_KNIGHT;break;
+      case BISHOP:move_to|=board::PROMOTE_BISHOP;break;
+      case ROOK:move_to|=board::PROMOTE_ROOK;break;
+      case QUEEN:move_to|=board::PROMOTE_QUEEN;break;
+      default:break;
+    }
+    --j;
+    if(s[j] == 'x') {
+      assert_capture = true;
+      --j;
+    }
+    bool capture_verified = !board.empty_at_pos(move_to & board::MOVEMASK);
+    if(p == PAWN && (move_to & board::MOVEMASK) == board.enpassant_trace()) {
+      capture_verified = true;
+    }
+    assert((assert_capture && capture_verified) || (!assert_capture && !capture_verified));
+    pos_t move_from = board::nopos;
+    if(s[j] == '@') {
+      move_from = board::CRAZYHOUSE_DROP | pos_t(p);
+    } else {
+      piece_bitboard_t from_positions = bitmask::full;
+      assert(from_positions);
+      switch(p) {
+        case PAWN:
+          from_positions = board.bits_pawns;
+        break;
+        case KNIGHT:
+          from_positions = board.get_knight_bits();
+        break;
+        case BISHOP:
+          from_positions = ~board.bits_slid_orth & board.bits_slid_diag;
+        break;
+        case ROOK:
+          from_positions = board.bits_slid_orth & ~board.bits_slid_diag;
+        break;
+        case QUEEN:
+          from_positions = board.bits_slid_orth & board.bits_slid_diag;
+        break;
+        case KING:
+          from_positions = board.get_king_bits();
+        break;
+        default:abort();
+      }
+      from_positions &= board.bits[board.activePlayer()];
+      if(j >= i && index("12345678", s[j]) != nullptr) {
+        from_positions &= piece::rank_mask(s[j] - '1');
+        --j;
+        if(j >= i && index("abcdefgh", s[j]) != nullptr) {
+          from_positions &= piece::file_mask(s[j] - 'a');
+          --j;
+        }
+      } else if(j >= i && index("abcdefgh", s[j]) != nullptr) {
+        from_positions &= piece::file_mask(s[j] - 'a');
+        --j;
+        if(j >= i && index("12345678", s[j]) != nullptr) {
+          from_positions &= piece::rank_mask(s[j] - '1');
+          --j;
+        }
+      }
+      piece_bitboard_t filtered = 0x00;
+      bitmask::foreach(from_positions, [&](pos_t from_pos) mutable noexcept -> void {
+        if(board.state.moves[from_pos] & piece::pos_mask(move_to)) {
+          filtered |= piece::pos_mask(from_pos);
+        }
+      });
+      from_positions = filtered;
+      if(!bitmask::is_exp2(from_positions)) {
+        abort();
+      }
+      move_from = bitmask::log2_of_exp2(from_positions);
+    }
+    const move_t m = bitmask::_pos_pair(move_from, move_to);
+    handle_move(m);
+    c = board.activePlayer();
+    const bool check_verified = (board.state.checkline[c] != bitmask::full);
+    assert((assert_check && check_verified) || (!assert_check && !check_verified));
+    const bool mate_verified = board.is_checkmate();
+    assert((assert_mate && mate_verified) || (!assert_mate && !mate_verified));
+    assert(ply.back() == s);
+  }
+
+  void read(const std::string &s) {
+    size_t i = 0;
+    while(i < s.length()) {
+//      char sss[] = {s[i], '\0'};
+//      str::print("character:", sss, i);
+      if(isspace(s[i])) {
+
+        ++i;
+        continue;
+      } else if(s[i] == '[') {
+        i = s.find("]", i + 1) + 1;
+        if(i == std::string::npos)break;
+        continue;
+      } else if(s[i] == '{') {
+        i = s.find("}", i + 1) + 1;
+        if(i == std::string::npos)break;
+        continue;
+      } else if(s[i] == '(') {
+        i = s.find(")", i + 1) + 1;
+        if(i == std::string::npos)break;
+        continue;
+      } else if(index("0123456789.", s[i]) != nullptr) {
+        ++i;
+        continue;
+      }
+      size_t j = s.find(" ", i);
+      if(j == std::string::npos) {
+        break;
+      }
+      const std::string ss = s.substr(i, j-i);
+//      str::print("new read:", "<"s + ss + ">"s);
+      read_move(ss);
+      i = j;
+    }
+  }
+
   void retract_move() {
     if(cur_ply != 0) {
       board.retract_move();
@@ -258,6 +445,21 @@ NEVER_INLINE std::string _line_str_full(Board &b, const MoveLine &mline) {
     s += _line_str(b, mline.get_future());
   }
   return s;
+}
+
+pgn::PGN load_from_string(const std::string &s, Board &board) {
+  pgn::PGN pgn(board);
+  pgn.read(s);
+  return pgn;
+}
+
+pgn::PGN load_from_file(const std::string &fname, Board &board) {
+  FILE *fp = fopen(fname.c_str(), "r");
+  assert(fp != nullptr);
+  std::string s; char c;
+  while((c=fgetc(fp))!=EOF)s+=c;
+  fclose(fp);
+  return load_from_string(s, board);
 }
 
 } // namespace pgn

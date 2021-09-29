@@ -230,7 +230,7 @@ namespace fen {
     std::string s; char c;
     while((c=fgetc(fp))!=EOF)s+=c;
     fclose(fp);
-    return load_from_string(s);;
+    return load_from_string(s);
   }
 
   struct lazyFEN {

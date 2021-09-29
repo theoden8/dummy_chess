@@ -13,6 +13,7 @@ m42.*
 !/scripts/uci_utilities.py
 !/scripts/bench.py
 scripts/
+puzzles/
 
 tempfile
 /sync

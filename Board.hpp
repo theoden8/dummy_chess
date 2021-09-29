@@ -119,7 +119,7 @@ public:
     Piece(EMPTY, NEUTRAL)
   };
   size_t zobrist_size = 0;
-  explicit Board(const fen::FEN &f, size_t zbsize=ZOBRIST_SIZE):
+  explicit Board(const fen::FEN &f=fen::starting_pos, size_t zbsize=ZOBRIST_SIZE):
     activePlayer_(f.active_player),
     current_ply_(f.fullmove * 2 - (f.active_player == WHITE ? 1 : 0)),
     chess960(f.chess960), crazyhouse(f.crazyhouse),
@@ -778,7 +778,7 @@ public:
     for(const move_t &m : mline) {
       rec.scope(m);
     }
-    return is_draw() || !can_move() || is_draw_repetition();
+    return is_draw() || !can_move();
   }
 
   using board_mailbox_t = std::array <piece_bitboard_t, board::SIZE>;
