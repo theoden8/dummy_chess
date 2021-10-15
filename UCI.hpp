@@ -20,19 +20,25 @@ using namespace std::chrono;
 
 
 struct UCI {
+  // engine singleton
   Engine *engine = nullptr;
+  // must take ownership of ttables and such so that initialization
+  // doesn't slow the engine down every time "go" is called
   typename Engine::ab_storage_t *engine_ab_storage = nullptr;
+  // last IDDFS state (for ponderhit)
   Engine::iddfs_state engine_idstate;
 
   using score_t = typename Engine::score_t;
   using depth_t = typename Engine::depth_t;
 
+  // state-changing message passing
   std::atomic<bool> debug_mode = false;
   std::atomic<bool> should_quit = false;
   std::atomic<bool> should_stop = false;
   std::atomic<bool> should_ponderhit = false;
   std::atomic<bool> job_started = false;
 
+  // these are used to initialize engine for a new game
   struct Options {
     size_t hash_mb = 64;
     bool chess960 = false;
@@ -40,6 +46,7 @@ struct UCI {
   };
   Options engine_options;
 
+  // cannot use engine in two threads at the same time
   std::recursive_mutex engine_mtx;
   using lock_guard = std::lock_guard<std::recursive_mutex>;
   std::thread engine_thread;
@@ -47,6 +54,7 @@ struct UCI {
   UCI()
   {}
 
+  // nice lock-safe initialization according to the currently set options
   void init(const fen::FEN &f) {
     lock_guard guard(engine_mtx);
     destroy();
@@ -56,7 +64,8 @@ struct UCI {
     engine_ab_storage = new typename Engine::ab_storage_t(engine->get_zobrist_alphabeta_scope());
   }
 
-  void destroy() {
+  // remove engine: no memory leaks, no nothing, ready to start again
+  void  destroy() {
     lock_guard guard(engine_mtx);
     if(engine != nullptr) {
       _printf("destroy\n");
@@ -124,6 +133,7 @@ struct UCI {
     {RESP_OPTION,         "option"s},
   };
 
+  // accept and interpret commands line by line, for all eternity
   void run() {
     std::vector<std::string> cmd = {""s};
     char c = 0;
@@ -150,6 +160,8 @@ struct UCI {
     should_stop = true;
   }
 
+  // read individual algebraic notation move like
+  // d3f4 or d7e8q or P@c6
   static move_t scan_move(const std::string &s) {
     assert(s.length() == 4 || s.length() == 5);
     pos_t i = 0x00;
@@ -182,6 +194,7 @@ struct UCI {
     return bitmask::_pos_pair(i, j);
   }
 
+  // fully parametrized go-command
   typedef struct _go_command {
     std::vector<move_t> searchmoves = {};
     bool ponder = false;
@@ -197,10 +210,12 @@ struct UCI {
     bool infinite = false;
   } go_command;
 
+  // same but only for perft, this is not in the UCI spec
   typedef struct _go_perft_command {
     depth_t depth;
   } go_perft_command;
 
+  // tell engine to stop; wait until it stops if it's running; clean up
   void join_engine_thread() {
     should_stop = true;
     if(job_started == true) {
@@ -216,6 +231,7 @@ struct UCI {
     return "{"s + str::join(cmd, ", "s) + "}"s;
   }
 
+  // bunch of options
   std::map<std::string, bool> boolOptions = {
     {"UCI_Chess960"s, false},
     {"Ponder"s, false},
@@ -241,7 +257,7 @@ struct UCI {
     switch(cmdmap.at(cmd.front())) {
       case CMD_UCI:
         respond(RESP_ID, "name", "dummy_chess");
-        respond(RESP_ID, "author", "$USER");
+        respond(RESP_ID, "author", "theoden8");
         for(const auto &[name, dflt] : boolOptions) {
           respond(RESP_OPTION, "name"s, name, "type"s, "check"s, "default"s, dflt ? "true"s : "false"s);
         }
@@ -514,6 +530,7 @@ struct UCI {
     return std::min(3600., tottime / 40. + inctime);
   }
 
+  // intermediate responses while thinking. when pondering, this might confuse the GUI
   void respond_full_iddfs(const Engine::iddfs_state &engine_idstate, size_t nps, double time_spent) {
     const double hashfull = double(engine->zb_occupied) / double(engine->zobrist_size);
     respond(RESP_INFO, "depth"s, engine_idstate.curdepth,
@@ -526,6 +543,7 @@ struct UCI {
                        "hashfull"s, int(round(hashfull * 1e3)));
   }
 
+  // when out of time, spit out this final response.
   void respond_final_iddfs(const Engine::iddfs_state &engine_idstate, move_t bestmove, double time_spent) {
     const double hashfull = double(engine->zb_occupied) / double(engine->zobrist_size);
     respond(RESP_INFO, "depth"s, engine_idstate.curdepth,

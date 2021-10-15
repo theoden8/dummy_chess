@@ -37,37 +37,53 @@ struct PGN {
     return '1' + board::_y(i);
   }
 
-  std::string piece_name(Piece p) {
-    std::string s = ""s;
-    if(p.value == PAWN)return s;
-    s += toupper(p.str());
-    return s;
-  }
-
+  // coordinate specification when move is ambiguous.
+  // Rd1 is ambiguous, so use R[a]d1 or R[f]d1, or R[5]d1, potentially both could be used
   std::string resolve_ambiguity(pos_t i, pos_t j, bool enpassant=false) const {
+    // drop information about promotions:
+    j &= board::MOVEMASK;
     std::string resolve = ""s;
-    piece_bitboard_t imask = ~0uLL,
-                     jmask = 1ULL << j;
-    if(board[i].value == PAWN && (board[i].value == PAWN || board[i].value == EMPTY)) {
-      if(board[j].value != EMPTY || enpassant) {
-        resolve += name_of_file(i);
+    // ambiguity masks for source and destination piece
+    piece_bitboard_t imask = bitmask::full,
+                     jmask = piece::pos_mask(j);
+    // each file and each rank should occur only once
+    bool file_resolved = false, rank_resolved = false;
+    if(piece::is_set(board.bits_pawns, i)) {
+      if(board.empty_at_pos(j) && !enpassant) {
+        // pawn push: []d4
+        imask = piece::file_mask(board::_x(i));
+      } else {
+        // [d]xc4
+        resolve += name_of_file(board::_x(i));
+        file_resolved = true;
+        const pos_t jfile = piece::file_mask(board::_x(j));
+        if(jfile == A) {
+          imask = piece::file_mask(B);
+        } else if(jfile == H) {
+          imask = piece::file_mask(G);
+        } else {
+          imask = piece::file_mask(jfile - 1) | piece::file_mask(jfile + 1);
+        }
       }
-      imask = board::file_mask(board::_x(i));
+      // restrict source mask to the file
+      // dc vs dxc4
+      // in the latter case,
       if(!LICHESS_COMPATIBILITY) {
         jmask = board::file_mask(board::_x(j));
       }
+      return resolve;
     }
-    bool file_resolved = false, rank_resolved = false;
 
-    piece_bitboard_t mask = ~0x00ULL;
+    // mask for all piece types and color as the i-piece
+    piece_bitboard_t mask = bitmask::full;
     const COLOR c = board[i].color;
-    if(board.bits_pawns & piece::pos_mask(i)) {
+    if(piece::is_set(board.bits_pawns, i)) {
       mask = board.bits_pawns;
-    } else if(board.bits_slid_diag & board.bits_slid_orth & piece::pos_mask(i)) {
+    } else if(piece::is_set(board.bits_slid_diag & board.bits_slid_orth, i)) {
       mask = board.bits_slid_diag & board.bits_slid_orth;
-    } else if(board.bits_slid_diag & piece::pos_mask(i)) {
+    } else if(piece::is_set(board.bits_slid_diag, i)) {
       mask = board.bits_slid_diag & ~board.bits_slid_orth;
-    } else if(board.bits_slid_orth & piece::pos_mask(i)) {
+    } else if(piece::is_set(board.bits_slid_orth, i)) {
       mask = board.bits_slid_orth & ~board.bits_slid_diag;
     } else if(i == board.pos_king[c]) {
       mask = piece::pos_mask(i);
@@ -76,14 +92,15 @@ struct PGN {
     }
     mask &= board.bits[c];
 
-    bitmask::foreach(mask, [&](pos_t k) mutable -> void {
+    // search the mask of possible source pieces, and resolve ambiguity if there is any
+    bitmask::foreach(mask & imask, [&](pos_t i_candidate) mutable -> void {
       if(rank_resolved && file_resolved)return;
-      if(!(imask & (1ULL << k)))return;
-      if(board.state.moves[k] & jmask) {
-        if(!file_resolved && board::_x(k) != board::_x(i)) {
+      // check if candidate can reach destination
+      if(board.state.moves[i_candidate] & jmask) {
+        if(!file_resolved && board::_x(i_candidate) != board::_x(i)) {
           resolve += name_of_file(i);
           file_resolved = true;
-        } else if(!rank_resolved && board::_y(k) != board::_y(i)) {
+        } else if(!rank_resolved && board::_y(i_candidate) != board::_y(i)) {
           resolve += name_of_rank(i);
           rank_resolved = true;
         }
@@ -94,9 +111,11 @@ struct PGN {
 
   void write_move(pos_t i, pos_t j) {
     const move_t m = bitmask::_pos_pair(i, j);
+    // split promotion and destination square information
     const pos_t promote_as = j & ~board::MOVEMASK;
     j &= board::MOVEMASK;
     std::string p;
+    // consider the type of move
     if(m == board::nullmove) {
       p = "0000"s;
     } else if(board.is_drop_move(i, j)) {
@@ -123,8 +142,9 @@ struct PGN {
         p = "O-O"s;
       }
     } else if(board.is_enpassant_take_move(i, j)) {
-      const pos_t killwhere = board.enpassant_pawn();
+      //const pos_t killwhere = board.enpassant_pawn();
       p += resolve_ambiguity(i, j, true);
+      // dc vs dxc4
       if(LICHESS_COMPATIBILITY) {
         p += 'x';
         p += board::_pos_str(j);
@@ -145,11 +165,16 @@ struct PGN {
       const bool is_capture = !board.empty_at_pos(j);
       p = "";
       // pawn takes pawn (not en-passant)
+      // lichess compatibiltiy: dc vs dxc4
       if(board[i].value==PAWN && board[j].value==PAWN && is_capture && !LICHESS_COMPATIBILITY) {
+        // example: dc
         p += resolve_ambiguity(i, j);
         p += name_of_file(j);
       } else {
-        p += piece_name(board[i]);
+        // P [ambiguity] [x] c4
+        if(~board.bits_pawns & piece::pos_mask(i)) {
+          p += toupper(board[i].str());
+        }
         p += resolve_ambiguity(i, j);
         if(is_capture)p+='x';
         p += board::_pos_str(j);
@@ -163,6 +188,7 @@ struct PGN {
     write_move(bitmask::first(m), bitmask::second(m));
   }
 
+  // write move, advance board state and determine game-state
   void handle_move(move_t m) {
     assert(m == board::nullmove || board.check_valid_move(m));
     write_move(m);
@@ -191,10 +217,13 @@ struct PGN {
     handle_move(bitmask::_pos_pair(i, j));
   }
 
-  void read_move(const std::string &s) {
+  // read and return move, return whether check or mate are explicitly annotated
+  move_t read_move_with_flags(const std::string &s, bool &flag_check, bool &flag_mate) {
     assert(!s.empty());
     COLOR c = board.activePlayer();
     // castlings
+    long long j = s.length() - 1;
+    // (O-O|O-O-O) [+|#]
     if(s == "O-O"s || s == "O-O+"s || s == "O-O#") {
       // short castling
       const pos_t castlrank = (c == WHITE) ? 1 : 8;
@@ -202,8 +231,12 @@ struct PGN {
       if(board.chess960) {
         k_move_to = board::_pos(board.kcastlrook[c], castlrank);
       }
-      handle_move(bitmask::_pos_pair(board.pos_king[c], k_move_to));
-      return;
+      if(s[j] == '+') {
+        flag_check = true;
+      } else if(s[j] == '#') {
+        flag_check = true, flag_mate = true;
+      }
+      return bitmask::_pos_pair(board.pos_king[c], k_move_to);
     } else if(s == "O-O-O"s || s == "O-O-O+"s || s == "O-O-O#"s) {
       // long castling
       const pos_t castlrank = (c == WHITE) ? 1 : 8;
@@ -211,10 +244,14 @@ struct PGN {
       if(board.chess960) {
         k_move_to = board::_pos(board.qcastlrook[c], castlrank);
       }
-      handle_move(bitmask::_pos_pair(board.pos_king[c], k_move_to));
-      return;
+      if(s[j] == '+') {
+        flag_check = true;
+      } else if(s[j] == '#') {
+        flag_check = true, flag_mate = true;
+      }
+      return bitmask::_pos_pair(board.pos_king[c], k_move_to);
     }
-    long long i = 0, j = s.length() - 1;
+    long long i = 0;
     // [P] [ @ | [F][R][x] | [R][F][x] ] FR [=P] [+|#]
     // first, read piece
     PIECE p = PAWN;
@@ -233,12 +270,12 @@ struct PGN {
       //++i;
     }
     // second, read destination
-    bool assert_capture = false, assert_check = false, assert_mate = false;
+    bool assert_capture = false;
     if(s[j] == '+') {
-      assert_check = true;
+      flag_check = true;
       --j;
     } else if(s[j] == '#') {
-      assert_check = true, assert_mate = true;
+      flag_check = true, flag_mate = true;
       --j;
     }
     PIECE move_promotion_as = PAWN;
@@ -254,7 +291,7 @@ struct PGN {
       assert(s[j] == '=');
       --j;
     }
-    assert(index("123456789", s[j]) != nullptr);
+    assert(index("12345678", s[j]) != nullptr);
     const pos_t to_rank = s[j] - '1';
     --j;
     assert(index("abcdefgh", s[j]) != nullptr);
@@ -332,9 +369,15 @@ struct PGN {
       }
       move_from = bitmask::log2_of_exp2(from_positions);
     }
-    const move_t m = bitmask::_pos_pair(move_from, move_to);
+    return bitmask::_pos_pair(move_from, move_to);
+  }
+
+  // perform move, verify check/mate/capture situation
+  void read_move(const std::string &s) {
+    bool assert_check = false, assert_mate = false;
+    const move_t m = read_move_with_flags(s, assert_check, assert_mate);
     handle_move(m);
-    c = board.activePlayer();
+    const COLOR c = board.activePlayer();
     const bool check_verified = (board.state.checkline[c] != bitmask::full);
     assert((assert_check && check_verified) || (!assert_check && !check_verified));
     const bool mate_verified = board.is_checkmate();
@@ -342,13 +385,12 @@ struct PGN {
     assert(ply.back() == s);
   }
 
+  // read PGN
   void read(const std::string &s) {
     size_t i = 0;
     while(i < s.length()) {
-//      char sss[] = {s[i], '\0'};
-//      str::print("character:", sss, i);
+      //std::string sss = std::format("{}", s[i]);
       if(isspace(s[i])) {
-
         ++i;
         continue;
       } else if(s[i] == '[') {
@@ -403,6 +445,7 @@ struct PGN {
   }
 };
 
+// functions to return as string and debug
 std::string _move_str(Board &b, move_t m) {
   assert(m == board::nullmove || b.check_valid_move(m));
   pgn::PGN pgn(b);
@@ -464,6 +507,7 @@ pgn::PGN load_from_file(const std::string &fname, Board &board) {
 
 } // namespace pgn
 
+// external methods
 NEVER_INLINE std::string MoveLine::pgn(Board &b) const {
   return pgn::_line_str(b, *this);
 }

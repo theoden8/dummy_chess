@@ -65,6 +65,7 @@ namespace board {
                   DROP_ROOK = pos_t(ROOK) | CRAZYHOUSE_DROP,
                   DROP_QUEEN = pos_t(QUEEN) | CRAZYHOUSE_DROP;
 
+  // j has 8 bits: 2 for promotion info, 6 for destination
   INLINE PIECE get_promotion_as(pos_t j) {
     switch(j & ~board::MOVEMASK) {
       case board::PROMOTE_KNIGHT:return KNIGHT;
@@ -75,6 +76,8 @@ namespace board {
     return PAWN;
   }
 
+  // if a piece is dropped, CRAZYHOUSE_DROP indicates that it is a drop-move,
+  // and 3 bits are used to indicate piece type. e.g. [1]0000[101]b
   INLINE PIECE get_drop_as(pos_t i) {
     return (PIECE)(i & ~board::CRAZYHOUSE_DROP);
   }

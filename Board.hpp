@@ -21,13 +21,15 @@ protected:
   COLOR activePlayer_;
   size_t current_ply_ = 0;
 public:
+  // general chess960-specific variables
   const bool chess960 = false;
   pos_t kcastlrook[NO_COLORS] = {0xff, 0xff},
         qcastlrook[NO_COLORS] = {0xff, 0xff};
 
+  // general crazyhouse-specific variables
   const bool crazyhouse = false;
-  piece_bitboard_t bits_promoted_pawns = 0ULL;
 
+  // compressed (partially incomplete) board state for hashing
   struct board_info {
     COLOR active_player = NEUTRAL;
     pos_t enpassant;
@@ -45,14 +47,17 @@ public:
              n_subs_mask == other.n_subs_mask && promoted_pawns == other.promoted_pawns;
     }
 
+    // efficiently invalidate state for comparison purposes
     INLINE void unset() {
       active_player = NEUTRAL;
     }
 
+    // check whether state is valid
     INLINE bool is_unset() const {
       return active_player == NEUTRAL;
     }
 
+    // uncompressed king position
     INLINE pos_t pos_king(COLOR c) const {
       assert(c < NO_COLORS);
       if(c == WHITE) {
@@ -62,10 +67,12 @@ public:
       }
     }
 
+    // uncompressed pawn positions
     INLINE piece_bitboard_t pawn_bits() const {
       return pawns & ((bitmask::full >> (board::LEN * 2)) << board::LEN);
     }
 
+    // 64-bit word, each 8 bit word specifies a number of substitution pieces for the type
     std::array<pos_t, board::NO_DROPPIECE_INDICES> get_n_subs() const {
       std::array<pos_t, board::NO_DROPPIECE_INDICES> nsubs;
       nsubs.fill(0);
@@ -75,6 +82,7 @@ public:
       return nsubs;
     }
 
+    // get_n_subs externally interfaced
     static std::array<pos_t, board::NO_DROPPIECE_INDICES> get_n_subs(piece_bitboard_t n_subs_mask) {
       std::array<pos_t, board::NO_DROPPIECE_INDICES> nsubs;
       nsubs.fill(0);
@@ -85,30 +93,47 @@ public:
     }
   };
 public:
+  // shorthand
   Board &self = *this;
-  std::vector<std::pair<ply_index_t, pos_t>> state_hist_enpassants;
-  std::array<ply_index_t, 4> castlings = {board::nocastlings, board::nocastlings, board::nocastlings, board::nocastlings};
-  std::vector<ply_index_t> state_hist_halfmoves;
 
+  // irregular state variables:
+  // plies at which en-passants are set
+  std::vector<std::pair<ply_index_t, pos_t>> state_hist_enpassants;
+  // KQkq
+  std::array<ply_index_t, 4> castlings = {board::nocastlings, board::nocastlings, board::nocastlings, board::nocastlings};
+  // at which moves halfmove clock is reset
+  std::vector<ply_index_t> state_hist_halfmoves;
+  // when three-fold repetition occured:
+  ply_index_t state_hist_repetitions = INT16_MAX;
+
+  // bitboard representation
   std::array<piece_bitboard_t, 2> bits = {0x00, 0x00};
   piece_bitboard_t bits_slid_diag = 0x00, bits_slid_orth = 0x00, bits_pawns = 0x00;
+  std::array<pos_t, 2> pos_king = {board::nopos, board::nopos};
+
+  // crazyhouse-specific state variables
+  piece_bitboard_t bits_promoted_pawns = 0ULL;
   std::array<pos_t, board::NO_DROPPIECE_INDICES> n_subs = {0};
 
+  // regular board state variables
   struct board_state {
+    // mailbox can represent any bipartite board graph
     using board_mailbox_t = std::array<piece_bitboard_t, board::SIZE>;
+    // null moves are fake, and should not trigger repetition and such
     bool null_move_state;
+    // compressed board state: bijectively restore it when needed
     board_info info;
     board_mailbox_t attacks;
     std::array<piece_bitboard_t, NO_COLORS> checkline = {0x00,0x00};
     board_mailbox_t moves;
     std::array<piece_bitboard_t, NO_COLORS> pins;
   };
+  // current state
   board_state state;
+  // (only) previous states, for fast unmaking
   std::vector<board_state> state_hist;
 
-  std::array<pos_t, 2> pos_king = {board::nopos, board::nopos};
-  ply_index_t state_hist_repetitions = INT16_MAX;
-
+  // cheap abstractions, pieces[Piece::piece_index(PAWN, BLACK)]
   const std::array<Piece, board::NO_PIECE_INDICES+1>  pieces = {
     Piece(PAWN, WHITE), Piece(PAWN, BLACK),
     Piece(KNIGHT, WHITE), Piece(KNIGHT, BLACK),
@@ -118,19 +143,21 @@ public:
     Piece(KING, WHITE), Piece(KING, BLACK),
     Piece(EMPTY, NEUTRAL)
   };
-  size_t zobrist_size = 0;
+
+  size_t zobrist_size;
   explicit Board(const fen::FEN &f=fen::starting_pos, size_t zbsize=ZOBRIST_SIZE):
     activePlayer_(f.active_player),
     current_ply_(f.fullmove * 2 - (f.active_player == WHITE ? 1 : 0)),
     chess960(f.chess960), crazyhouse(f.crazyhouse),
     zobrist_size(bitmask::highest_bit(zbsize))
   {
+    // external initializations (singleton)
     if(!initialized_) {
       M42::init();
       zobrist::init(zobrist_size);
       initialized_ = true;
     }
-    // board
+    // set bitboards
     for(pos_t i = 0; i < f.board.length(); ++i) {
       if(f.board[i]==' ')continue;
       const COLOR c = islower(f.board[i]) ? BLACK : WHITE;
@@ -146,7 +173,7 @@ public:
       const pos_t x = board::_x(i), y = board::LEN - board::_y(i) - 1;
       put_pos(board::_pos(A+x, 1+y), Piece(p, c));
     }
-    // subs
+    // crazyhouse: set substitution counts
     if(crazyhouse) {
       for(COLOR c : {WHITE, BLACK}) {
         for(PIECE p : {PAWN, KNIGHT, BISHOP, ROOK, QUEEN}) {
@@ -155,7 +182,7 @@ public:
         }
       }
     }
-    // white castlings
+    // set white castlings state (variation and position)
     if(bitmask::first(f.castlings)) {
       const pos_t wcastlmask = bitmask::first(f.castlings);
       if(bitmask::log2_msb(wcastlmask) < board::_x(pos_king[WHITE])) {
@@ -172,7 +199,7 @@ public:
       unset_castling(WHITE, KING_SIDE);
       unset_castling(WHITE, QUEEN_SIDE);
     }
-    // black castlings
+    // set black castlings state (variation and position)
     if(bitmask::second(f.castlings)) {
       const pos_t bcastlmask = bitmask::second(f.castlings);
       if(bitmask::log2_msb(bcastlmask) < board::_x(pos_king[BLACK])) {
@@ -189,10 +216,12 @@ public:
       unset_castling(BLACK, KING_SIDE);
       unset_castling(BLACK, QUEEN_SIDE);
     }
+    // initialize irregular state variables
     state_hist_halfmoves.emplace_back(current_ply_ - f.halfmove_clock);
     set_enpassant(f.enpassant);
     state_hist_halfmoves.reserve(piece::size(bits[WHITE] | bits[BLACK]) - 2);
     state_hist_enpassants.reserve(16);
+    // initialize regular state variables
     state_hist.reserve(100);
     init_state_attacks();
     init_state_moves();
@@ -204,6 +233,7 @@ public:
     return activePlayer_;
   }
 
+  // return piece-type interface, expensive
   INLINE const Piece operator[](pos_t ind) const {
     assert(ind <= board::MOVEMASK);
     const piece_bitboard_t ind_mask = piece::pos_mask(ind);
@@ -227,6 +257,7 @@ public:
     abort();
   }
 
+  // cheap lookup for emptiness
   INLINE bool empty_at_pos(pos_t ind) {
     assert(ind <= board::MOVEMASK);
     return !piece::is_set(bits[WHITE]|bits[BLACK], ind);
@@ -243,6 +274,7 @@ public:
     return NEUTRAL;
   }
 
+  // update compressed (incomplete) state information
   INLINE void update_state_info() {
     uint64_t n_subs_mask = 0x00;
     if(crazyhouse) {
@@ -267,14 +299,18 @@ public:
     };
   }
 
+  // methods to read and update bitboards
+  // obtain kings bitboard
   INLINE piece_bitboard_t get_king_bits() const {
     return piece::pos_mask(pos_king[WHITE]) | piece::pos_mask(pos_king[BLACK]);
   }
 
+  // infer knights bitboard
   INLINE piece_bitboard_t get_knight_bits() const {
     return (bits[WHITE] | bits[BLACK]) ^ (bits_slid_diag | bits_slid_orth | bits_pawns | get_king_bits());
   }
 
+  // remove i from bitboard representation
   INLINE void unset_pos(pos_t i) {
     const piece_bitboard_t i_mask = piece::pos_mask(i);
     if(bits[WHITE] & i_mask) {
@@ -300,6 +336,7 @@ public:
     }
   }
 
+  // add i to bitboard representation (for the given piece type and color)
   INLINE void set_pos(pos_t i, const Piece p) {
     if(p.color == WHITE) {
       piece::set_pos(bits[WHITE], i);
@@ -322,11 +359,41 @@ public:
     }
   }
 
+  // replace whatever is at i with a given piece-type
   INLINE void put_pos(pos_t i, const Piece p) {
     unset_pos(i);
     set_pos(i, p);
   }
 
+  // move i to j, emptiness at j guaranteed
+  INLINE void move_pos_quiet(pos_t i, pos_t j) {
+    assert(self.empty_at_pos(j));
+    // can't be promotion
+    assert(j <= board::MOVEMASK);
+    const piece_bitboard_t i_mask = piece::pos_mask(i);
+    const COLOR c = self.color_at_pos(i);
+    piece::move_pos(bits[c], i, j);
+    if(bits_pawns & i_mask) {
+      piece::move_pos(bits_pawns, i, j);
+    } else if(pos_king[c] == i) {
+      pos_king[c] = j;
+    } else {
+      if(bits_slid_diag & i_mask) {
+        piece::move_pos(bits_slid_diag, i, j);
+      }
+      if(bits_slid_orth & i_mask) {
+        piece::move_pos(bits_slid_orth, i, j);
+      }
+    }
+  }
+
+  INLINE void move_pos(pos_t i, pos_t j) {
+    assert(j <= board::MOVEMASK);
+    unset_pos(j);
+    move_pos_quiet(i, j);
+  }
+
+  // methods to determine move types
   INLINE bool is_castling_move(pos_t i, pos_t j) const {
     assert(j <= board::MOVEMASK);
     const COLOR c = self.color_at_pos(i);
@@ -389,32 +456,8 @@ public:
     }
     return false;
   }
-//
-  INLINE void move_pos_quiet(pos_t i, pos_t j) {
-    assert(j <= board::MOVEMASK);
-    const piece_bitboard_t i_mask = piece::pos_mask(i);
-    const COLOR c = self.color_at_pos(i);
-    piece::move_pos(bits[c], i, j);
-    if(bits_pawns & i_mask) {
-      piece::move_pos(bits_pawns, i, j);
-    } else if(pos_king[c] == i) {
-      pos_king[c] = j;
-    } else {
-      if(bits_slid_diag & i_mask) {
-        piece::move_pos(bits_slid_diag, i, j);
-      }
-      if(bits_slid_orth & i_mask) {
-        piece::move_pos(bits_slid_orth, i, j);
-      }
-    }
-  }
 
-  INLINE void move_pos(pos_t i, pos_t j) {
-    assert(j <= board::MOVEMASK);
-    unset_pos(j);
-    move_pos_quiet(i, j);
-  }
-
+  // methods to read and update irregular state variables
   INLINE pos_t enpassant_trace() const {
     if(state_hist_enpassants.empty())return board::nopos;
     const auto [ply, e] = state_hist_enpassants.back();
@@ -489,6 +532,7 @@ public:
     }
   }
 
+  // methods to get zobrist hashing
   piece_bitboard_t get_mask(const Piece p) const {
     const COLOR c = p.color;
     if(p.value == PAWN) {
@@ -534,6 +578,7 @@ public:
     return current_ply_;
   }
 
+  // methods to check move validity
   INLINE bool check_valid_drop_move(pos_t i, pos_t j) const {
     const COLOR c = activePlayer();
     const COLOR ec = enemy_of(c);
@@ -559,28 +604,39 @@ public:
            && (state.moves[i] & piece::pos_mask(j & board::MOVEMASK)));
   }
 
+  INLINE bool check_valid_move(move_t m) const {
+    return check_valid_move(bitmask::first(m), bitmask::second(m));
+  }
+
+  // visitor methods for the engine
   virtual void _backup_on_event() {}
   virtual void _restore_on_event() {}
   virtual void _update_pos_change(pos_t i, pos_t j) {};
   virtual void _update_change() {}
 
+  // forward-pass, complete code
   void make_move(pos_t i, pos_t j) {
     const move_t m = bitmask::_pos_pair(i, j);
+    // split promotion and destination information
     const pos_t promote_as = j & ~board::MOVEMASK;
     j &= board::MOVEMASK;
+    // some move properties, which depend on increasing ply counter
     const bool is_drop = crazyhouse && is_drop_move(i, j);
     const bool known_move_type = (m == board::nullmove || is_drop);
     const bool is_castling = !known_move_type && is_castling_move(i, j);
     const bool is_enpassant_take =  !known_move_type && is_enpassant_take_move(i, j);
     const pos_t epawn = enpassant_pawn();
 
-    ++current_ply_;
+    // back-up current state
     _backup_on_event();
     state_hist.emplace_back(state);
     assert(m == board::nullmove || check_valid_move(m));
     state.null_move_state = (m == board::nullmove);
+    ++current_ply_;
     if(m == board::nullmove) {
+      // do nothing
     } else if(is_drop) {
+      // crazyhouse-specific move
       assert(check_valid_drop_move(i, j));
       const COLOR c = activePlayer();
       const PIECE p = board::get_drop_as(i);
@@ -589,11 +645,15 @@ public:
       --n_subs[Piece::get_piece_index(p, c)];
       state_hist_halfmoves.emplace_back(get_current_ply());
     } else if(is_castling) {
+      // back up knights for later checksum, as none of the knights should move
       const piece_bitboard_t knights = get_knight_bits();
       const COLOR c = activePlayer();
       const pos_t castlrank = (c == WHITE) ? 1 : 8;
+      // king moves k_i -> k_j
       const pos_t k_i = i;
       pos_t k_j = j;
+      // in chess 960, j is not where the king moves, but the rook it castles towards
+      // otherwise there can be ambiguity of whether the king wants to move or castle
       if(chess960) {
         if(j == board::_pos(qcastlrook[c], castlrank)) {
           k_j = board::_pos(C, castlrank);
@@ -603,33 +663,49 @@ public:
           abort();
         }
       }
+      // rook moves r_i -> r_j
       const move_t rookmove = piece::get_king_castle_rook_move(c, i, k_j, qcastlrook[c], kcastlrook[c]);
       const pos_t r_i = bitmask::first(rookmove),
                   r_j = bitmask::second(rookmove);
       update_castlings(i, j);
       {
+        // will k_i -> k_j overwrite rook?
+        // we update white and black bitboards, not piece-bitboards here
         if(k_j != r_i) {
+          // what if k_i == k_j? this is why move is not necessarily quiet
           piece::move_pos(bits[c], k_i, k_j);
         } else {
           piece::unset_pos(bits[c], k_i);
         }
+        // if r_i == k_j, we've moved the king but have not moved the rook yet!
+        // at this moment, the rook bitboard also indicates k_j
         pos_king[c] = k_j;
       }
+      // this should work nonetheless: it takes a position at k_i,
+      // marks queen+knight reachable squares and updates their attacks
       update_state_attacks_pos(k_i);
       update_state_attacks_pos(k_j);
+      // notify a visitor of the change
       _update_pos_change(i, k_j);
       {
+        // again: is this some weird chess960 set-up where k_j == r_i?
+        // first, update color masks
         if(k_j != r_i) {
+          // r_j might be the same as r_i, therefore this move is not necessarily quiet
           piece::move_pos(bits[c], r_i, r_j);
         } else {
           piece::set_pos(bits[c], r_j);
         }
+        // now, update the orthogonal pieces (Q|R) bitboard
         piece::move_pos(bits_slid_orth, r_i, r_j);
       }
+      // this should work fine: at this point the bitboards are valid
       update_state_attacks_pos(r_i);
       update_state_attacks_pos(r_j);
+      // notify a visitor of the change
       _update_pos_change(r_i, r_j);
       const COLOR ec = enemy_of(c);
+      // checksum between color-bitboards and piece-bitboards
       assert((bits[c] | bits[ec]) == (bits_pawns | bits_slid_diag | bits_slid_orth | get_king_bits() | knights));
     } else if(is_enpassant_take) {
       const COLOR c = activePlayer();
@@ -650,6 +726,9 @@ public:
     } else if(is_promotion_move(i, j)) {
       const PIECE becomewhat = board::get_promotion_as(promote_as);
       if(crazyhouse) {
+        // this is crazyhouse-specific: when promoted pawns are captured,
+        // in drop-value they are still pawns. bits_promoted_pawns keeps track
+        // of them for both sides
         const PIECE p = self[j].value;
         if(p != EMPTY) {
           ++n_subs[Piece::get_piece_index(p, activePlayer())];
@@ -689,12 +768,16 @@ public:
       update_state_attacks_pos(j);
       _update_pos_change(i, j);
     }
+    // update active player (current ply was updated earler)
     activePlayer_ = enemy_of(activePlayer());
+    // post-processing: moves, current state info
     init_state_moves();
     update_state_info();
+    // repetition detection can now be updated too
     if(state_hist_repetitions > self.get_current_ply()) {
       update_state_repetitions();
     }
+    // notify the visitor that they can post-process now
     _update_change();
   }
 
@@ -702,7 +785,10 @@ public:
     make_move(bitmask::first(m), bitmask::second(m));
   }
 
+  // backtrack, complete method
   void retract_move() {
+    // this is more efficient than make_move-like code
+    // just fetch previous state and overwrite
     if(state_hist.empty())return;
     const board_info prev_info = state_hist.back().info;
     bits = {prev_info.whites, prev_info.blacks};
@@ -711,12 +797,13 @@ public:
     bits_slid_orth = prev_info.orth_slid;
     pos_king = {prev_info.pos_king(WHITE), prev_info.pos_king(BLACK)};
     activePlayer_ = enemy_of(activePlayer());
+    // restore substitutions and promoted pawns too in crazyhouse
     if(crazyhouse) {
       n_subs = prev_info.get_n_subs();
       bits_promoted_pawns = prev_info.promoted_pawns;
     }
     --current_ply_;
-    //enpassants
+    // enpassants
     while(!state_hist_enpassants.empty() && state_hist_enpassants.back().first > get_current_ply()) {
       state_hist_enpassants.pop_back();
     }
@@ -732,15 +819,17 @@ public:
         state_hist_halfmoves.pop_back();
       }
     }
-    // state
+    // regular state variables
     state = state_hist.back();
     state_hist.pop_back();
+    // repetitions
     if(self.get_current_ply() < state_hist_repetitions) {
       state_hist_repetitions = INT16_MAX;
     }
     _restore_on_event();
   }
 
+  // methods that produce scopes for making moves and series of moves
   INLINE auto move_scope(move_t m) {
     return make_move_scope(self, m);
   }
@@ -755,10 +844,6 @@ public:
 
   INLINE auto recursive_mline_scope(MoveLine &mline) {
     return make_recursive_mline_scope(self, mline);
-  }
-
-  INLINE bool check_valid_move(move_t m) const {
-    return check_valid_move(bitmask::first(m), bitmask::second(m));
   }
 
   INLINE bool check_valid_sequence(const MoveLine &mline, bool strict=false) {
@@ -781,7 +866,8 @@ public:
     return is_draw() || !can_move();
   }
 
-  using board_mailbox_t = std::array <piece_bitboard_t, board::SIZE>;
+  // methods that eventually generate completely legal moves
+  // this method can be used on every iteration, but in fact is used on initialization only
   ALWAYS_UNROLL void init_state_attacks() {
     for(auto&a:state.attacks)a=0ULL;
     for(COLOR c : {WHITE, BLACK}) {
@@ -803,6 +889,7 @@ public:
     });
   }
 
+  // sub-routines for get_attacks_to
   INLINE piece_bitboard_t get_sliding_diag_attacks_to(pos_t j, piece_bitboard_t occupied) const {
     return piece::get_sliding_diag_attack(j,occupied) & bits_slid_diag & occupied;
   }
@@ -825,6 +912,7 @@ public:
     return piece::get_king_attack(j) & get_king_bits();
   }
 
+  // used by SEE, so must be very efficient yet flexible
   INLINE piece_bitboard_t get_attacks_to(pos_t j, COLOR c, piece_bitboard_t occupied) const {
     assert(c == BOTH || c < NO_COLORS);
     const piece_bitboard_t filt = (c == BOTH) ? occupied : (occupied & bits[c]);
@@ -838,6 +926,8 @@ public:
     return bitmask::count_bits(get_attacks_to(j,c,bits[WHITE]|bits[BLACK]));
   }
 
+  // update attack map when a move is made, for each affected position
+  // this works significanltly faster than init_state_attacks
   void update_state_attacks_pos(pos_t pos) {
     const piece_bitboard_t occupied = bits[WHITE] | bits[BLACK];
     const piece_bitboard_t affected = piece::pos_mask(pos) | get_sliding_attacks_to(pos, occupied);
@@ -868,6 +958,7 @@ public:
     }
   }
 
+  // implementation of get_attack_mask
   INLINE piece_bitboard_t get_attack_mask(COLOR c) const {
     assert(c < NO_COLORS);
     const piece_bitboard_t occupied = (bits[WHITE] | bits[BLACK]) & ~piece::pos_mask(pos_king[enemy_of(c)]);
@@ -880,17 +971,22 @@ public:
     return mask;
   }
 
+  // checkline: two bitboards, which filter possible moves by pieces other than king
+  // e.g. all-ones when no check, knight when it is checking, 0 when double check
   void init_state_checkline(COLOR c) {
     assert(c < NO_COLORS);
     const piece_bitboard_t occupied = bits[WHITE] | bits[BLACK];
     const piece_bitboard_t attackers = get_attacks_to(pos_king[c], enemy_of(c), occupied);
+    // not in check
     if(!attackers) {
       state.checkline[c] = ~0x00ULL;
       return;
     } else if(!bitmask::is_exp2(attackers)) {
+      // double-check
       state.checkline[c] = 0x00ULL;
       return;
     }
+    // definitely only one attacker
     const pos_t attacker = bitmask::log2_of_exp2(attackers);
     state.checkline[c] = 0x00;
     if(bits_slid_diag & attackers) {
@@ -899,10 +995,12 @@ public:
     if(bits_slid_orth & attackers) {
       state.checkline[c] |= piece::get_sliding_orth_attacking_ray(pos_king[c], attacker, occupied & ~piece::pos_mask(pos_king[c]));
     }
+    // if pawn/knight, there is no ray, just the attacking piece that can be captured
     state.checkline[c] |= attackers;
   }
 
-  // fifty-halfmoves-draw
+  // sub-routines to evaluate game state: draw, mate, etc
+  // 50-halfmoves-draw
   INLINE bool is_draw_halfmoves() const {
     return get_halfmoves() == 100;// && !is_checkmate();
   }
@@ -915,11 +1013,15 @@ public:
     return !is_draw() && !can_move();
   }
 
+  // in crazyhouse, can still drop moves when no normal moves are available
   INLINE bool can_drop_move() const {
     if(!crazyhouse)return false;
     const COLOR c = activePlayer();
+    // have to drop on checkline: if in check, cover the king
     const piece_bitboard_t ch_drop_locations = ~(bits[WHITE]|bits[BLACK]) & state.checkline[c];
     if(!ch_drop_locations)return false;
+    // got any pieces to drop? is there anywhere to drop?
+    // can't drop pawns at back ranks
     if(n_subs[Piece::get_piece_index(PAWN, c)] && ch_drop_locations & board::PAWN_RANKS) {
       return true;
     }
@@ -989,6 +1091,7 @@ public:
     return state_hist_repetitions <= self.get_current_ply();
   }
 
+  // move-generation, this is the main reason attack-generation and such exist
   void init_state_moves() {
     for(auto&m:state.moves)m=0x00;
     //if(is_draw_halfmoves()||is_draw_material())return;
@@ -1031,6 +1134,9 @@ public:
     }
   }
 
+  // sometimes, enpassant taking of a nearby pawn opens a line for a rook/queen
+  // which potentially captures the king. this is the only case in which x-ray checks
+  // are insufficient
   void init_state_moves_checkline_enpassant_takes() {
     const COLOR c = activePlayer();
     const pos_t etrace = enpassant_trace();
@@ -1046,6 +1152,7 @@ public:
     });
   }
 
+  // x-ray checks
   template <typename F>
   INLINE void iter_attacking_xrays(pos_t j, F &&func, COLOR c) const {
     assert(c < NO_COLORS);
@@ -1067,6 +1174,7 @@ public:
     });
   }
 
+  // two bitboards, each showing pinned pieces positions
   void init_state_pins() {
     // for efficiency can avoid the loop
     for(COLOR c : {WHITE, BLACK}) {
@@ -1091,6 +1199,8 @@ public:
     init_horizontal_enpassant_pin();
   }
 
+  // non-xray pin generated in the case when en-passant can't be captured
+  // k * * p P * * R
   void init_horizontal_enpassant_pin() {
     if(enpassant_trace() == board::nopos)return;
     const COLOR c = activePlayer();
@@ -1117,6 +1227,7 @@ public:
     }
   }
 
+  // methods to print and debug stuff
   NEVER_INLINE void print() const {
     std::cout << "Active player: " << (activePlayer() == WHITE ? "WHITE" : "BLACK") << std::endl;
     for(pos_t i = board::LEN; i > 0; --i) {

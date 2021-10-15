@@ -233,6 +233,8 @@ namespace fen {
     return load_from_string(s);
   }
 
+  // performs FEN reading only on demand - useful for debugging
+  // and perhaps faster loading time
   struct lazyFEN {
     const char *fenstring;
 
