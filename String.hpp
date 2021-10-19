@@ -19,7 +19,7 @@ using namespace std::string_literals;
 
 namespace str {
 
-std::vector<std::string> split(const std::string &s, const std::string &sep=" "s) {
+decltype(auto) split(const std::string &s, const std::string &sep=" "s) {
   std::vector<std::string> vs;
   size_t start_s = 0;
   for(size_t i = 0; i < s.size() - sep.size(); ++i) {

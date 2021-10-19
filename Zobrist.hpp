@@ -97,13 +97,7 @@ struct StoreScope {
     }
   }
 
-  explicit INLINE StoreScope(StoreScope<InnerObject> &other):
-    zb_store(other.zb_store),
-    is_outer_scope(other.is_outer_scope)
-  {
-    other.is_outer_scope = false;
-  }
-
+  explicit StoreScope(const StoreScope<InnerObject> &other) = delete;
   explicit INLINE StoreScope(StoreScope<InnerObject> &&other):
     zb_store(other.zb_store),
     is_outer_scope(other.is_outer_scope)

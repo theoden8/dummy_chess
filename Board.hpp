@@ -75,8 +75,8 @@ public:
     // 64-bit word, each 8 bit word specifies a number of substitution pieces for the type
     std::array<pos_t, board::NO_DROPPIECE_INDICES> get_n_subs() const {
       std::array<pos_t, board::NO_DROPPIECE_INDICES> nsubs;
-      nsubs.fill(0);
       for(pos_t i = 0; i < board::NO_DROPPIECE_INDICES; ++i) {
+        //nsubs[i] = 0;
         nsubs[i] = (n_subs_mask >> (i * 6)) & (board::SIZE - 1);
       }
       return nsubs;
@@ -85,8 +85,8 @@ public:
     // get_n_subs externally interfaced
     static std::array<pos_t, board::NO_DROPPIECE_INDICES> get_n_subs(piece_bitboard_t n_subs_mask) {
       std::array<pos_t, board::NO_DROPPIECE_INDICES> nsubs;
-      nsubs.fill(0);
       for(pos_t i = 0; i < board::NO_DROPPIECE_INDICES; ++i) {
+        //nsubs[i] = 0;
         nsubs[i] = (n_subs_mask >> (i * 6)) & (board::SIZE - 1);
       }
       return nsubs;
@@ -609,10 +609,8 @@ public:
   }
 
   // visitor methods for the engine
-  virtual void _backup_on_event() {}
   virtual void _restore_on_event() {}
   virtual void _update_pos_change(pos_t i, pos_t j) {};
-  virtual void _update_change() {}
 
   // forward-pass, complete code
   void make_move(pos_t i, pos_t j) {
@@ -628,7 +626,6 @@ public:
     const pos_t epawn = enpassant_pawn();
 
     // back-up current state
-    _backup_on_event();
     state_hist.emplace_back(state);
     assert(m == board::nullmove || check_valid_move(m));
     state.null_move_state = (m == board::nullmove);
@@ -778,7 +775,6 @@ public:
       update_state_repetitions();
     }
     // notify the visitor that they can post-process now
-    _update_change();
   }
 
   INLINE void make_move(move_t m) {
@@ -830,24 +826,24 @@ public:
   }
 
   // methods that produce scopes for making moves and series of moves
-  INLINE auto move_scope(move_t m) {
+  INLINE decltype(auto) move_scope(move_t m) {
     return make_move_scope(self, m);
   }
 
-  INLINE auto mline_scope(move_t m, MoveLine &mline) {
+  INLINE decltype(auto) mline_scope(move_t m, MoveLine &mline) {
     return make_mline_scope(self, m, mline);
   }
 
-  INLINE auto recursive_move_scope() {
+  INLINE decltype(auto) recursive_move_scope() {
     return make_recursive_move_scope(self);
   }
 
-  INLINE auto recursive_mline_scope(MoveLine &mline) {
+  INLINE decltype(auto) recursive_mline_scope(MoveLine &mline) {
     return make_recursive_mline_scope(self, mline);
   }
 
   INLINE bool check_valid_sequence(const MoveLine &mline, bool strict=false) {
-    auto rec = self.recursive_move_scope();
+    auto &&rec = self.recursive_move_scope();
     for(const move_t &m : mline) {
       if(!check_valid_move(m) && (strict || m != board::nullmove)) {
         str::pdebug("[invalid "s, _line_str_full(mline), "]"s);
@@ -859,7 +855,7 @@ public:
   }
 
   INLINE bool check_line_terminates(const MoveLine &mline) {
-    auto rec = self.recursive_move_scope();
+    auto &&rec = self.recursive_move_scope();
     for(const move_t &m : mline) {
       rec.scope(m);
     }
@@ -1256,7 +1252,7 @@ public:
   NEVER_INLINE std::vector<std::string> _line_str(const MoveLine &line, bool thorough=false) {
     std::vector<std::string> s;
     if(thorough)assert(check_valid_sequence(line));
-    auto rec_mscope = self.recursive_move_scope();
+    decltype(auto) rec_mscope = self.recursive_move_scope();
     for(const auto m : line) {
       if(m==board::nullmove)break;
       s.emplace_back(_move_str(m));
@@ -1277,9 +1273,9 @@ public:
 
   board_info get_info_from_line(MoveLine &mline) {
     assert(check_valid_sequence(mline));
-    auto rec = self.recursive_move_scope();
+    decltype(auto) rec_mscope = self.recursive_move_scope();
     for(const move_t &m : mline) {
-      rec.scope(m);
+      rec_mscope.scope(m);
     }
     return state.info;
   }

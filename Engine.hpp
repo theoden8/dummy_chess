@@ -9,10 +9,11 @@
 #include <FEN.hpp>
 #include <PGN.hpp>
 #include <Board.hpp>
+#include <Perft.hpp>
 #include <DebugTracer.hpp>
 
 
-class Engine : public Board {
+class Engine : public Perft {
 public:
   static constexpr bool ENABLE_TT = true;
   static constexpr bool ENABLE_TT_RETURN = true && ENABLE_TT;
@@ -24,108 +25,6 @@ public:
   static constexpr bool ENABLE_IID = false;
 
   using score_t = int32_t;
-  using depth_t = int16_t;
-
-  static constexpr std::array<pos_t, 4> PROMOTION_PIECES = {
-    board::PROMOTE_KNIGHT, board::PROMOTE_BISHOP,
-    board::PROMOTE_ROOK, board::PROMOTE_QUEEN
-  };
-
-  template <typename F>
-  INLINE void iter_moves_from(pos_t i, F &&func) const {
-    bitmask::foreach(state.moves[i], [&](pos_t j) mutable -> void {
-      if(is_promotion_move(i, j)) {
-        for(pos_t promotion : PROMOTION_PIECES) {
-          func(i, j | promotion);
-        }
-      } else {
-        func(i, j);
-      }
-    });
-  }
-
-  template <typename F>
-  INLINE void iter_drop_moves(F &&func) const {
-    if(crazyhouse) {
-      if(is_draw_halfmoves()||is_draw_material())return;
-      const COLOR c = activePlayer();
-      const piece_bitboard_t ch_drop_locations = ~(bits[WHITE]|bits[BLACK]) & state.checkline[c];
-      {
-        if(n_subs[Piece::get_piece_index(PAWN, c)]) {
-          bitmask::foreach(ch_drop_locations & board::PAWN_RANKS, [&](pos_t j) mutable -> void {
-            func(board::DROP_PAWN, j);
-          });
-        }
-      }
-      for(PIECE p : {KNIGHT, BISHOP, ROOK, QUEEN}) {
-        if(n_subs[Piece::get_piece_index(p, c)]) {
-          bitmask::foreach(ch_drop_locations, [&](pos_t j) mutable -> void {
-            func(pos_t(p) | board::CRAZYHOUSE_DROP, j);
-          });
-        }
-      }
-    }
-  }
-
-  template <typename F>
-  INLINE void iter_moves(F &&func) const {
-    const COLOR c = activePlayer();
-    bitmask::foreach(bits[c], [&](pos_t i) mutable -> void {
-      iter_moves_from(i, std::forward<F>(func));
-    });
-    iter_drop_moves(std::forward<F>(func));
-  }
-
-  INLINE size_t count_moves(COLOR c) const {
-    assert(c < NO_COLORS);
-    uint16_t no_moves = 0;
-    bitmask::foreach(bits[c], [&](pos_t i) mutable -> void {
-      pos_t moves_from = bitmask::count_bits(state.moves[i]);
-      if(piece::is_set(bits_pawns, i) && (board::_y(i) == 2-1 || board::_y(i) == 7-1)
-          && (
-            (self.color_at_pos(i) == WHITE && 1+board::_y(i) == 7)
-            || (self.color_at_pos(i) == BLACK && 1+board::_y(i) == 2))
-        )
-      {
-        moves_from *= 4;
-      }
-      no_moves += moves_from;
-    });
-    if(crazyhouse) {
-      const COLOR c = activePlayer();
-      const piece_bitboard_t ch_drop_locations = ~(bits[WHITE]|bits[BLACK]) & state.checkline[c];
-      if(n_subs[Piece::get_piece_index(PAWN, c)]) {
-        no_moves += piece::size(ch_drop_locations & board::PAWN_RANKS);
-      }
-      pos_t npieces = 0;
-      for(PIECE p : {KNIGHT, BISHOP, ROOK, QUEEN}) {
-        if(n_subs[Piece::get_piece_index(p, c)]) {
-          ++npieces;
-        }
-      }
-      no_moves += npieces * piece::size(ch_drop_locations);
-    }
-    return no_moves;
-  }
-
-  // for MC-style testing
-  INLINE move_t get_random_move() const {
-    std::vector<move_t> moves;
-    iter_moves([&](pos_t i, pos_t j) mutable -> void {
-      moves.emplace_back(bitmask::_pos_pair(i, j));
-    });
-    if(moves.empty())return board::nullmove;
-    return moves[rand() % moves.size()];
-  }
-
-  INLINE move_t get_random_move_from(pos_t i) const {
-    std::vector<move_t> moves;
-    iter_moves_from(i, [&](pos_t i, pos_t j) mutable -> void {
-      moves.emplace_back(bitmask::_pos_pair(i, j));
-    });
-    if(moves.empty())return board::nullmove;
-    return moves[rand() % moves.size()];
-  }
 
   static constexpr score_t CENTIPAWN = 256,
                            MATERIAL_PAWN = 100*CENTIPAWN,
@@ -155,21 +54,6 @@ public:
     m += piece::size(mask & bits_slid_diag & bits_slid_orth) * material_of(QUEEN);
     m += piece::size(mask & get_knight_bits()) * material_of(KNIGHT);
     return m;
-  }
-
-  struct h_state {
-  };
-  h_state hstate;
-  std::vector<h_state> hstate_hist;
-  void _init_hstate() {}
-  void _backup_on_event() {
-    hstate_hist.emplace_back(hstate);
-  }
-  void _update_pos_change(pos_t i, pos_t j) {}
-  void _update_change() {}
-  void _restore_on_event() {
-    hstate = hstate_hist.back();
-    hstate_hist.pop_back();
   }
 
   INLINE score_t h_material(COLOR c) const {
@@ -447,7 +331,7 @@ public:
 
   INLINE score_t get_pvline_score(const MoveLine &pline) {
     assert(check_valid_sequence(pline));
-    auto rec = self.recursive_move_scope();
+    auto &&rec = self.recursive_move_scope();
     for(const move_t &m : pline) {
       rec.scope(m);
     }
@@ -874,7 +758,7 @@ public:
       }
       // recurse
       {
-        auto mscope = mline_scope(m, pline_alt);
+        decltype(auto) mscope = mline_scope(m, pline_alt);
         isdraw_pathdep = is_draw_halfmoves() || is_draw_repetition();
         score = -score_decay(alpha_beta_quiescence(-beta, -alpha, depth - 1, pline_alt, ab_state, reduce_nchecks ? nchecks - 1 : nchecks));
       }
@@ -971,7 +855,7 @@ public:
       MoveLine pline_alt = pline.branch_from_past();
       score_t score = 0;
       {
-        auto mscope = mline_scope(board::nullmove, pline_alt);
+        decltype(auto) mscope = mline_scope(board::nullmove, pline_alt);
         score = -score_decay(alpha_beta_scout(-beta-1, -beta, std::max(0, depth-R-1), pline_alt, ab_state, false));
         mate_threat = (score_is_mate(score) && score < 0);
       }
@@ -1017,7 +901,7 @@ public:
       MoveLine pline_alt = pline.branch_from_past(m);
       score_t score = 0;
       { // move scope
-        auto mscope = mline_scope(m, pline_alt);
+        decltype(auto) mscope = mline_scope(m, pline_alt);
         isdraw_pathdep = is_draw_halfmoves() || is_draw_repetition();
         pos_t i = bitmask::first(m), j = bitmask::second(m) & board::MOVEMASK;
         const bool interesting_move = (is_drop_move(i, j) || is_castling_move(i, j) || is_promotion_move(i, j) || (is_naively_capture_move(i, j) && m_val > -3.5) || (is_naively_checking_move(i, j) && m_val > -9.));
@@ -1130,7 +1014,7 @@ public:
       // PV or hash move, full window
       if(m_val > 999.) {
         {
-          auto mscope = mline_scope(m, pline_alt);
+          decltype(auto) mscope = mline_scope(m, pline_alt);
           isdraw_pathdep = is_draw_halfmoves() || is_draw_repetition();
           score = -score_decay(alpha_beta_pv(-beta, -alpha, depth - 1, pline_alt, ab_state, allow_nullmoves, callback_f, _threatmove));
         }
@@ -1148,7 +1032,7 @@ public:
       } else {
         { // move scope
           const COLOR c = activePlayer();
-          auto mscope = mline_scope(m, pline_alt);
+          decltype(auto) mscope = mline_scope(m, pline_alt);
           isdraw_pathdep = is_draw_halfmoves() || is_draw_repetition();
           pos_t i = bitmask::first(m), j = bitmask::second(m) & board::MOVEMASK;
           const bool interesting_move = (is_drop_move(i, j) || is_castling_move(i, j) || is_promotion_move(i, j) || (is_naively_capture_move(i, j) && m_val > -3.5) || (is_naively_checking_move(i, j) && m_val > -9.));
@@ -1341,17 +1225,8 @@ public:
     return idstate.eval;
   }
 
-  size_t nodes_searched = 0;
   ply_index_t tt_age = 0;
-  size_t zb_hit = 0, zb_miss = 0, zb_occupied = 0;
   size_t ezb_hit = 0, ezb_miss = 0, ezb_occupied = 0;
-
-  void reset_planning() {
-    nodes_searched = 0;
-    zb_hit = 0, zb_miss = 0, zb_occupied = 0;
-    ezb_hit = 0, ezb_miss = 0, ezb_occupied = 0;
-    ++tt_age;
-  }
 
   zobrist::ttable_ptr<tt_ab_entry> ab_ttable = nullptr;
   zobrist::ttable_ptr<tt_eval_entry> e_ttable = nullptr;
@@ -1377,7 +1252,10 @@ public:
 
   template <typename F>
   move_t start_thinking(depth_t depth, iddfs_state &idstate, F &&callback_f, const std::unordered_set<move_t> &searchmoves) {
-    reset_planning();
+    nodes_searched = 0;
+    zb_hit = 0, zb_miss = 0, zb_occupied = 0;
+    ezb_hit = 0, ezb_miss = 0, ezb_occupied = 0;
+    ++tt_age;
     decltype(auto) ab_storage = get_zobrist_alphabeta_scope();
     assert(ab_ttable != nullptr && e_ttable != nullptr);
     debug.set_depth(depth);
@@ -1394,54 +1272,23 @@ public:
     return start_thinking(depth, idstate, searchmoves);
   }
 
-  struct tt_perft_entry {
-    board_info info;
-    depth_t depth;
-    size_t nodes;
-  };
-
-  zobrist::ttable_ptr<tt_perft_entry> perft_ttable = nullptr;
-  decltype(auto) get_zobrist_perft_scope() {
-    const size_t size_perft = zobrist_size;
-    const size_t mem_perft = size_perft * sizeof(tt_perft_entry);
-    return zobrist::make_store_object_scope<tt_perft_entry>(perft_ttable, size_perft);
-  }
-  size_t _perft(depth_t depth, std::vector<tt_perft_entry> &perft_ttable) {
-    if(depth == 1 || depth == 0) {
-      return count_moves(activePlayer());
-    }
-    // look-up:
-    const zobrist::key_t k = zb_hash();
-    if(perft_ttable[k].info == state.info && perft_ttable[k].depth == depth) {
-      ++zb_hit;
-      return perft_ttable[k].nodes;
-    } else {
-      if(perft_ttable[k].info.is_unset())++zb_occupied;
-      ++zb_miss;
-    }
-    // search
-    constexpr bool overwrite = true;
-    size_t nodes = 0;
-    iter_moves([&](pos_t i, pos_t j) mutable -> void {
-      auto mscope = move_scope(bitmask::_pos_pair(i, j));
-      ++nodes_searched;
-      nodes += _perft(depth - 1, perft_ttable);
-    });
-    if(overwrite) {
-      perft_ttable[k] = { .info=state.info, .depth=depth, .nodes=nodes };
-    }
-    return nodes;
+  // callbacks
+  INLINE void make_move(pos_t i, pos_t j) {
+    Perft::make_move(i, j);
   }
 
-  inline size_t perft(depth_t depth=1) {
-    decltype(auto) store_scope = get_zobrist_perft_scope();
-    zb_hit = 0, zb_miss = 0, zb_occupied = 0;
-    return _perft(depth, store_scope.get_object());
+  INLINE void make_move(move_t m) {
+    return make_move(bitmask::first(m), bitmask::second(m));
   }
 
+  INLINE void retract_move() {
+    Perft::retract_move();
+  }
+
+  // constructor
   DebugTracer<Engine> debug;
   Engine(const fen::FEN fen=fen::starting_pos, size_t zbsize=ZOBRIST_SIZE):
-    Board(fen, zbsize), debug(*this)
+    Perft(fen, zbsize), debug(*this)
   {
     const std::vector<PIECE> piece_types = {PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING};
     std::vector<std::pair<score_t, PIECE>> pieces;
@@ -1452,8 +1299,6 @@ public:
     for(const auto &[_, p] : pieces) {
       MATERIAL_PIECE_ORDERING.emplace_back(p);
     }
-    hstate_hist.reserve(100);
-    _init_hstate();
   }
 
   virtual ~Engine() {}

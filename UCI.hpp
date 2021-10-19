@@ -65,7 +65,7 @@ struct UCI {
   }
 
   // remove engine: no memory leaks, no nothing, ready to start again
-  void  destroy() {
+  void destroy() {
     lock_guard guard(engine_mtx);
     if(engine != nullptr) {
       _printf("destroy\n");
