@@ -131,6 +131,13 @@ struct RecursiveMoveLineScope {
     ++counter;
   }
 
+  INLINE void unscope() {
+    assert(counter > 0);
+    mline.recall();
+    b.retract_move();
+    --counter;
+  }
+
   INLINE ~RecursiveMoveLineScope() {
     if(!is_acting_scope)return;
     for(int i = 0; i < counter; ++i) {
