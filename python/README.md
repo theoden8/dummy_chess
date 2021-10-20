@@ -18,6 +18,35 @@ Depending on the usage, it currently caps at 80% of the UCI binary.
 
 ## usage
 
+### example 1
+
+```python
+#!/usr/bin/env python3
+
+
+import dummy_chess
+
+
+if __name__ == "__main__":
+    # signature: constructor(fen=startingpos: string)
+    chess = dummy_chess.ChessDummy()
+    for m in chess.legal_moves:
+        with chess.step_scope(m):
+            score = chess.evaluate()
+            scores = [' %.2f' % score if score >= 0 else '%.2f' % score]
+            time_spent = .0
+            # remember static quiescence evaluation at every depth
+            def func(depth: int, important: bool, score: float, time_elapsed: float, **kwargs):
+                global scores, time_spent
+                scores += [' %.2f' % score if score >= 0 else '%.2f' % score]
+                time_spent = time_elapsed
+            # signature: iterate_depths(maxdepth, visitor(dict))
+            chess.iterate_depths(12, lambda info: func(**info))
+            print(m, 'depth/eval:', scores, 'time=%.2fs' % time_spent)
+```
+
+### example 2
+
 ```python
 #!/usr/bin/env python3
 
