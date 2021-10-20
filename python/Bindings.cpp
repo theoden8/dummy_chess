@@ -106,6 +106,19 @@ struct BoardBindings {
     return boost::python::make_tuple(py_bestmove, py_score);
   }
 
+  boost::python::list get_mailbox_repr() const {
+    boost::python::list repr;
+    for(pos_t i = 0; i < board::LEN; ++i) {
+      boost::python::list row;
+      for(pos_t j = 0; j < board::LEN; ++j) {
+        const pos_t ind = board::_pos(i, j);
+        row.append(engine[ind].str());
+      }
+      repr.append(row);
+    }
+    return repr;
+  }
+
   ~BoardBindings() {
     if(engine_ab_storage != nullptr) {
       delete engine_ab_storage;
@@ -128,5 +141,6 @@ BOOST_PYTHON_MODULE(dummy_chess) {
     .add_property("fen", &BoardBindings::fen)
     .def("get_depth_move", &BoardBindings::get_fixed_depth_move)
     .def("start_thinking", &BoardBindings::start_thinking)
+    .def("as_list", &BoardBindings::get_mailbox_repr)
   ;
 }
