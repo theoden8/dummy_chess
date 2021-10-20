@@ -21,11 +21,10 @@ struct BoardBindings {
     engine(fen::load_from_string(boost::python::extract<std::string>(fenstring)))
   {}
 
-  void make_move(const boost::python::str &py_m) {
-    if(!list_legal_moves().contains(py_m)) {
-      throw std::runtime_error("invalid move");
+  void make_move(const std::string &s) {
+    if(!list_legal_moves().contains(s)) {
+      throw std::runtime_error("invalid move <"s + s + ">"s);
     }
-    std::string s = boost::python::extract<std::string>(py_m);
     pgn::PGN pgn(engine.self);
     bool flag1, flag2;
     const move_t m = pgn.read_move_with_flags(s, flag1, flag2);
@@ -40,16 +39,13 @@ struct BoardBindings {
     boost::python::list legalmoves;
     engine.iter_moves([&](pos_t i, pos_t j) mutable noexcept -> void {
       const move_t m = bitmask::_pos_pair(i, j);
-      boost::python::str py_m(pgn::_move_str(engine.self, m));
-      legalmoves.append(py_m);
+      legalmoves.append(pgn::_move_str(engine.self, m));
     });
     return legalmoves;
   }
 
-  boost::python::str sample() const {
-    const move_t m = engine.get_random_move();
-    boost::python::str py_m(pgn::_move_str(engine.self, m));
-    return py_m;
+  decltype(auto) sample() const {
+    return pgn::_move_str(engine.self, engine.get_random_move());
   }
 
   Status status() const {
@@ -61,10 +57,8 @@ struct BoardBindings {
     return Status::ONGOING;
   }
 
-  boost::python::str fen() const {
-    fen::FEN f = engine.export_as_fen();
-    std::string s = fen::export_as_string(f);
-    return boost::python::str(s);
+  decltype(auto) fen() const {
+    return fen::export_as_string(engine.export_as_fen());
   }
 
   void init_abstorage_scope() {
@@ -78,8 +72,8 @@ struct BoardBindings {
     Engine::iddfs_state idstate;
     const Engine::depth_t d = boost::python::extract<Engine::depth_t>(depth);
     move_t bestmove = engine.start_thinking(d, idstate);
-    boost::python::str py_bestmove(pgn::_move_str(engine.self, bestmove));
-    double py_score(float(idstate.eval) / Engine::MATERIAL_PAWN);
+    std::string py_bestmove = pgn::_move_str(engine.self, bestmove);
+    double py_score = float(idstate.eval) / Engine::MATERIAL_PAWN;
     return boost::python::make_tuple(py_bestmove, py_score);
   }
 
@@ -101,8 +95,8 @@ struct BoardBindings {
       info[boost::python::str("important")] = bool(verbose);
       return visitor(info);
     }, {});
-    boost::python::str py_bestmove(pgn::_move_str(engine.self, bestmove));
-    double py_score(float(idstate.eval) / Engine::MATERIAL_PAWN);
+    std::string py_bestmove = pgn::_move_str(engine.self, bestmove);
+    double py_score = float(idstate.eval) / Engine::MATERIAL_PAWN;
     return boost::python::make_tuple(py_bestmove, py_score);
   }
 
@@ -111,7 +105,7 @@ struct BoardBindings {
     for(pos_t i = 0; i < board::LEN; ++i) {
       boost::python::list row;
       for(pos_t j = 0; j < board::LEN; ++j) {
-        const pos_t ind = board::_pos(i, j);
+        const pos_t ind = board::_pos(A+j, 1+i);
         row.append(engine[ind].str());
       }
       repr.append(row);
