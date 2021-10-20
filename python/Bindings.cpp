@@ -61,6 +61,13 @@ struct BoardBindings {
     return fen::export_as_string(engine.export_as_fen());
   }
 
+  // perft stuff
+  boost::python::long_ perft(const boost::python::long_ &depth) {
+    Engine::depth_t d = boost::python::extract<Engine::depth_t>(depth);
+    return boost::python::long_(engine.perft(d));
+  }
+
+  // engine stuff
   void init_abstorage_scope() {
     if(engine_ab_storage == nullptr) {
       engine_ab_storage = new typename Engine::ab_storage_t(engine.get_zobrist_alphabeta_scope());
@@ -127,12 +134,13 @@ BOOST_PYTHON_MODULE(dummy_chess) {
     .value("CHECKMATE", BoardBindings::Status::CHECKMATE);
   boost::python::class_<BoardBindings>("ChessDummy")
     .def(boost::python::init<boost::python::str>())
+    .add_property("status", &BoardBindings::status)
+    .add_property("legal_moves", &BoardBindings::list_legal_moves)
+    .add_property("fen", &BoardBindings::fen)
+    .def("sample", &BoardBindings::sample)
     .def("step", &BoardBindings::make_move)
     .def("undo", &BoardBindings::retract_move)
-    .add_property("legal_moves", &BoardBindings::list_legal_moves)
-    .def("sample", &BoardBindings::sample)
-    .add_property("status", &BoardBindings::status)
-    .add_property("fen", &BoardBindings::fen)
+    .def("perft", &BoardBindings::perft)
     .def("get_depth_move", &BoardBindings::get_fixed_depth_move)
     .def("start_thinking", &BoardBindings::start_thinking)
     .def("as_list", &BoardBindings::get_mailbox_repr)

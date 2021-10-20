@@ -41,6 +41,8 @@ if __name__ == "__main__":
     chess.undo()
     print('status', chess.status)
     # status ONGOING
+    print('perft', chess.perft(5))
+    # perft 101895896
     print('fixed depth move', chess.get_depth_move(3))
     # fixed depth move ('Rxb2+', -1.728906273841858)
     def func(info: dict) -> bool:
