@@ -120,8 +120,8 @@ BOOST_PYTHON_MODULE(dummy_chess) {
     .value("CHECKMATE", BoardBindings::Status::CHECKMATE);
   boost::python::class_<BoardBindings>("ChessDummy")
     .def(boost::python::init<boost::python::str>())
-    .def("move", &BoardBindings::make_move)
-    .def("unmove", &BoardBindings::retract_move)
+    .def("step", &BoardBindings::make_move)
+    .def("undo", &BoardBindings::retract_move)
     .add_property("legal_moves", &BoardBindings::list_legal_moves)
     .def("sample", &BoardBindings::sample)
     .add_property("status", &BoardBindings::status)
