@@ -40,7 +40,7 @@ if __name__ == "__main__":
                 global scores, time_spent
                 scores += [' %.2f' % score if score >= 0 else '%.2f' % score]
                 time_spent = time_elapsed
-            # signature: iterate_depths(maxdepth, visitor(dict))
+            # signature: iterate_depths(maxdepth: int, visitor(dict) -> None)
             chess.iterate_depths(12, lambda info: func(**info))
             print(m, 'depth/eval:', scores, 'time=%.2fs' % time_spent)
 ```
