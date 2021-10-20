@@ -36,9 +36,9 @@ if __name__ == "__main__":
     random_move = chess.sample()
     print('random move', random_move)
     # random move Qg4
-    chess.move(random_move)
+    chess.step(random_move)
     print('new fen', chess.fen)
-    chess.unmove()
+    chess.undo()
     print('status', chess.status)
     # status ONGOING
     print('fixed depth move', chess.get_depth_move(3))
