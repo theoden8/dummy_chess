@@ -4,8 +4,8 @@ project(py_dummy_chess)
 set(CMAKE_CXX_FLAGS "-std=c++20 -pedantic")
 include_directories($(CMAKE_CURRENT_SOURCE_DIR)/..)
 
-find_package(Boost REQUIRED COMPONENTS python)
-find_package(Python3 REQUIRED COMPONENTS Development)
+find_package(Boost REQUIRED COMPONENTS python numpy)
+find_package(Python3 REQUIRED COMPONENTS Development NumPy)
 
 include_directories(${Python3_INCLUDE_DIRS} ${Boost_INCLUDE_DIR})
 message("Boost includes: ${Boost_INCLUDE_DIR}")

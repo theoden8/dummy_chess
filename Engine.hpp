@@ -1,6 +1,7 @@
 #pragma once
 
 
+#include <memory>
 #include <algorithm>
 #include <valarray>
 #include <map>
@@ -24,6 +25,37 @@ public:
                         ENABLE_SEL_LMR = false && ENABLE_SELECTIVITY;
   static constexpr bool ENABLE_IID = false;
 
+  // callbacks
+  INLINE void make_move(pos_t i, pos_t j) {
+    Perft::make_move(i, j);
+  }
+
+  INLINE void make_move(move_t m) {
+    return make_move(bitmask::first(m), bitmask::second(m));
+  }
+
+  INLINE void retract_move() {
+    Perft::retract_move();
+  }
+
+  // provide affected methods
+  INLINE decltype(auto) engine_move_scope(move_t m) {
+    return make_move_scope(*this, m);
+  }
+
+  INLINE decltype(auto) engine_mline_scope(move_t m, MoveLine &mline) {
+    return make_mline_scope(*this, m, mline);
+  }
+
+  INLINE decltype(auto) engine_recursive_move_scope() {
+    return make_recursive_move_scope(*this);
+  }
+
+  INLINE decltype(auto) engine_recursive_mline_scope(MoveLine &mline) {
+    return make_recursive_mline_scope(*this, mline);
+  }
+
+  // definitions and such
   using score_t = int32_t;
 
   static constexpr score_t CENTIPAWN = 256,
@@ -541,11 +573,11 @@ public:
         }
 //        pline.draft_line(zb.m_hint);
         depth_t R = 0;
+        auto rec_scope = this->engine_recursive_mline_scope(pline);
         for(auto m : zb.m_hint) {
           if(m==board::nullmove)break;
-          make_move(m);
+          rec_scope.scope(m);
           ++R;
-          pline.premove(m);
           if(is_draw_repetition() || is_draw_halfmoves()) {
             break;
           }
@@ -569,8 +601,7 @@ public:
           assert(check_valid_sequence(pline));
         }
         for(depth_t i = 0; i < R; ++i) {
-          pline.recall();
-          retract_move();
+          rec_scope.unscope();
           if(can_return_score) {
             score = -score_decay(score);
           }
@@ -758,7 +789,7 @@ public:
       }
       // recurse
       {
-        decltype(auto) mscope = mline_scope(m, pline_alt);
+        decltype(auto) mscope = this->engine_mline_scope(m, pline_alt);
         isdraw_pathdep = is_draw_halfmoves() || is_draw_repetition();
         score = -score_decay(alpha_beta_quiescence(-beta, -alpha, depth - 1, pline_alt, ab_state, reduce_nchecks ? nchecks - 1 : nchecks));
       }
@@ -855,7 +886,7 @@ public:
       MoveLine pline_alt = pline.branch_from_past();
       score_t score = 0;
       {
-        decltype(auto) mscope = mline_scope(board::nullmove, pline_alt);
+        decltype(auto) mscope = this->engine_mline_scope(board::nullmove, pline_alt);
         score = -score_decay(alpha_beta_scout(-beta-1, -beta, std::max(0, depth-R-1), pline_alt, ab_state, false));
         mate_threat = (score_is_mate(score) && score < 0);
       }
@@ -901,7 +932,7 @@ public:
       MoveLine pline_alt = pline.branch_from_past(m);
       score_t score = 0;
       { // move scope
-        decltype(auto) mscope = mline_scope(m, pline_alt);
+        decltype(auto) mscope = this->engine_mline_scope(m, pline_alt);
         isdraw_pathdep = is_draw_halfmoves() || is_draw_repetition();
         pos_t i = bitmask::first(m), j = bitmask::second(m) & board::MOVEMASK;
         const bool interesting_move = (is_drop_move(i, j) || is_castling_move(i, j) || is_promotion_move(i, j) || (is_naively_capture_move(i, j) && m_val > -3.5) || (is_naively_checking_move(i, j) && m_val > -9.));
@@ -1014,7 +1045,7 @@ public:
       // PV or hash move, full window
       if(m_val > 999.) {
         {
-          decltype(auto) mscope = mline_scope(m, pline_alt);
+          decltype(auto) mscope = this->engine_mline_scope(m, pline_alt);
           isdraw_pathdep = is_draw_halfmoves() || is_draw_repetition();
           score = -score_decay(alpha_beta_pv(-beta, -alpha, depth - 1, pline_alt, ab_state, allow_nullmoves, callback_f, _threatmove));
         }
@@ -1032,7 +1063,7 @@ public:
       } else {
         { // move scope
           const COLOR c = activePlayer();
-          decltype(auto) mscope = mline_scope(m, pline_alt);
+          decltype(auto) mscope = this->engine_mline_scope(m, pline_alt);
           isdraw_pathdep = is_draw_halfmoves() || is_draw_repetition();
           pos_t i = bitmask::first(m), j = bitmask::second(m) & board::MOVEMASK;
           const bool interesting_move = (is_drop_move(i, j) || is_castling_move(i, j) || is_promotion_move(i, j) || (is_naively_capture_move(i, j) && m_val > -3.5) || (is_naively_checking_move(i, j) && m_val > -9.));
@@ -1104,11 +1135,6 @@ public:
     void reset() {
       ab_ttable_scope.reset();
       e_ttable_scope.reset();
-    }
-
-    void end_scope() {
-      ab_ttable_scope.end_scope();
-      e_ttable_scope.end_scope();
     }
   };
 
@@ -1228,8 +1254,8 @@ public:
   ply_index_t tt_age = 0;
   size_t ezb_hit = 0, ezb_miss = 0, ezb_occupied = 0;
 
-  zobrist::ttable_ptr<tt_ab_entry> ab_ttable = nullptr;
-  zobrist::ttable_ptr<tt_eval_entry> e_ttable = nullptr;
+  std::shared_ptr<zobrist::ttable<tt_ab_entry>> ab_ttable;
+  std::shared_ptr<zobrist::ttable<tt_eval_entry>> e_ttable;
 
   decltype(auto) get_zobrist_alphabeta_scope() {
     const size_t size_ab = zobrist_size;
@@ -1270,19 +1296,6 @@ public:
   INLINE move_t start_thinking(depth_t depth, const std::unordered_set<move_t> &searchmoves={}) {
     iddfs_state idstate;
     return start_thinking(depth, idstate, searchmoves);
-  }
-
-  // callbacks
-  INLINE void make_move(pos_t i, pos_t j) {
-    Perft::make_move(i, j);
-  }
-
-  INLINE void make_move(move_t m) {
-    return make_move(bitmask::first(m), bitmask::second(m));
-  }
-
-  INLINE void retract_move() {
-    Perft::retract_move();
   }
 
   // constructor

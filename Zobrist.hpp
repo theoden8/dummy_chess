@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <cstdint>
 
+#include <memory>
 #include <array>
 #include <unordered_set>
 #include <vector>
@@ -80,30 +81,24 @@ INLINE void toggle_castling(key_t &zb, COLOR c, CASTLING_SIDE side) {
 
 
 template <typename T> using ttable = std::vector<T>;
-template <typename T> using ttable_ptr = ttable<T> *;
 
 template<typename InnerObject>
 struct StoreScope {
-  zobrist::ttable_ptr<InnerObject> &zb_store;
-  bool is_outer_scope;
+  std::shared_ptr<zobrist::ttable<InnerObject>> &zb_store;
 
-  explicit INLINE StoreScope(zobrist::ttable_ptr<InnerObject> &scope_ptr, size_t zbsize):
-    zb_store(scope_ptr),
-    is_outer_scope(scope_ptr == nullptr)
+  explicit INLINE StoreScope(std::shared_ptr<zobrist::ttable<InnerObject>> &scope_ptr, size_t zbsize):
+    zb_store(scope_ptr)
   {
-    if(zb_store == nullptr) {
-      zb_store = new zobrist::ttable<InnerObject>(zbsize);
+    if(!zb_store) {
+      zb_store.reset(new zobrist::ttable<InnerObject>(zbsize));
       reset();
     }
   }
 
   explicit StoreScope(const StoreScope<InnerObject> &other) = delete;
   explicit INLINE StoreScope(StoreScope<InnerObject> &&other):
-    zb_store(other.zb_store),
-    is_outer_scope(other.is_outer_scope)
-  {
-    other.is_outer_scope = false;
-  }
+    zb_store(other.zb_store)
+  {}
 
   void reset() {
     for(size_t i = 0; i < zb_store->size(); ++i) {
@@ -114,22 +109,10 @@ struct StoreScope {
   zobrist::ttable<InnerObject> &get_object() {
     return *zb_store;
   }
-
-  void end_scope() {
-    if(is_outer_scope) {
-      delete zb_store;
-      zb_store = nullptr;
-      is_outer_scope = false;
-    }
-  }
-
-  INLINE ~StoreScope() {
-    end_scope();
-  }
 };
 
 template <typename InnerObject>
-INLINE decltype(auto) make_store_object_scope(zobrist::ttable_ptr<InnerObject> &zb_store, size_t zbsize) {
+INLINE decltype(auto) make_store_object_scope(std::shared_ptr<zobrist::ttable<InnerObject>> &zb_store, size_t zbsize) {
   return StoreScope<InnerObject>(zb_store, zbsize);
 }
 

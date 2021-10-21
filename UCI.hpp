@@ -9,6 +9,7 @@
 #include <chrono>
 #include <thread>
 #include <optional>
+#include <memory>
 #include <mutex>
 #include <atomic>
 
@@ -21,10 +22,10 @@ using namespace std::chrono;
 
 struct UCI {
   // engine singleton
-  Engine *engine = nullptr;
+  std::unique_ptr<Engine> engine_ptr;
   // must take ownership of ttables and such so that initialization
   // doesn't slow the engine down every time "go" is called
-  typename Engine::ab_storage_t *engine_ab_storage = nullptr;
+  std::unique_ptr<typename Engine::ab_storage_t> engine_ab_storage_ptr;
   // last IDDFS state (for ponderhit)
   Engine::iddfs_state engine_idstate;
 
@@ -57,22 +58,19 @@ struct UCI {
   // nice lock-safe initialization according to the currently set options
   void init(const fen::FEN &f) {
     lock_guard guard(engine_mtx);
-    destroy();
     _printf("init\n");
     const size_t zobrist_size = (engine_options.hash_mb << (20 - 7));
-    engine = new Engine(f, zobrist_size);
-    engine_ab_storage = new typename Engine::ab_storage_t(engine->get_zobrist_alphabeta_scope());
+    engine_ptr.reset(new Engine(f, zobrist_size));
+    engine_ab_storage_ptr.reset(new Engine::ab_storage_t(engine_ptr->get_zobrist_alphabeta_scope()));
   }
 
   // remove engine: no memory leaks, no nothing, ready to start again
   void destroy() {
     lock_guard guard(engine_mtx);
-    if(engine != nullptr) {
+    if(!engine_ptr) {
       _printf("destroy\n");
-      delete engine_ab_storage;
-      engine_ab_storage = nullptr;
-      delete engine;
-      engine = nullptr;
+      engine_ab_storage_ptr.reset(nullptr);
+      engine_ptr.reset(nullptr);
     }
   }
 
@@ -372,25 +370,25 @@ struct UCI {
           for(; ind < cmd.size(); ++ind) {
             moves.put(scan_move(cmd[ind]));
           }
-          str::pdebug("moves"s, engine->_line_str(moves, true));
+          str::pdebug("moves"s, engine_ptr->_line_str(moves, true));
           for(const auto m : moves) {
-            engine->make_move(m);
+            engine_ptr->make_move(m);
           }
         }
         str::pdebug("position set");
-        //engine->print();
+        //engine_ptr->print();
       }
       return;
       case CMD_DISPLAY:
       {
         join_engine_thread();
-        const fen::FEN f = engine->export_as_fen();
+        const fen::FEN f = engine_ptr->export_as_fen();
         respond(RESP_DISPLAY, "fen:"s, fen::export_as_string(f));
-        const double hashfull = double(engine->zb_occupied) / double(engine->zobrist_size);
-        const double hit_rate = double(engine->zb_hit) / double(1e-9 + engine->zb_hit + engine->zb_miss);
+        const double hashfull = double(engine_ptr->zb_occupied) / double(engine_ptr->zobrist_size);
+        const double hit_rate = double(engine_ptr->zb_hit) / double(1e-9 + engine_ptr->zb_hit + engine_ptr->zb_miss);
         respond(RESP_DISPLAY, "stat_hashfull:"s, hashfull);
         respond(RESP_DISPLAY, "stat_hit_rate:"s, hit_rate);
-        respond(RESP_DISPLAY, "stat_nodes_searched:"s, engine->nodes_searched);
+        respond(RESP_DISPLAY, "stat_nodes_searched:"s, engine_ptr->nodes_searched);
       }
       return;
       case CMD_GO:
@@ -483,7 +481,7 @@ struct UCI {
     const double prev_time_spent = time_spent;
     const size_t prev_nodes_searched = nodes_searched;
     time_spent = 1e-9*duration_cast<nanoseconds>(system_clock::now()-start).count();
-    nodes_searched = engine->nodes_searched;
+    nodes_searched = engine_ptr->nodes_searched;
     const double nps = double(nodes_searched - prev_nodes_searched) / (time_spent - prev_time_spent);
     return nps;
   }
@@ -492,23 +490,23 @@ struct UCI {
     return (
         should_stop
         || (!args.infinite && time_spent >= args.movetime)
-        || engine->nodes_searched >= args.nodes
+        || engine_ptr->nodes_searched >= args.nodes
         || time_spent >= time_to_use
     );
   }
 
   std::string get_score_type_string(score_t score) const {
     std::string s = ""s;
-    if(!engine->score_is_mate(score)) {
+    if(!engine_ptr->score_is_mate(score)) {
       s += "cp"s;
     } else {
       s += "mate"s;
     }
     s += " "s;
-    if(!engine->score_is_mate(score)) {
+    if(!engine_ptr->score_is_mate(score)) {
       s += std::to_string(score / Engine::CENTIPAWN);
     } else {
-      depth_t mate_in_ply = engine->score_mate_in(score);
+      depth_t mate_in_ply = engine_ptr->score_mate_in(score);
       mate_in_ply -= (mate_in_ply < 0) ? 1 : -1;
       s += std::to_string(mate_in_ply / 2);
     }
@@ -522,7 +520,7 @@ struct UCI {
     } else if(args.movetime != DBL_MAX) {
       return std::max(args.movetime - 1., args.movetime * .5);
     }
-    const COLOR c = engine->activePlayer();
+    const COLOR c = engine_ptr->activePlayer();
     double inctime = (c == WHITE) ? args.winc : args.binc;
     inctime = std::max(inctime - 2., inctime * .3);
     double tottime = (c == WHITE) ? args.wtime : args.btime;
@@ -532,25 +530,25 @@ struct UCI {
 
   // intermediate responses while thinking. when pondering, this might confuse the GUI
   void respond_full_iddfs(const Engine::iddfs_state &engine_idstate, size_t nps, double time_spent) {
-    const double hashfull = double(engine->zb_occupied) / double(engine->zobrist_size);
+    const double hashfull = double(engine_ptr->zb_occupied) / double(engine_ptr->zobrist_size);
     respond(RESP_INFO, "depth"s, engine_idstate.curdepth,
                        "seldepth"s, engine_idstate.pline.size(),
-                       "nodes"s, engine->nodes_searched,
+                       "nodes"s, engine_ptr->nodes_searched,
                        "nps"s, size_t(nps),
                        "score"s, get_score_type_string(engine_idstate.eval),
-                       "pv"s, engine->_line_str(engine_idstate.pline, true),
+                       "pv"s, engine_ptr->_line_str(engine_idstate.pline, true),
                        "time"s, int(round(time_spent * 1e3)),
                        "hashfull"s, int(round(hashfull * 1e3)));
   }
 
   // when out of time, spit out this final response.
   void respond_final_iddfs(const Engine::iddfs_state &engine_idstate, move_t bestmove, double time_spent) {
-    const double hashfull = double(engine->zb_occupied) / double(engine->zobrist_size);
+    const double hashfull = double(engine_ptr->zb_occupied) / double(engine_ptr->zobrist_size);
     respond(RESP_INFO, "depth"s, engine_idstate.curdepth,
                        "seldepth"s, engine_idstate.pline.size(),
-                       "nodes"s, engine->nodes_searched,
+                       "nodes"s, engine_ptr->nodes_searched,
                        "score"s, get_score_type_string(engine_idstate.eval),
-                       "pv"s, engine->_line_str(engine_idstate.pline, true),
+                       "pv"s, engine_ptr->_line_str(engine_idstate.pline, true),
                        "time"s, int(round(time_spent * 1e3)),
                        "hashfull"s, int(round(hashfull * 1e3)));
   }
@@ -568,7 +566,7 @@ struct UCI {
     _printf("movetime: %.6f\n", args.movetime);
     _printf("infinite: %d\n", args.infinite ? 1 : 0);
     std::vector<std::string> searchmoves_s;
-    for(auto&s:args.searchmoves)searchmoves_s.emplace_back(engine->_move_str(s));
+    for(auto&s:args.searchmoves)searchmoves_s.emplace_back(engine_ptr->_move_str(s));
     std::string s = str::join(searchmoves_s, ", "s);
     _printf("searchmoves: [%s]\n", s.c_str());
     // TODO mate, movestogo
@@ -585,7 +583,7 @@ struct UCI {
     }
     bool pondering = args.ponder;
     bool return_from_search = false;
-    const move_t bestmove = engine->start_thinking(args.depth, engine_idstate, [&](bool verbose) mutable -> bool {
+    const move_t bestmove = engine_ptr->start_thinking(args.depth, engine_idstate, [&](bool verbose) mutable -> bool {
       if(engine_idstate.pline.empty()) {
         return true;
       } else if(return_from_search) {
@@ -614,9 +612,9 @@ struct UCI {
       respond_final_iddfs(engine_idstate, bestmove, time_spent);
     }
 		if(engine_idstate.pondermove() != board::nullmove) {
-			respond(RESP_BESTMOVE, engine->_move_str(bestmove), "ponder"s, engine->_move_str(engine_idstate.pondermove()));
+			respond(RESP_BESTMOVE, engine_ptr->_move_str(bestmove), "ponder"s, engine_ptr->_move_str(engine_idstate.pondermove()));
 		} else {
-			respond(RESP_BESTMOVE, engine->_move_str(bestmove));
+			respond(RESP_BESTMOVE, engine_ptr->_move_str(bestmove));
 		}
     str::pdebug("NOTE: search is over");
     should_stop = true;
@@ -628,14 +626,14 @@ struct UCI {
     const depth_t depth = args.depth;
     size_t total = 0;
     {
-      decltype(auto) store_scope = engine->get_zobrist_perft_scope();
-      engine->iter_moves([&](pos_t i, pos_t j) mutable -> void {
+      decltype(auto) store_scope = engine_ptr->get_zobrist_perft_scope();
+      engine_ptr->iter_moves([&](pos_t i, pos_t j) mutable -> void {
         const move_t m = bitmask::_pos_pair(i, j);
-        std::string sm = engine->_move_str(m);
-        engine->make_move(m);
+        std::string sm = engine_ptr->_move_str(m);
+        engine_ptr->make_move(m);
         size_t nds = 0;
         if(depth > 1) {
-          nds = engine->perft(depth-1);
+          nds = engine_ptr->perft(depth-1);
         } else if(depth == 1) {
           nds = 1;
         } else {
@@ -643,7 +641,7 @@ struct UCI {
         }
         str::print(sm + ":", nds);
         total += nds;
-        engine->retract_move();
+        engine_ptr->retract_move();
       });
     }
     str::print();

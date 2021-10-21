@@ -1,3 +1,7 @@
+#pragma once
+
+#include <memory>
+
 #include <Board.hpp>
 
 
@@ -115,7 +119,7 @@ public:
   size_t nodes_searched = 0;
   size_t zb_hit = 0, zb_miss = 0, zb_occupied = 0;
 
-  zobrist::ttable_ptr<tt_perft_entry> perft_ttable = nullptr;
+  std::shared_ptr<zobrist::ttable<tt_perft_entry>> perft_ttable = nullptr;
   decltype(auto) get_zobrist_perft_scope() {
     const size_t size_perft = zobrist_size;
     const size_t mem_perft = size_perft * sizeof(tt_perft_entry);
@@ -138,7 +142,7 @@ public:
     constexpr bool overwrite = true;
     size_t nodes = 0;
     iter_moves([&](pos_t i, pos_t j) mutable -> void {
-      decltype(auto) mscope = move_scope(bitmask::_pos_pair(i, j));
+      decltype(auto) mscope = self.move_scope(bitmask::_pos_pair(i, j));
       ++nodes_searched;
       nodes += _perft(depth - 1, perft_ttable);
     });
@@ -148,7 +152,7 @@ public:
     return nodes;
   }
 
-  inline size_t perft(depth_t depth=1) {
+  INLINE size_t perft(depth_t depth=1) {
     decltype(auto) store_scope = get_zobrist_perft_scope();
     zb_hit = 0, zb_miss = 0, zb_occupied = 0;
     return _perft(depth, store_scope.get_object());
