@@ -6,7 +6,9 @@
 
 #include <Engine.hpp>
 
+
 using namespace std::chrono;
+
 namespace python = boost::python;
 namespace np = python::numpy;
 
@@ -74,7 +76,7 @@ struct BoardBindings {
     np::initialize();
   }
 
-  BoardBindings(const python::str &fenstring):
+  explicit BoardBindings(const python::str &fenstring):
     engine(fen::load_from_string(python::extract<std::string>(fenstring)))
   {
     np::initialize();
