@@ -25,6 +25,9 @@ m42.cpp:
 m42.h:
 	./scripts/m42_download
 
+nnue:
+	$(CXX) $(DBGFLAGS) $(CXXFLAGS) nnue.cpp $(SOURCES) $(LDFLAGS) -o $@
+
 dummy_chess: simple.cpp $(SOURCES) $(HPPFILES) Makefile
 	$(CXX) $(DBGFLAGS) $(CXXFLAGS) simple.cpp $(SOURCES) $(LDFLAGS) -o $@
 
