@@ -119,6 +119,36 @@ namespace bitmask {
     return (a <= b) ? ones_between_eq(a, b) : ones_between_eq(b, a);
   }
 
+  template <typename T>
+  inline constexpr T reverse_bytes(T v) {
+#if __cplusplus > 202002L
+    return std::byteswap(v);
+#elif  defined(__GNUC__)
+    return __builtin_bswap64(v);
+#elif defined(_MSC_VER)
+    return _byteswap_uint64(b);
+#else
+    #warning "builtins could not be used"
+    static_assert(std::is_same_v<T, uint64_t>, "without built-ins should be uint64_t");
+    v = ((v >> 8) & 0x00FF00FF00FF00FFULL) | ((v & 0x00FF00FF00FF00FFULL) << 8);
+    v = ((v >> 16) & 0x0000FFFF0000FFFFULL) | ((v & 0x0000FFFF0000FFFFULL) << 16);
+    return (v >> 32) | (v << 32);
+#endif
+  }
+
+  template <typename T>
+  inline constexpr T reverse_bits(T v) {
+    T r = v; // r will be reversed bits of v; first get LSB of v
+    int8_t s = sizeof(v) * CHAR_BIT - 1; // extra shift needed at end
+    for(v >>= 1; v; v >>= 1) {
+      r <<= 1;
+      r |= v & 1;
+      --s;
+    }
+    r <<= s;
+    return r;
+  }
+
   // iterate set bits with a function F
   template <typename T, typename F>
   inline constexpr void foreach(T mask, F &&func) {
@@ -145,6 +175,14 @@ namespace bitmask {
       assert(mask & (T(1) << r));
       mask &= ~(T(1) << r);
     }
+  }
+
+  template <typename T, typename F>
+  inline constexpr void foreach_reversed(T mask, F &&func) {
+    foreach(bitmask::reverse_bits(mask), [&](pos_t rpos) mutable noexcept -> void {
+      constexpr pos_t max_index = 1u << bitmask::log2_of_exp2(sizeof(T) * CHAR_BIT);
+      func(max_index - rpos - 1);
+    });
   }
 
   std::vector<pos_t> as_vector(uint64_t mask) {

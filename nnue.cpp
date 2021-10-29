@@ -4,8 +4,10 @@
 int main() {
   const fen::FEN f = fen::starting_pos;
   Board board(f);
+  const std::string filename_nnue = "external/network.nnue"s;
+  str::print("nnue type:", std::string(nn::NNUEFileInfo(filename_nnue)));
   nn::halfkp *nnue = new nn::halfkp(board);
-  nnue->model.load("external/network.nnue"s);
+  nnue->model.load(filename_nnue);
   const float eval = nn::halfkp::value_to_centipawn(nnue->init_forward_pass());
   printf("eval %f\n", eval);
   delete nnue;

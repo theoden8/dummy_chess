@@ -242,6 +242,48 @@ struct BoardBindings {
   }
 };
 
+
+#include <NNUE.hpp>
+
+struct NNUEBindings {
+  const Board board;
+  std::shared_ptr<nn::halfkp> nnue;
+
+  NNUEBindings():
+    board(),
+    nnue(new nn::halfkp(board))
+  {
+    np::initialize();
+  }
+
+  explicit NNUEBindings(const python::str &fenstring):
+    board(fen::load_from_string(python::extract<std::string>(fenstring))),
+    nnue(new nn::halfkp(board))
+  {
+    np::initialize();
+  }
+
+  python::list halfkp_features() const {
+//    nnue->init_halfkp_features(board);
+    python::list result;
+    for(size_t c = 0; c < NO_COLORS; ++c) {
+      np::ndarray phi = np::zeros(python::make_tuple(41024), np::dtype::get_builtin<int8_t>());
+      for(size_t i = 0; i < 41024; ++i) {
+        phi[i] = nnue->inputs[c][i] ? 1 : 0;
+      }
+      result.append(phi);
+    }
+    return result;
+  }
+
+  float eval() const {
+//    nnue->init_halfkp_features(board);
+    const float eval = nn::halfkp::value_to_centipawn(nnue->init_forward_pass());
+    return eval;
+  }
+};
+
+
 BOOST_PYTHON_MODULE(dummy_chess) {
   python::enum_<BoardBindings::Status>("Status")
     .value("ONGOING", BoardBindings::Status::ONGOING)
@@ -279,5 +321,10 @@ BOOST_PYTHON_MODULE(dummy_chess) {
     .def("evaluate", &BoardBindings::evaluate)
     .def("get_simple_features", &BoardBindings::get_simple_feature_set)
     .def("get_move_from_move_t", &BoardBindings::get_move_from_move_t)
+  ;
+  python::class_<NNUEBindings>("NNUEDummy")
+    .def(python::init<const python::str &>())
+    .add_property("halfkp", &NNUEBindings::halfkp_features)
+    .def("eval", &NNUEBindings::eval)
   ;
 }
