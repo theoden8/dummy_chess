@@ -1,6 +1,7 @@
 /gui
 dummy_chess*
 *.o
+*.so
 *.out
 *.dSYM
 *.gcda

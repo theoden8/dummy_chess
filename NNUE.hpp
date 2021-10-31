@@ -41,6 +41,8 @@ template <typename IN_T, size_t IN, typename WT_T, typename OUT_T, size_t OUT> s
   // backprop
 //  mat_t<IN_T, IN, OUT> dLdA;
 //  vec_t<OUT_T, OUT> dLdx;
+  static constexpr size_t in_shape = IN;
+  static constexpr size_t out_shape = OUT;
 
   Affine():
     nn::Layer<IN_T, IN, OUT_T, OUT>()
@@ -48,10 +50,12 @@ template <typename IN_T, size_t IN, typename WT_T, typename OUT_T, size_t OUT> s
 
   const vec_t<OUT_T, OUT> &forward(const vec_t<IN_T, IN> &x) override {
 //    x = _x;
-    for(size_t i = 0; i < IN; ++i) {
-      for(size_t j = 0; j < OUT; ++j) {
-        y[j] += OUT_T(A[i * OUT + j]) * OUT_T(x[j]);
+    for(size_t j = 0; j < OUT; ++j) {
+      OUT_T dotprod = b[j];
+      for(size_t i = 0; i < IN; ++i) {
+        dotprod += OUT_T(A[i * OUT + j]) * OUT_T(x[i]);
       }
+      y[j] = dotprod;
     }
     return y;
   }
@@ -256,23 +260,20 @@ struct Model<NETARCH::HALFKP> : public Model<NETARCH::UNKNOWN> {
       affine()
     {}
 
-    const vec_t<int8_t, M*NO_COLORS> &forward(const std::array<std::bitset<HALFKP_SIZE>, NO_COLORS> &inputs) {
+    const vec_t<int8_t, M*NO_COLORS> &forward(const std::array<std::vector<size_t>, NO_COLORS> &input_indices) {
       // concatenation
       std::array<int16_t, M> _y;
       for(pos_t c = 0; c < NO_COLORS; ++c) {
         _y.fill(0);
-        const auto &sparse_features = inputs[c];
         // affine transform
-        for(size_t i = 0; i < N; ++i) {
-          // very inefficient
-          if(!sparse_features[i])continue;
+        for(size_t i : input_indices[c]) {
           for(size_t j = 0; j < M; ++j) {
             _y[j] += int16_t(affine.A[i * M + j]);
           }
         }
         // clipped relu
         for(size_t j = 0; j < M; ++j) {
-          y[M * c + j] = ClippedReLU<int16_t, M*NO_COLORS, int8_t>::activate(_y[j]);
+          y[M * c + j] = ClippedReLU<int16_t, M*NO_COLORS, int8_t>::activate(affine.b[j] + _y[j]);
         }
       }
       return y;
@@ -306,17 +307,42 @@ struct Model<NETARCH::HALFKP> : public Model<NETARCH::UNKNOWN> {
     return output.forward(hidden2.forward(hidden1.forward(transformed))).front();
   }
 
-  int32_t forward(const std::array<std::bitset<HALFKP_SIZE>, NO_COLORS> &inputs) {
-    return forward_transformed(feature_transformer.forward(inputs));
+  int32_t forward(const std::array<std::vector<size_t>, NO_COLORS> &input_indices) {
+    return forward_transformed(feature_transformer.forward(input_indices));
   }
 
   template <typename AffineT>
-  void read_affine(FILE **fp, AffineT &layer) {
+  void read_affine(FILE **fp, AffineT &layer, bool order=true) {
     using wtType = typename decltype(layer.A)::value_type;
     using outType = typename decltype(layer.b)::value_type;
     str::pdebug("read affine", sizeof(outType), sizeof(wtType));
     fread(layer.b.data(), sizeof(outType), layer.b.size(), *fp);
-    fread(layer.A.data(), sizeof(wtType), layer.A.size(), *fp);
+    if(order) {
+      fread(layer.A.data(), sizeof(wtType), layer.A.size(), *fp);
+    } else {
+      for(size_t j = 0; j < AffineT::out_shape; ++j) {
+        for(size_t i = 0; i < AffineT::in_shape; ++i) {
+          fread(&layer.A[i * AffineT::out_shape + j], sizeof(wtType), 1, *fp);
+        }
+      }
+    }
+  }
+
+  template <typename AffineT>
+  void write_affine(FILE **fp, AffineT &layer, bool order=true) {
+    using wtType = typename decltype(layer.A)::value_type;
+    using outType = typename decltype(layer.b)::value_type;
+    str::pdebug("write affine", sizeof(outType), sizeof(wtType));
+    fwrite(layer.b.data(), sizeof(outType), layer.b.size(), *fp);
+    if(order) {
+      fwrite(layer.A.data(), sizeof(wtType), layer.A.size(), *fp);
+    } else {
+      for(size_t j = 0; j < AffineT::out_shape; ++j) {
+        for(size_t i = 0; i < AffineT::in_shape; ++i) {
+          fwrite(&layer.A[i * AffineT::out_shape + j], sizeof(wtType), 1, *fp);
+        }
+      }
+    }
   }
 
   void load(const std::string &filename) {
@@ -341,13 +367,33 @@ struct Model<NETARCH::HALFKP> : public Model<NETARCH::UNKNOWN> {
     read_affine(&fp, feature_transformer.affine);
     uint32_t header2; fread(&header2, sizeof(uint32_t), 1, fp);
     str::pdebug("header", header2);
-    read_affine(&fp, hidden1.affine);
-    read_affine(&fp, hidden2.affine);
-    read_affine(&fp, output);
+    read_affine(&fp, hidden1.affine, false);
+    read_affine(&fp, hidden2.affine, false);
+    read_affine(&fp, output, false);
     size_t current_pos = ftell(fp);
     str::pdebug("current pos", current_pos);
     fseek(fp, 0, 2);
     assert(ftell(fp) - current_pos == 0);
+    fclose(fp);
+  }
+
+  void save(const std::string &filename) {
+    FILE *fp = fopen(filename.c_str(), "wb");
+    if(fp == nullptr) {
+      str::perror("error: cannot open <", filename, "> for writing");
+      abort();
+    }
+    const std::string net_info = "Features=HalfKP;"s;
+    uint32_t version = -1u; fwrite(&version, sizeof(uint32_t), 1, fp);
+    uint32_t nethash = 0u; fwrite(&nethash, sizeof(uint32_t), 1, fp);
+    uint32_t netsize = net_info.length(); fwrite(&netsize, sizeof(uint32_t), 1, fp);
+    fwrite(net_info.c_str(), sizeof(char), netsize+1, fp);
+    uint32_t header = 0u; fwrite(&header, sizeof(uint32_t), 1, fp);
+    write_affine(&fp, feature_transformer.affine);
+    uint32_t header2 = 0u; fwrite(&header2, sizeof(uint32_t), 1, fp);
+    write_affine(&fp, hidden1.affine, false);
+    write_affine(&fp, hidden2.affine, false);
+    write_affine(&fp, output, false);
     fclose(fp);
   }
 };
@@ -355,15 +401,13 @@ struct Model<NETARCH::HALFKP> : public Model<NETARCH::UNKNOWN> {
 
 struct halfkp {
   Model<NETARCH::HALFKP> model;
-  std::array<std::bitset<Model<NETARCH::HALFKP>::HALFKP_SIZE>, NO_COLORS> inputs;
+  std::array<std::vector<size_t>, NO_COLORS> input_indices;
 
   //std::stack<std::array<float, SIZE_H1>> prev_acc[NO_COLORS];
 
-  explicit halfkp(const Board &board):
+  explicit halfkp():
     model()
-  {
-    init_halfkp_features(board);
-  }
+  {}
 
   static size_t piece_index(PIECE p, bool iswhitepov) {
     if(p == EMPTY)return 0;
@@ -392,30 +436,29 @@ struct halfkp {
     const bool iswhitepov = (c == WHITE);
     const bool ispiecepov = (c == board[pos].color);
     const PIECE p = board[pos].value;
-    str::print("halfkp (", kingpos, pos, halfkp::piece_index(p, ispiecepov), iswhitepov?"True":"False", ") {",
-               orient(iswhitepov, pos), halfkp::piece_index(p, ispiecepov), (10u * board::SIZE + 1) * kingpos,
-               ispiecepov?"True":"False", "}",
-               orient(iswhitepov, pos) + halfkp::piece_index(p, ispiecepov) + (10u * board::SIZE + 1) * kingpos,
-               std::string() + Piece(p, ispiecepov?BLACK:WHITE).str(), board::_pos_str(pos));
+//    str::print("halfkp (", kingpos, pos, halfkp::piece_index(p, ispiecepov), iswhitepov?"True":"False", ") {",
+//               orient(iswhitepov, pos), halfkp::piece_index(p, ispiecepov), (10u * board::SIZE + 1) * kingpos,
+//               ispiecepov?"True":"False", "}",
+//               orient(iswhitepov, pos) + halfkp::piece_index(p, ispiecepov) + (10u * board::SIZE + 1) * kingpos,
+//               std::string() + Piece(p, ispiecepov?BLACK:WHITE).str(), board::_pos_str(pos));
     return orient(iswhitepov, pos) + halfkp::piece_index(p, ispiecepov) + (10u * board::SIZE + 1) * kingpos;
   }
 
   void init_halfkp_features(const Board &board) {
-    std::cout << "init" << std::endl;
     for(pos_t color_index = 0; color_index < NO_COLORS; ++color_index) {
       const COLOR c = std::array<COLOR,2>{board.activePlayer(), enemy_of(board.activePlayer())}[color_index];
-      inputs[color_index].reset();
+      input_indices[color_index].clear();
       const bool iswhitepov = (c == WHITE);
       const size_t orient_kingpos = orient(iswhitepov, board.pos_king[c]);
       const piece_bitboard_t occ = (board.bits[WHITE]|board.bits[BLACK]);
       bitmask::foreach_reversed(occ & ~board.get_king_bits(), [&](pos_t pos) mutable noexcept -> void {
-        inputs[color_index].set(make_halfkp_index(board, c, orient_kingpos, pos));
+        input_indices[color_index].emplace_back(make_halfkp_index(board, c, orient_kingpos, pos));
       });
     }
   }
 
   int32_t init_forward_pass() {
-    return model.forward(inputs);
+    return model.forward(input_indices);
   }
 
 //  void update_feat_persp(
