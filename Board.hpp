@@ -234,7 +234,7 @@ public:
   }
 
   // return piece-type interface, expensive
-  INLINE const Piece operator[](pos_t ind) const {
+  INLINE Piece operator[](pos_t ind) const {
     assert(ind <= board::MOVEMASK);
     const piece_bitboard_t ind_mask = piece::pos_mask(ind);
     const COLOR c = self.color_at_pos(ind);

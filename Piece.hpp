@@ -2,6 +2,7 @@
 
 
 #include <iostream>
+#include <concepts>
 
 #include <String.hpp>
 #include <Bitmask.hpp>
@@ -438,3 +439,14 @@ struct Piece {
     return (color == WHITE) ? toupper(c) : c;
   }
 };
+
+namespace board {
+
+template <typename BoardT>
+concept IndexableView = requires (BoardT b, pos_t ind) {
+  {b[ind]} -> std::convertible_to<Piece>;
+  {b.empty_at_pos(ind)} -> std::convertible_to<bool>;
+  {b.activePlayer()} -> std::convertible_to<COLOR>;
+};
+
+} // namespace board

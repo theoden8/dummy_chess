@@ -247,15 +247,14 @@ struct BoardBindings {
 #include <NNUE.hpp>
 
 struct NNUEBindings {
-  std::shared_ptr<Board> board;
   std::shared_ptr<nn::halfkp> nnue;
+  fen::FEN position = fen::starting_pos;
 
   NNUEBindings():
     nnue(new nn::halfkp())
   {
     np::initialize();
-    board.reset(new Board());
-    nnue->init_halfkp_features(*board);
+    nnue->init_halfkp_features(fen::board_view(position));
   }
 
   explicit NNUEBindings(const python::str &fenstring):
@@ -266,8 +265,8 @@ struct NNUEBindings {
   }
 
   void set_fen(const python::str &fenstring) {
-    board.reset(new Board(fen::load_from_string(python::extract<std::string>(fenstring))));
-    nnue->init_halfkp_features(*board);
+    position = fen::load_from_string(python::extract<std::string>(fenstring));
+    nnue->init_halfkp_features(fen::board_view(position));
   }
 
   python::list halfkp_features() const {
@@ -275,9 +274,11 @@ struct NNUEBindings {
     using T = typename std::remove_reference_t<decltype(nnue->input_indices[0])>::value_type;
     for(size_t c = 0; c < NO_COLORS; ++c) {
       const auto &indices = nnue->input_indices[c];
-      python::list indices_list;
-      for(auto i : indices)indices_list.append(i);
-      result.append(np::array(indices_list, np::dtype::get_builtin<T>()));
+      np::ndarray a = np::from_data(indices.data(), np::dtype::get_builtin<size_t>(),
+                                    python::make_tuple(indices.size()),
+                                    python::make_tuple(sizeof(size_t)),
+                                    python::object());
+      result.append(a);
     }
     return result;
   }

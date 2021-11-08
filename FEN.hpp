@@ -33,6 +33,48 @@ namespace fen {
     }
   } FEN;
 
+  struct board_view {
+    const fen::FEN &f;
+
+    explicit board_view(const fen::FEN &f):
+      f(f)
+    {}
+
+    INLINE bool empty_at_pos(pos_t ind) const {
+      const pos_t f_ind = board::_pos(A+board::_x(ind), board::LEN - board::_y(ind));
+      return f.board[f_ind] == ' ';
+    }
+
+    INLINE Piece char2piece(char ch) const {
+      const COLOR c = islower(ch) ? BLACK : WHITE;
+      PIECE p = EMPTY;
+      switch(tolower(ch)) {
+        case 'p':p=PAWN;break;
+        case 'n':p=KNIGHT;break;
+        case 'b':p=BISHOP;break;
+        case 'r':p=ROOK;break;
+        case 'q':p=QUEEN;break;
+        case 'k':p=KING;break;
+      }
+      return Piece(p, c);
+    }
+
+    INLINE Piece operator[](pos_t ind) const {
+      const pos_t f_ind = board::_pos(A+board::_x(ind), board::LEN - board::_y(ind));
+      return char2piece(f.board[f_ind]);
+    }
+
+    INLINE pos_t get_king_pos(COLOR c) const {
+      const pos_t p = (strchr(f.board.c_str(), (c==WHITE)?'K':'k') - f.board.c_str()) / sizeof(char);
+      const pos_t x = board::_x(p), y = board::LEN - board::_y(p) - 1;
+      return board::_pos(A+x, 1+y);
+    }
+
+    INLINE COLOR activePlayer() const {
+      return f.active_player;
+    }
+  };
+
   fen::FEN load_from_string(const std::string &s) {
     size_t i = 0;
     fen::FEN f = {
@@ -46,6 +88,7 @@ namespace fen {
       .chess960=false,
       .crazyhouse=false,
     };
+    f.board.reserve(board::SIZE + 1);
     // board
     pos_t kingpos[2] = {board::nopos, board::nopos};
     pos_t qrook[2] = {board::nopos, board::nopos};
@@ -65,6 +108,7 @@ namespace fen {
         ++slashcount;
         assert(slashcount == 8);
         f.crazyhouse = true;
+        f.subs.reserve(8);
         continue;
       } else if(*c == ']') {
         continue;
@@ -77,7 +121,7 @@ namespace fen {
         for(int j=0;j<*c-'0';++j, ++board_index)f.board+=' ';
         continue;
       }
-      const pos_t ind = board::_pos(board::_x(board_index), 8 - board::_y(board_index));
+      const pos_t ind = board::_pos(board::_x(board_index), board::LEN - board::_y(board_index));
       f.board += *c;
       switch(*c) {
         case 'K':
@@ -127,7 +171,7 @@ namespace fen {
     assert(f.board.length() <= board::SIZE);
     // skip space
     while(isspace(s[i]))++i;
-    // active plaer
+    // active player
     assert(index("wWbB", s[i]) != nullptr);
     if(s[i] == 'b' || s[i] == 'B')f.active_player=BLACK;
     ++i;

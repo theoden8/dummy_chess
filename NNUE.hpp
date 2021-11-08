@@ -432,7 +432,8 @@ struct halfkp {
     return iswhitepov ? mask : bitmask::reverse_bits(mask);
   }
 
-  static INLINE size_t make_halfkp_index(const Board &board, COLOR c, size_t kingpos, pos_t pos) {
+  template <board::IndexableView BoardT>
+  static INLINE size_t make_halfkp_index(const BoardT &board, COLOR c, size_t kingpos, pos_t pos) {
     const bool iswhitepov = (c == WHITE);
     const bool ispiecepov = (c == board[pos].color);
     const PIECE p = board[pos].value;
@@ -444,16 +445,24 @@ struct halfkp {
     return orient(iswhitepov, pos) + halfkp::piece_index(p, ispiecepov) + (10u * board::SIZE + 1) * kingpos;
   }
 
-  void init_halfkp_features(const Board &board) {
+  template <board::IndexableView BoardT>
+  void init_halfkp_features(const BoardT &board) {
     for(pos_t color_index = 0; color_index < NO_COLORS; ++color_index) {
       const COLOR c = std::array<COLOR,2>{board.activePlayer(), enemy_of(board.activePlayer())}[color_index];
       input_indices[color_index].clear();
       const bool iswhitepov = (c == WHITE);
-      const size_t orient_kingpos = orient(iswhitepov, board.pos_king[c]);
-      const piece_bitboard_t occ = (board.bits[WHITE]|board.bits[BLACK]);
-      bitmask::foreach_reversed(occ & ~board.get_king_bits(), [&](pos_t pos) mutable noexcept -> void {
+      const size_t orient_kingpos = orient(iswhitepov, board.get_king_pos(c));
+//      const piece_bitboard_t occ = (board.bits[WHITE]|board.bits[BLACK]);
+      for(pos_t i = 0; i < board::SIZE; ++i) {
+        const pos_t pos = board::SIZE - i - 1;
+        if(board.empty_at_pos(pos))continue;
+        const Piece p = board[pos];
+        if(p.value == KING)continue;
         input_indices[color_index].emplace_back(make_halfkp_index(board, c, orient_kingpos, pos));
-      });
+      }
+//      bitmask::foreach_reversed(occ & ~board.get_king_bits(), [&](pos_t pos) mutable noexcept -> void {
+//        input_indices[color_index].emplace_back(make_halfkp_index(board, c, orient_kingpos, pos));
+//      });
     }
   }
 

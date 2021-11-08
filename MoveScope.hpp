@@ -6,13 +6,13 @@
 
 
 // kind of like lock_scope, but for moves
-template <typename BOARD>
+template <board::IndexableView BoardT>
 struct MoveScope {
-  BOARD &b;
+  BoardT &b;
   bool is_acting_scope = true;
 
   // make a move on constructor
-  INLINE explicit MoveScope(BOARD &b, move_t m) noexcept:
+  INLINE explicit MoveScope(BoardT &b, move_t m) noexcept:
     b(b)
   {
     b.make_move(m);
@@ -33,18 +33,18 @@ struct MoveScope {
 };
 
 
-template <typename BOARD>
-INLINE decltype(auto) make_move_scope(BOARD &b, move_t m) {
-  return MoveScope<BOARD>(b, m);
+template <board::IndexableView BoardT>
+INLINE decltype(auto) make_move_scope(BoardT &b, move_t m) {
+  return MoveScope<BoardT>(b, m);
 }
 
-template <typename BOARD>
+template <board::IndexableView BoardT>
 struct RecursiveMoveScope {
-  BOARD &b;
+  BoardT &b;
   int counter = 0;
   bool is_acting_scope = true;
 
-  INLINE explicit RecursiveMoveScope(BOARD &b) noexcept:
+  INLINE explicit RecursiveMoveScope(BoardT &b) noexcept:
     b(b)
   {}
 
@@ -68,19 +68,19 @@ struct RecursiveMoveScope {
   }
 };
 
-template <typename BOARD>
-INLINE decltype(auto) make_recursive_move_scope(BOARD &b) {
-  return RecursiveMoveScope<BOARD>(b);
+template <board::IndexableView BoardT>
+INLINE decltype(auto) make_recursive_move_scope(BoardT &b) {
+  return RecursiveMoveScope<BoardT>(b);
 }
 
 
-template <typename BOARD>
+template <board::IndexableView BoardT>
 struct MoveLineScope {
-  BOARD &b;
+  BoardT &b;
   MoveLine &mline;
   bool is_acting_scope = true;
 
-  INLINE explicit MoveLineScope(BOARD &b, move_t m, MoveLine &mline):
+  INLINE explicit MoveLineScope(BoardT &b, move_t m, MoveLine &mline):
     b(b), mline(mline)
   {
     b.make_move(m);
@@ -101,20 +101,20 @@ struct MoveLineScope {
   }
 };
 
-template <typename BOARD>
-INLINE decltype(auto) make_mline_scope(BOARD &b, move_t m, MoveLine &mline) {
-  return MoveLineScope<BOARD>(b, m, mline);
+template <board::IndexableView BoardT>
+INLINE decltype(auto) make_mline_scope(BoardT &b, move_t m, MoveLine &mline) {
+  return MoveLineScope<BoardT>(b, m, mline);
 }
 
 
-template <typename BOARD>
+template <board::IndexableView BoardT>
 struct RecursiveMoveLineScope {
-  BOARD &b;
+  BoardT &b;
   MoveLine &mline;
   int counter = 0;
   bool is_acting_scope = true;
 
-  INLINE explicit RecursiveMoveLineScope(BOARD &b, MoveLine &mline):
+  INLINE explicit RecursiveMoveLineScope(BoardT &b, MoveLine &mline):
     b(b), mline(mline)
   {}
 
@@ -147,7 +147,7 @@ struct RecursiveMoveLineScope {
   }
 };
 
-template <typename BOARD>
-INLINE decltype(auto) make_recursive_mline_scope(BOARD &b, MoveLine &mline) {
-  return RecursiveMoveLineScope<BOARD>(b, mline);
+template <board::IndexableView BoardT>
+INLINE decltype(auto) make_recursive_mline_scope(BoardT &b, MoveLine &mline) {
+  return RecursiveMoveLineScope<BoardT>(b, mline);
 }
