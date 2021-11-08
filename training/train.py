@@ -52,10 +52,16 @@ class NNUE:
             w, b = nnue_layers[i]
             self.model.layers[self.affine_layer_inds[i]].set_weights([w,b])
 
-    def to_sparse_tensor(self, sparse: np.array):
-        indices = np.pad(sparse.reshape(-1, 1), pad_width=[[0,0], [1,0]])
+    def to_sparse_tensor(self, sparse):
+        indices = np.ndarray(shape=(sum([len(x) for x in sparse]), 2), dtype=int)
+        start = 0
+        for i in tqdm.trange(len(sparse), desc='sparse'):
+            end = start + len(sparse[i])
+            indices[start:end,0] = i
+            indices[start:end,1] = sparse[i]
+            start = end
         values = np.ones(len(indices), dtype=np.float32)
-        return tf.sparse.reorder(tf.sparse.SparseTensor(indices=indices, values=values, dense_shape=[1, 41024]))
+        return tf.sparse.reorder(tf.sparse.SparseTensor(indices=indices, values=values, dense_shape=[len(sparse), 41024]))
 
     @tf.function
     def train_step(self, score: float, sparse1, sparse2):
@@ -76,13 +82,19 @@ if __name__ == "__main__":
     to_here_path = os.path.relpath('.', os.path.abspath(os.path.dirname(sys.argv[0])))
     df = pd.read_hdf(os.path.join(to_here_path, 'data/sparse_dataset.h5'), key='sparse', mode='r')
     nnue = NNUE()
-    epochs = 10
-    dfscores = tf.convert_to_tensor(df.score, dtype=tf.float32)
-    for epoch in range(epochs):
-        for i in tqdm.trange(len(df)):
-            sparse1 = nnue.to_sparse_tensor(np.array(df.sparse1[i], dtype=int))
-            sparse2 = nnue.to_sparse_tensor(np.array(df.sparse2[i], dtype=int))
-            score = dfscores[i]
-            loss = nnue.train_step(score, sparse1, sparse2)
-            if i % 50000 == 0:
-                print(i, loss.numpy())
+    dfscores = tf.reshape(tf.convert_to_tensor(df.score, dtype=tf.float32), shape=(-1, 1))
+    dfsparse1 = nnue.to_sparse_tensor(df.sparse1)
+    dfsparse2 = nnue.to_sparse_tensor(df.sparse2)
+    dataset = tf.data.Dataset.from_tensor_slices(tensors=dict(
+        score=dfscores,
+        sparse1=dfsparse1,
+        sparse2=dfsparse2,
+    ))
+    del df
+    for epoch in range(10):
+        loss_monit = []
+        for batch in tqdm.tqdm(dataset.batch(64)):
+#            import bpython;bpython.embed(locals_=dict(locals(), **globals()))
+            loss = nnue.train_step(batch['score'], batch['sparse1'], batch['sparse2'])
+            loss_monit.append(loss.numpy().mean())
+        print('epoch', epoch, np.mean(loss_monit))
