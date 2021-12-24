@@ -364,6 +364,7 @@ struct UCI {
           f = fen::load_from_string(s);
           str::pdebug("loaded fen", fen::export_as_string(f));
         }
+        f.chess960 = engine_options.chess960;
         init(f);
         if(ind < cmd.size() && cmd[ind++] == "moves"s) {
           MoveLine moves;
