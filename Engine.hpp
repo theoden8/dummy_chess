@@ -512,7 +512,7 @@ public:
       return info.is_unset() || cur_age != age;
     }
 
-    INLINE void write(board_info &_info, score_t _score, depth_t _depth, ply_index_t _age, TT_NODE_TYPE _ndtype, const MoveLine &pline) {
+    INLINE void write(const board_info &_info, score_t _score, depth_t _depth, ply_index_t _age, TT_NODE_TYPE _ndtype, const MoveLine &pline) {
       info=_info, depth=_depth, score=_score, age=_age, ndtype=_ndtype;
       for(size_t i = 0; i < m_hint.size(); ++i) {
         m_hint[i] = (pline.size() > i) ? pline[i] : board::nullmove;
@@ -787,10 +787,11 @@ public:
       if(delta_prune_allowed && score + std::round(m_val * MATERIAL_PAWN) < alpha - DELTA) {
         continue;
       }
+      bool new_isdraw_pathdep = false;
       // recurse
       {
         decltype(auto) mscope = this->engine_mline_scope(m, pline_alt);
-        isdraw_pathdep = is_draw_halfmoves() || is_draw_repetition();
+        new_isdraw_pathdep = is_draw_halfmoves() || is_draw_repetition();
         score = -score_decay(alpha_beta_quiescence(-beta, -alpha, depth - 1, pline_alt, ab_state, reduce_nchecks ? nchecks - 1 : nchecks));
       }
       debug.update_q(depth, alpha, beta, bestscore, score, m, pline, pline_alt);
@@ -804,6 +805,7 @@ public:
         return score;
       } else if(score > bestscore) {
         pline.replace_line(pline_alt);
+        isdraw_pathdep = new_isdraw_pathdep;
         bestscore = score;
         m_best = m;
         if(score > alpha) {
@@ -936,7 +938,8 @@ public:
         isdraw_pathdep = is_draw_halfmoves() || is_draw_repetition();
         pos_t i = bitmask::first(m), j = bitmask::second(m) & board::MOVEMASK;
         const bool interesting_move = (is_drop_move(i, j) || is_castling_move(i, j) || is_promotion_move(i, j) || (is_naively_capture_move(i, j) && m_val > -3.5) || (is_naively_checking_move(i, j) && m_val > -9.));
-        const bool lmr_allowed = ENABLE_SEL_LMR && false && move_index >= (pline.is_mainline() ? 15 : 4) && depth >= 3 && state.checkline[c] == bitmask::full && m_val < .1 && !interesting_move;
+        const bool lmr_allowed = ENABLE_SEL_LMR && false && move_index >= (pline.is_mainline() ? 15 : 4)
+                                  && depth >= 3 && state.checkline[c] == bitmask::full && m_val < .1 && !interesting_move;
         MoveLine pline_alt2 = pline_alt;
         if(lmr_allowed) {
           score = -score_decay(alpha_beta_scout(-alpha-1, -alpha, depth - 2, pline_alt2, ab_state, allow_nullmoves, _threatmove));
