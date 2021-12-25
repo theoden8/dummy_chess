@@ -220,7 +220,7 @@ struct UCI {
       while(!engine_thread.joinable())
         ;
       engine_thread.join();
-      str::pdebug("joining engine thread"s);
+      str::pdebug("info string joining engine thread"s);
       job_started = false;
     }
   }
@@ -244,7 +244,7 @@ struct UCI {
   };
 
   void process_cmd(std::vector<std::string> cmd) {
-    str::pdebug("processing cmd", to_string(cmd));
+    str::pdebug("info string processing cmd", to_string(cmd));
     while(!cmdmap.contains(cmd.front())) {
       str::perror("error: unknown command", cmd.front());
       cmd.erase(cmd.begin());
@@ -291,10 +291,10 @@ struct UCI {
         for(size_t i = 1; i < cmd.size(); ++i) {
           if(cmd[i] == "name"s && cmd.size() > i + 1) {
             optname.emplace(cmd[++i]);
-            str::pdebug("name:", optname.value());
+            str::pdebug("info string name:", optname.value());
           } else if(cmd[i] == "value"s && cmd.size() > i + 1) {
             optvalue.emplace(cmd[++i]);
-            str::pdebug("value:", optvalue.value());
+            str::pdebug("info string value:", optvalue.value());
           }
         }
         if(optname.has_value() && optvalue.has_value()) {
@@ -302,10 +302,10 @@ struct UCI {
             bool val = boolOptions.at(optname.value());
             if(optvalue.value() == "true"s) {
               val = true;
-              str::pdebug("set option", optname.value(), "true"s);
+              str::pdebug("info string set option", optname.value(), "true"s);
             } else if(optvalue.value() == "false"s) {
               val = false;
-              str::pdebug("set option", optname.value(), "false"s);
+              str::pdebug("info string set option", optname.value(), "false"s);
             } else {
               str::perror("error: unknown optvalue", optvalue.value(), "for option", optname.value());
             }
@@ -316,7 +316,7 @@ struct UCI {
             auto &[_lo, _hi, val] = spinOptions.at(optname.value());
             int v = atoi(optvalue.value().c_str());
             val = std::min(_hi, std::max(_lo, v));
-            str::pdebug("set option", optname.value(), val);
+            str::pdebug("info string set option", optname.value(), val);
           } else if(comboOptions.contains(optname.value())) {
             auto &[_vals, val] = comboOptions.at(optname.value());
             if(std::find(_vals.begin(), _vals.end(), optvalue.value()) == std::end(_vals)) {
@@ -327,7 +327,7 @@ struct UCI {
             } else if(optvalue.value() == "crazyhouse") {
               engine_options.crazyhouse = true;
             }
-            str::pdebug("set option", optname.value(), val);
+            str::pdebug("info string set option", optname.value(), val);
           }
         } else {
           str::perror("error: unknown option name or value");
@@ -362,7 +362,7 @@ struct UCI {
           }
           std::string s = str::join(std::vector<std::string>(cmd.begin() + begin_ind, cmd.begin() + ind), " "s);
           f = fen::load_from_string(s);
-          str::pdebug("loaded fen", fen::export_as_string(f));
+          str::pdebug("info string loaded fen", fen::export_as_string(f));
         }
         f.chess960 = engine_options.chess960;
         init(f);
@@ -371,12 +371,12 @@ struct UCI {
           for(; ind < cmd.size(); ++ind) {
             moves.put(scan_move(cmd[ind]));
           }
-          str::pdebug("moves"s, engine_ptr->_line_str(moves, true));
+          str::pdebug("info string moves"s, engine_ptr->_line_str(moves, true));
           for(const auto m : moves) {
             engine_ptr->make_move(m);
           }
         }
-        str::pdebug("position set");
+        str::pdebug("info string position set");
         //engine_ptr->print();
       }
       return;
@@ -516,7 +516,7 @@ struct UCI {
 
   double time_control_movetime(const go_command &args, bool pondering) const {
     if(args.infinite || pondering) {
-      str::pdebug(args.infinite, pondering);
+      str::pdebug("info string", args.infinite, pondering);
       return DBL_MAX;
     } else if(args.movetime != DBL_MAX) {
       return std::max(args.movetime - 1., args.movetime * .5);
@@ -596,7 +596,7 @@ struct UCI {
         const double new_movetime = time_control_movetime(args, false);
         movetime = std::max(new_movetime / 3, new_movetime - time_spent / 4);
         time_spent = .0;
-        str::pdebug("changed time", movetime);
+        str::pdebug("info string changed time", movetime);
       }
       return_from_search = return_from_search || check_if_should_stop(args, time_spent, movetime);
 			if(verbose && !pondering && !should_stop) {
@@ -617,7 +617,7 @@ struct UCI {
 		} else {
 			respond(RESP_BESTMOVE, engine_ptr->_move_str(bestmove));
 		}
-    str::pdebug("NOTE: search is over");
+    str::pdebug("info string NOTE: search is over");
     should_stop = true;
     should_ponderhit = false;
   }
@@ -654,7 +654,7 @@ struct UCI {
     should_stop = true;
     join_engine_thread();
     should_quit = true;
-    str::pdebug("job state", job_started);
+    str::pdebug("info string job state", job_started);
   }
 
   template <typename... Str>
@@ -663,7 +663,7 @@ struct UCI {
   }
 
   ~UCI() {
-    str::pdebug("job state", job_started);
+    str::pdebug("info string job state", job_started);
     join_engine_thread();
     destroy();
   }

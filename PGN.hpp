@@ -455,6 +455,12 @@ std::string _move_str(Board &b, move_t m) {
   return s;
 }
 
+move_t _read_move(Board &b, const std::string &s) {
+  pgn::PGN pgn(b);
+  bool flag1, flag2;
+  return pgn.read_move_with_flags(s, flag1, flag2);
+}
+
 NEVER_INLINE std::string _line_str(Board &b, const MoveLine &mline) {
   assert(b.check_valid_sequence(mline));
   pgn::PGN pgn(b);
