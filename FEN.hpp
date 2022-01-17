@@ -23,6 +23,7 @@ namespace fen {
     ply_index_t fullmove;
     bool chess960;
     bool crazyhouse;
+    piece_bitboard_t crazyhouse_promoted;
 
     inline bool operator==(const struct _FEN &other) const {
       return active_player == other.active_player
@@ -45,6 +46,7 @@ namespace fen {
       .fullmove=0,
       .chess960=false,
       .crazyhouse=false,
+      .crazyhouse_promoted=0x00,
     };
     // board
     pos_t kingpos[2] = {board::nopos, board::nopos};
@@ -54,6 +56,11 @@ namespace fen {
 //    str::pdebug("FEN", s);
     size_t slashcount = 0;
     for(const char *c = s.c_str(); *c != '\0' && !isspace(*c); ++c, ++i) {
+      if(*c == '~') {
+        piece::set_pos(f.crazyhouse_promoted, board_index - 1);
+        continue;
+      }
+      // for some reason occurs in crazyhouse
       assert(slashcount < 9);
       if(*c == '/') {
         ++slashcount;
@@ -264,19 +271,29 @@ namespace fen {
   std::string export_as_string(const fen::FEN &f) {
     std::string s = ""s;
     pos_t kingpos[2] = {board::nopos, board::nopos};
+    pos_t write_index = 0;
     for(pos_t y = 0; y < board::LEN; ++y) {
       pos_t emptycount = 0;
-      for(pos_t x = 0; x < board::LEN; ++x) {
+      for(pos_t x = 0; x < board::LEN; ++x, ++write_index) {
         const pos_t ind = board::_pos(A+x, 1+y);
+        assert(index("KkQqRrBbNnPp ", f.board[ind]) != nullptr);
+        // increment counter of empty spaces
         if(f.board[ind] == ' ') {
           ++emptycount;
           continue;
         }
+        // drop the number of empty cells before proceeding
         if(emptycount > 0) {
           s += std::to_string(emptycount);
           emptycount = 0;
         }
+        // add viewed piece
         s += f.board[ind];
+        // mark it as promoted
+        if(f.crazyhouse && piece::is_set(f.crazyhouse_promoted, ind)) {
+          s += "~"s;
+        }
+        // keep track of king positions (obsolete in exporting)
         if(f.board[ind] == 'K') {
           kingpos[WHITE] = ind;
         } else if(f.board[ind] == 'k') {
