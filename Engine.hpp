@@ -22,7 +22,7 @@ public:
   static constexpr bool ENABLE_SEL_BIGDELTA = true && ENABLE_SELECTIVITY,
                         ENABLE_SEL_DELTA = true && ENABLE_SELECTIVITY,
                         ENABLE_SEL_NMR = true && ENABLE_SELECTIVITY,
-                        ENABLE_SEL_LMR = false && ENABLE_SELECTIVITY;
+                        ENABLE_SEL_LMR = true && ENABLE_SELECTIVITY;
   static constexpr bool ENABLE_IID = false;
 
   // callbacks
@@ -938,7 +938,7 @@ public:
         isdraw_pathdep = is_draw_halfmoves() || is_draw_repetition();
         pos_t i = bitmask::first(m), j = bitmask::second(m) & board::MOVEMASK;
         const bool interesting_move = (is_drop_move(i, j) || is_castling_move(i, j) || is_promotion_move(i, j) || (is_naively_capture_move(i, j) && m_val > -3.5) || (is_naively_checking_move(i, j) && m_val > -9.));
-        const bool lmr_allowed = ENABLE_SEL_LMR && false && move_index >= (pline.is_mainline() ? 15 : 4)
+        const bool lmr_allowed = ENABLE_SEL_LMR && move_index >= (pline.is_mainline() ? 15 : 4)
                                   && depth >= 3 && state.checkline[c] == bitmask::full && m_val < .1 && !interesting_move;
         MoveLine pline_alt2 = pline_alt;
         if(lmr_allowed) {
@@ -1070,7 +1070,7 @@ public:
           isdraw_pathdep = is_draw_halfmoves() || is_draw_repetition();
           pos_t i = bitmask::first(m), j = bitmask::second(m) & board::MOVEMASK;
           const bool interesting_move = (is_drop_move(i, j) || is_castling_move(i, j) || is_promotion_move(i, j) || (is_naively_capture_move(i, j) && m_val > -3.5) || (is_naively_checking_move(i, j) && m_val > -9.));
-          const bool lmr_allowed = ENABLE_SEL_LMR && true && move_index >= (pline.is_mainline() ? 15 : 4) && depth >= 3 && state.checkline[c] == bitmask::full && m_val < .1 && !interesting_move;
+          const bool lmr_allowed = ENABLE_SEL_LMR && move_index >= (pline.is_mainline() ? 15 : 4) && depth >= 3 && state.checkline[c] == bitmask::full && m_val < .1 && !interesting_move;
           MoveLine pline_alt2 = pline_alt;
           if(lmr_allowed) {
             score = -score_decay(alpha_beta_scout(-alpha-1, -alpha, depth - 2, pline_alt2, ab_state, allow_nullmoves, _threatmove));

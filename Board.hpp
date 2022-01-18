@@ -160,6 +160,7 @@ public:
     // set bitboards
     for(pos_t i = 0; i < f.board.length(); ++i) {
       if(f.board[i]==' ')continue;
+      assert(i < board::SIZE);
       const COLOR c = islower(f.board[i]) ? BLACK : WHITE;
       PIECE p = EMPTY;
       switch(tolower(f.board[i])) {
@@ -171,7 +172,11 @@ public:
         case 'k':p=KING;break;
       }
       const pos_t x = board::_x(i), y = board::LEN - board::_y(i) - 1;
-      put_pos(board::_pos(A+x, 1+y), Piece(p, c));
+      const pos_t pos = board::_pos(A+x, 1+y);
+      put_pos(pos, Piece(p, c));
+      if(f.crazyhouse && piece::is_set(f.crazyhouse_promoted, i)) {
+        piece::set_pos(self.bits_promoted_pawns, pos);
+      }
     }
     // crazyhouse: set substitution counts
     if(crazyhouse) {
@@ -1240,6 +1245,13 @@ public:
       }
       std::cout << std::endl;
       std::cout << str::join(n_subs, " ") << std::endl;
+      if(bits_promoted_pawns) {
+        std::cout << "Promoted pieces" << std::endl;
+        bitmask::foreach(bits_promoted_pawns, [&](pos_t pos) mutable noexcept -> void {
+          std::cout << board::_pos_str(pos) << "=" << self[pos].str() << " ";
+        });
+        std::cout << std::endl;
+      }
     }
     str::print("FEN:", fen::export_as_string(export_as_fen()));
   }
@@ -1291,14 +1303,20 @@ public:
       .fullmove=ply_index_t(((get_current_ply() - 1) / 2) + 1),
       .chess960=chess960,
       .crazyhouse=crazyhouse,
+      .crazyhouse_promoted=0x00,
     };
+    pos_t write_index = 0;
     for(pos_t y = 0; y < board::LEN; ++y) {
-      for(pos_t x = 0; x < board::LEN; ++x) {
+      for(pos_t x = 0; x < board::LEN; ++x, ++write_index) {
         const pos_t ind = board::_pos(A+x, 8-y);
         if(self.empty_at_pos(ind)) {
           f.board += ' ';
         } else {
           f.board += self[ind].str();
+        }
+        // in crazyhouse, set promoted pawns
+        if(f.crazyhouse && piece::is_set(bits_promoted_pawns, ind)) {
+          piece::set_pos(f.crazyhouse_promoted, write_index);
         }
       }
     }
