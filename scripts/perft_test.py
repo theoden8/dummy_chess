@@ -39,13 +39,13 @@ def get_output_dummy_chess(depth=5, fen=None, variant=STANDARD) -> dict:
     return get_output_uci('./dummy_chess_uci', depth=depth, fen=fen, variant=variant)
 
 
-def get_next_fen(fen, move, variant=STANDARD) -> str:
+def get_next_fen(fen: str, move: str, variant=STANDARD) -> str:
     uciexec = get_uciexec(variant=variant)
     sess = UCISession(variant=variant)
-    sess.position(fen, moves=[move])
+    sess.position(fen=fen, moves=[move])
     sess.special_command('d')
     s = next(sess.run(uciexec))
-    s = ''.join([ss for ss in s.split() if 'Fen' in ss])
+    s = ''.join([ss for ss in s.split('\n') if 'Fen' in ss])
     s = s.replace('Fen: ', '')
     return s.strip()
 
@@ -76,7 +76,7 @@ def compare_outputs(depth=5, fen=None, path=[], variant=STANDARD) -> bool:
         return False
     diff = [k for k in dcmaps.keys() if sfmaps[k] != dcmaps[k] and k != 'total']
     for m in diff:
-        res = compare_outputs(depth=depth-1, fen=get_next_fen(fen, m, variant=variant), path=path+[m], variant=variant)
+        res = compare_outputs(depth=depth-1, fen=get_next_fen(fen=fen, move=m, variant=variant), path=path+[m], variant=variant)
     return False
 
 
@@ -157,9 +157,12 @@ def check_crazyhouse() -> None:
     compare_outputs_ch(depth=4, fen='r1bq1rk1/pppp1p2/2n2p1p/2b1p3/2B1P3/2NP1N2/PPP2PPP/R2Q1RK1/Nb b - - 1 8')
     compare_outputs_ch(depth=4, fen='r2q2k1/p1Pp1r2/bpn2p1p/2b1p3/2B4N/PPN4P/2PbpPP1/R2Q1RK1/PNp w - - 0 17')
     compare_outputs_ch(depth=4, fen='rq2kb1N/2b3p1/2Pp2Pp/1P1Pp3/bP2p1b1/PPnPP1P1/4P2R/1R1QK3/RNN w q - 0 44')
+    compare_outputs_ch(depth=4, fen='1r~4k1/p2P1N1R/1ppRpn1B/3p4/q2P4/1NP5/PP2bPPQ/R5K1/Bpppnbq w - - 5 43')
+    # https://codeberg.org/theoden8/dummy_chess/issues/9
+    compare_outputs_ch(depth=4, fen='1r1Q~1k2/p4NpR/1ppRpn1B/3p4/q2P4/1NP5/PP2bPPQ/R5K1/Bppnbq b - - 0 43')
 
 
 if __name__ == "__main__":
-    check_traditional()
-    check_chess960()
     check_crazyhouse()
+    check_chess960()
+    check_traditional()

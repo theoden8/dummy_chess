@@ -67,7 +67,7 @@ class UCISession:
             sfen = UCISession.startingpos
         else:
             sfen = f'fen {fen}'
-        self.commands += [f'position {sfen}' + '' if len(moves) == 0 else ' ' + ' '.join(moves)]
+        self.commands += [f'position {sfen}' + ('' if len(moves) == 0 else ' moves ' + ' '.join(moves))]
         self.position_is_set = True
 
     def display(self) -> None:

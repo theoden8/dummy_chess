@@ -158,7 +158,7 @@ public:
     return _perft(depth, store_scope.get_object());
   }
 
-  Perft(const fen::FEN fen=fen::starting_pos, size_t zbsize=ZOBRIST_SIZE):
+  Perft(const fen::FEN &fen=fen::starting_pos, size_t zbsize=ZOBRIST_SIZE):
     Board(fen, zbsize)
   {}
 };

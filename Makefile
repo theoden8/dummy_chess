@@ -1,3 +1,4 @@
+.PHONY: all _all clean test
 DBGFLAGS = -g3
 OPTFLAGS = -Ofast -DNDEBUG -flto -fwhole-program -fno-trapping-math -fno-signed-zeros -m64 -march=native -DUSE_INTRIN -fno-exceptions
 OPTFLAGS_PG = $(OPTFLAGS) -fprofile-generate
@@ -48,6 +49,9 @@ dummy_chess_uci: uci.cpp $(SOURCES) $(HPPFILES) Makefile
 
 dummy_chess_uci_dbg: uci.cpp $(SOURCES) $(HPPFILES) Makefile
 	$(CXX) $(DBGFLAGS) $(CXXFLAGS) uci.cpp $(SOURCES) $(LDFLAGS) -o $@
+
+test:
+	./scripts/perft_test.py
 
 clean:
 	rm -vf *.o *.gcda
