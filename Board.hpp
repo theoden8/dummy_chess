@@ -757,8 +757,11 @@ public:
         }
         state_hist_halfmoves.emplace_back(get_current_ply());
       }
-      if(crazyhouse && bits_promoted_pawns & piece::pos_mask(i)) {
-        piece::move_pos(bits_promoted_pawns, i, j);
+      if(crazyhouse) {
+        piece::unset_pos(bits_promoted_pawns, j);
+        if(bits_promoted_pawns & piece::pos_mask(i)) {
+          piece::move_pos(bits_promoted_pawns, i, j);
+        }
       }
       update_castlings(i, j);
       if(!is_capture) {
