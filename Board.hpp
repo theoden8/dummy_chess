@@ -1,6 +1,8 @@
 #pragma once
 
 
+#include <jemalloc/jemalloc.h>
+
 #include <vector>
 #include <list>
 #include <bitset>

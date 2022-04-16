@@ -10,7 +10,7 @@ CXXFLAGS = -std=c++20 -I. -Wall -Wextra -Wno-unused -Wno-parentheses
 #CXX = clang++
 #CXXFLAGS += -Wno-unused-parameter -Wno-range-loop-construct -Wno-unknown-attributes -Wno-ignored-optimization-argument
 # CXXFLAGS += -fopt-info
-LDFLAGS = -pthread
+LDFLAGS = -pthread -ljemalloc
 HPPFILES = $(wildcard *.hpp) m42.h
 NC_CFLAGS =  $(shell pkgconf --cflags ncursesw)
 NC_LDFLAGS = $(shell pkgconf --libs ncursesw)
