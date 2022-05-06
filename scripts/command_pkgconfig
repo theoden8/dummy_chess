@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+
+if $(which pkgconf); then
+  echo pkgconf
+else
+  echo pkg-config
+fi

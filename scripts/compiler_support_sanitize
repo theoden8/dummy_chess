@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+
+
+if [ $(uname -m) = 'x86_64' ] && [ $(uname) = Linux ]; then
+  echo "enabled"
+else
+  echo "disabled"
+fi
