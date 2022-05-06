@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-if $(which pkgconf); then
+if $(which pkgconf &>/dev/null); then
   echo pkgconf
 else
   echo pkg-config

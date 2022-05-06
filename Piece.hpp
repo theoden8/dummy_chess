@@ -91,10 +91,12 @@ namespace board {
   }
 
   ALWAYS_INLINE constexpr pos_t _x(pos_t i) {
+    assert(i < SIZE);
     return i % LEN;
   }
 
   ALWAYS_INLINE constexpr pos_t _y(pos_t i) {
+    assert(i < SIZE);
     return i / LEN;
   }
 
@@ -244,13 +246,18 @@ namespace piece {
   }
 
   INLINE piece_bitboard_t get_sliding_diag_attacking_ray(pos_t i, pos_t j, piece_bitboard_t occupied) {
+    assert(i < board::SIZE && j < board::SIZE);
     const piece_bitboard_t attacked_bit = piece::pos_mask(j);
     const pos_t x_i=board::_x(i), y_i=board::_y(i),
                 x_j=board::_x(j), y_j=board::_y(j);
     const piece_bitboard_t diags = M42::diag_attacks(i, occupied),
                            adiags = M42::adiag_attacks(i, occupied);
-    const piece_bitboard_t bottomhalf = bitmask::full >> (board::LEN * (board::LEN - y_i));
-    const piece_bitboard_t tophalf = bitmask::full << (board::LEN * (y_i + 1));
+    // shifting uint64_t by 64 is undefined behavior
+    constexpr pos_t maxshift = 8 * sizeof(bitmask::full);
+    const pos_t _shift_bottom = board::LEN * (board::LEN - y_i);
+    const piece_bitboard_t bottomhalf = (_shift_bottom >= maxshift) ? 0x00 : (bitmask::full >> _shift_bottom);
+    const pos_t _shift_top = (board::LEN * (y_i + 1));
+    const piece_bitboard_t tophalf = (_shift_top >= maxshift) ? 0x00 : (bitmask::full << _shift_top);
     piece_bitboard_t r = 0x00;
     if(x_j < x_i && y_i < y_j) {
       // top-left

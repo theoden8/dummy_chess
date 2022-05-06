@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 
 [ -e 'm42.h' ]   || wget https://raw.githubusercontent.com/sinandredemption/M42/master/m42.h -O m42.h
