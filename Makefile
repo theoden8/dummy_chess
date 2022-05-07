@@ -28,8 +28,9 @@ ifeq ($(FEATURE_SUPPORT_GCC),gcc)
   OPTFLAGS := -fwhole-program $(OPTFLAGS)
 endif
 
-CXXFLAGS := -std=c++20 -I. -Wall -Wextra
-LDFLAGS := -pthread
+PKGCONFIG ?= $(shell ./scripts/command_pkgconfig)
+CXXFLAGS := -std=c++20 -I. -Wall -Wextra $(shell $(PKGCONFIG) --cflags jemalloc)
+LDFLAGS := -pthread $(shell $(PKGCONFIG) --libs jemalloc)
 ifeq ($(FEATURE_SUPPORT_GCC),gcc)
   CXXFLAGS := $(CXXFLAGS) -Wno-unused -Wno-parentheses
 else ifeq ($(FEATURE_SUPPORT_CLANG),clang)
@@ -39,7 +40,6 @@ else ifeq ($(FEATURE_SUPPORT_CLANG),clang)
 endif
 # CXXFLAGS += -fopt-info
 
-PKGCONFIG ?= $(shell ./scripts/command_pkgconfig)
 LLVM_PROFDATA ?= llvm-profdata
 NC_CFLAGS =  $(shell $(PKGCONFIG) --cflags ncursesw)
 NC_LDFLAGS = $(shell $(PKGCONFIG) --libs ncursesw)

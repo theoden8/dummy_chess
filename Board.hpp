@@ -1,6 +1,8 @@
 #pragma once
 
 
+#include <jemalloc/jemalloc.h>
+
 #include <vector>
 #include <list>
 #include <bitset>
@@ -14,6 +16,7 @@
 #include <MoveLine.hpp>
 
 
+#define self (*this)
 // board view of the game
 class Board {
 protected:
@@ -23,8 +26,9 @@ protected:
 public:
   // general chess960-specific variables
   const bool chess960 = false;
-  pos_t kcastlrook[NO_COLORS] = {0xff, 0xff},
-        qcastlrook[NO_COLORS] = {0xff, 0xff};
+  std::array<pos_t, NO_COLORS>
+    kcastlrook = {0xff, 0xff},
+    qcastlrook = {0xff, 0xff};
 
   // general crazyhouse-specific variables
   const bool crazyhouse = false;
@@ -93,9 +97,6 @@ public:
     }
   };
 public:
-  // shorthand
-  Board &self = *this;
-
   // irregular state variables:
   // plies at which en-passants are set
   std::vector<std::pair<ply_index_t, pos_t>> state_hist_enpassants;
@@ -263,7 +264,7 @@ public:
   }
 
   // cheap lookup for emptiness
-  INLINE bool empty_at_pos(pos_t ind) {
+  INLINE bool empty_at_pos(pos_t ind) const {
     assert(ind <= board::MOVEMASK);
     return !piece::is_set(bits[WHITE]|bits[BLACK], ind);
   }

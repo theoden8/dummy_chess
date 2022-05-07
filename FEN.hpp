@@ -1,6 +1,8 @@
 #pragma once
 
 
+#include <jemalloc/jemalloc.h>
+
 #include <cctype>
 #include <strings.h>
 

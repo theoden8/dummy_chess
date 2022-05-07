@@ -5,6 +5,8 @@
 #include <cstdlib>
 #include <cstdint>
 
+#include <jemalloc/jemalloc.h>
+
 #include <memory>
 #include <array>
 #include <unordered_set>
