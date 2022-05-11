@@ -97,34 +97,24 @@ std::string convert_to_string(const std::vector<T> &vs) {
 
 template <typename... Elem>
 void perror(const Elem & ...s) {
+  // unpacking order in initializer lists is defined
   std::vector<std::string> v = { convert_to_string(s)... };
-#ifdef __clang__
-  std::reverse(v.begin(), v.end());
-#endif
   std::cerr << str::join(v, " "s) << std::endl;
 }
 
 template <typename... Elem>
 void print(const Elem & ...s) {
+  // unpacking order in initializer lists is defined
   std::vector<std::string> v = { convert_to_string(s)... };
-#ifdef __clang__
-  std::reverse(v.begin(), v.end());
-#endif
   std::cout << str::join(v, " "s) << std::endl;
 }
 
 template <typename... Elem>
 INLINE void pdebug(const Elem & ...s) {
-}
-//template <typename... Elem>
-//INLINE void pdebug(const Elem & ...s) {
 //#ifndef NDEBUG
 //  std::vector<std::string> v = { convert_to_string(s)... };
-//#ifdef __clang__
-//  std::reverse(v.begin(), v.end());
-//#endif
 //  std::cout << str::join(v, " "s) << std::endl;
 //#endif
-//}
+}
 
 } // namespace str
