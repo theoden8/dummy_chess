@@ -7,6 +7,7 @@ FEATURE_SUPPORT_PGO = $(shell ./scripts/compiler_support_pgo $(CXX))
 FEATURE_SUPPORT_GCC = $(shell ./scripts/compiler_support_gccflags $(CXX))
 FEATURE_SUPPORT_CLANG = $(shell ./scripts/compiler_support_clangflags $(CXX))
 FEATURE_SUPPORT_LIBBSD = $(shell ./scripts/compiler_support_libbsd $(CXX))
+FEATURE_SUPPORT_JEMALLOC = $(shell ./scripts/compiler_support_jemalloc $(CXX))
 FEATURE_SUPPORT_STDRANGES = $(shell ./scripts/compiler_support_stdranges $(CXX))
 
 $(info CXX is $(CXX))
@@ -15,6 +16,7 @@ $(info FEATURE_SUPPORT_PGO is $(FEATURE_SUPPORT_PGO))
 $(info FEATURE_SUPPORT_GCC is $(FEATURE_SUPPORT_GCC))
 $(info FEATURE_SUPPORT_CLANG is $(FEATURE_SUPPORT_CLANG))
 $(info FEATURE_SUPPORT_LIBBSD is $(FEATURE_SUPPORT_LIBBSD))
+$(info FEATURE_SUPPORT_JEMALLOC is $(FEATURE_SUPPORT_JEMALLOC))
 $(info FEATURE_SUPPORT_STDRANGES is $(FEATURE_SUPPORT_STDRANGES))
 
 # sanitization
@@ -29,8 +31,8 @@ PROFFLAGS = -O1 -DNDEBUG -flto -DUSE_INTRIN -pg
 OPTFLAGS := -Ofast -DNDEBUG -flto -fno-trapping-math -fno-signed-zeros -m64 -march=native -DUSE_INTRIN -fno-exceptions
 
 PKGCONFIG ?= $(shell ./scripts/command_pkgconfig)
-CXXFLAGS := -std=c++20 -I. -Wall -Wextra $(shell $(PKGCONFIG) --cflags jemalloc)
-LDFLAGS := -pthread $(shell $(PKGCONFIG) --libs jemalloc)
+CXXFLAGS := -std=c++20 -I. -Wall -Wextra
+LDFLAGS := -pthread
 # compiler-specific
 ifeq ($(FEATURE_SUPPORT_GCC),gcc)
   OPTFLAGS := -fwhole-program $(OPTFLAGS)
@@ -45,6 +47,16 @@ endif
 ifeq ($(FEATURE_SUPPORT_LIBBSD),disabled)
   CXXFLAGS := $(CXXFLAGS) -DFLAG_BSD
   LDFLAGS := -lbsd $(LDFLAGS)
+endif
+
+# jemalloc
+ifeq ($(FEATURE_SUPPORT_JEMALLOC),builtin)
+  CXXFLAGS := $(CXXFLAGS) -DFLAG_JEMALLOC_BUILTIN
+else ifeq ($(FEATURE_SUPPORT_JEMALLOC),external)
+  CXXFLAGS := $(CXXFLAGS) $(shell $(PKGCONFIG) --cflags jemalloc)-DFLAG_JEMALLOC_EXTERNAL
+  LDFLAGS := $(LDFLAGS) $(shell $(PKGCONFIG) --libs jemalloc)
+else ifeq ($(FEATURE_SUPPORT_JEMALLOC),disabled)
+  CXXFLAGS := $(CXXFLAGS) -DFLAG_JEMALLOC_DISABLED
 endif
 
 # ranges

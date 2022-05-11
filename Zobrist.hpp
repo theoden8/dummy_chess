@@ -1,7 +1,9 @@
 #pragma once
 
 
+#ifdef FLAG_JEMALLOC_EXTERNAL
 #include <jemalloc/jemalloc.h>
+#endif
 
 #include <ctime>
 #include <cstdlib>
