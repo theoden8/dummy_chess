@@ -11,7 +11,7 @@ import typing
 from pprint import pprint
 
 
-def get_file_content_str(filename):
+def get_file_content_str(filename: str) -> str:
     s = ""
     with open(filename, 'r') as f:
        for line in f:
@@ -19,11 +19,11 @@ def get_file_content_str(filename):
     return s
 
 
-def get_output(command):
+def get_output(command) -> str:
     tempfile = "tempfile"
     subprocess.call(command + " 2>&1 > " + tempfile, shell=True)
     s = get_file_content_str(tempfile)
-    subprocess.call("rm -f " + tempfile, shell=True)
+    os.remove(tempfile)
     return s
 
 

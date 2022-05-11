@@ -1,11 +1,15 @@
 #pragma once
 
 
+#include <jemalloc/jemalloc.h>
+
 #include <ctime>
 #include <cstdlib>
 #include <cstdint>
 
-#include <jemalloc/jemalloc.h>
+#ifdef FLAG_BSD
+#include <bsd/stdlib.h>
+#endif
 
 #include <memory>
 #include <array>
@@ -47,6 +51,9 @@ INLINE uint64_t randint() {
 }
 
 void init(size_t zbsize) {
+#ifdef NDEBUG
+  set_seed(arc4random());
+#endif
   assert(bitmask::is_exp2(zbsize));
   assert(rnd_start_moveside + 1 < zbsize);
   std::unordered_set<key_t> rnd_seen = {0};

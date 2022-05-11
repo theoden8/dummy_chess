@@ -6,12 +6,14 @@ FEATURE_SUPPORT_SANITIZE = $(shell ./scripts/compiler_support_sanitize $(CXX))
 FEATURE_SUPPORT_PGO = $(shell ./scripts/compiler_support_pgo $(CXX))
 FEATURE_SUPPORT_GCC = $(shell ./scripts/compiler_support_gccflags $(CXX))
 FEATURE_SUPPORT_CLANG = $(shell ./scripts/compiler_support_clangflags $(CXX))
+FEATURE_SUPPORT_BSD = $(shell ./scripts/compiler_support_bsd $(CXX))
 
 $(info CXX is $(CXX))
 $(info FEATURE_SUPPORT_SANITIZE is $(FEATURE_SUPPORT_SANITIZE))
 $(info FEATURE_SUPPORT_PGO is $(FEATURE_SUPPORT_PGO))
 $(info FEATURE_SUPPORT_GCC is $(FEATURE_SUPPORT_GCC))
 $(info FEATURE_SUPPORT_CLANG is $(FEATURE_SUPPORT_CLANG))
+$(info FEATURE_SUPPORT_BSD is $(FEATURE_SUPPORT_BSD))
 
 # sanitization
 ifeq ($(FEATURE_SUPPORT_SANITIZE),enabled)
@@ -24,19 +26,23 @@ endif
 PROFFLAGS = -O1 -DNDEBUG -flto -DUSE_INTRIN -pg
 OPTFLAGS := -Ofast -DNDEBUG -flto -fno-trapping-math -fno-signed-zeros -m64 -march=native -DUSE_INTRIN -fno-exceptions
 
-ifeq ($(FEATURE_SUPPORT_GCC),gcc)
-  OPTFLAGS := -fwhole-program $(OPTFLAGS)
-endif
-
 PKGCONFIG ?= $(shell ./scripts/command_pkgconfig)
 CXXFLAGS := -std=c++20 -I. -Wall -Wextra $(shell $(PKGCONFIG) --cflags jemalloc)
 LDFLAGS := -pthread $(shell $(PKGCONFIG) --libs jemalloc)
+# compiler-specific
 ifeq ($(FEATURE_SUPPORT_GCC),gcc)
+  OPTFLAGS := -fwhole-program $(OPTFLAGS)
   CXXFLAGS := $(CXXFLAGS) -Wno-unused -Wno-parentheses
 else ifeq ($(FEATURE_SUPPORT_CLANG),clang)
   CXXFLAGS := $(CXXFLAGS) -Wno-unused-parameter -Wno-unused-variable -Wno-unused-but-set-variable \
                           -Wno-range-loop-construct -Wno-unknown-attributes -Wno-parentheses
   LDFLAGS := $(LDFLAGS)
+endif
+
+# bsd
+ifeq ($(FEATURE_SUPPORT_BSD),disabled)
+  CXXFLAGS := $(CXXFLAGS) -DFLAG_BSD
+  LDFLAGS := -lbsd $(LDFLAGS)
 endif
 # CXXFLAGS += -fopt-info
 
