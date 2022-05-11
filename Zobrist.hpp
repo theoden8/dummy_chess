@@ -52,7 +52,7 @@ INLINE uint64_t randint() {
 
 void init(size_t zbsize) {
 #ifdef NDEBUG
-  set_seed(arc4random());
+  set_seed(((uint64_t)arc4random() << 32) | arc4random());
 #endif
   assert(bitmask::is_exp2(zbsize));
   assert(rnd_start_moveside + 1 < zbsize);

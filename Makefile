@@ -6,14 +6,14 @@ FEATURE_SUPPORT_SANITIZE = $(shell ./scripts/compiler_support_sanitize $(CXX))
 FEATURE_SUPPORT_PGO = $(shell ./scripts/compiler_support_pgo $(CXX))
 FEATURE_SUPPORT_GCC = $(shell ./scripts/compiler_support_gccflags $(CXX))
 FEATURE_SUPPORT_CLANG = $(shell ./scripts/compiler_support_clangflags $(CXX))
-FEATURE_SUPPORT_BSD = $(shell ./scripts/compiler_support_bsd $(CXX))
+FEATURE_SUPPORT_LIBBSD = $(shell ./scripts/compiler_support_libbsd $(CXX))
 
 $(info CXX is $(CXX))
 $(info FEATURE_SUPPORT_SANITIZE is $(FEATURE_SUPPORT_SANITIZE))
 $(info FEATURE_SUPPORT_PGO is $(FEATURE_SUPPORT_PGO))
 $(info FEATURE_SUPPORT_GCC is $(FEATURE_SUPPORT_GCC))
 $(info FEATURE_SUPPORT_CLANG is $(FEATURE_SUPPORT_CLANG))
-$(info FEATURE_SUPPORT_BSD is $(FEATURE_SUPPORT_BSD))
+$(info FEATURE_SUPPORT_LIBBSD is $(FEATURE_SUPPORT_LIBBSD))
 
 # sanitization
 ifeq ($(FEATURE_SUPPORT_SANITIZE),enabled)
@@ -40,7 +40,7 @@ else ifeq ($(FEATURE_SUPPORT_CLANG),clang)
 endif
 
 # bsd
-ifeq ($(FEATURE_SUPPORT_BSD),disabled)
+ifeq ($(FEATURE_SUPPORT_LIBBSD),disabled)
   CXXFLAGS := $(CXXFLAGS) -DFLAG_BSD
   LDFLAGS := -lbsd $(LDFLAGS)
 endif
