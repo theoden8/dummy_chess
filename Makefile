@@ -48,7 +48,7 @@ ifeq ($(FEATURE_SUPPORT_LIBBSD),disabled)
 endif
 
 # ranges
-ifeq ($(FEATURE_SUPPORT_LIBBSD),disabled)
+ifeq ($(FEATURE_SUPPORT_STDRANGES),disabled)
   CXXFLAGS := $(CXXFLAGS) -DFLAG_STDRANGES
 endif
 # CXXFLAGS += -fopt-info
