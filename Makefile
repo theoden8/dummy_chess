@@ -7,6 +7,7 @@ FEATURE_SUPPORT_PGO = $(shell ./scripts/compiler_support_pgo $(CXX))
 FEATURE_SUPPORT_GCC = $(shell ./scripts/compiler_support_gccflags $(CXX))
 FEATURE_SUPPORT_CLANG = $(shell ./scripts/compiler_support_clangflags $(CXX))
 FEATURE_SUPPORT_LIBBSD = $(shell ./scripts/compiler_support_libbsd $(CXX))
+FEATURE_SUPPORT_STDRANGES = $(shell ./scripts/compiler_support_stdranges $(CXX))
 
 $(info CXX is $(CXX))
 $(info FEATURE_SUPPORT_SANITIZE is $(FEATURE_SUPPORT_SANITIZE))
@@ -14,6 +15,7 @@ $(info FEATURE_SUPPORT_PGO is $(FEATURE_SUPPORT_PGO))
 $(info FEATURE_SUPPORT_GCC is $(FEATURE_SUPPORT_GCC))
 $(info FEATURE_SUPPORT_CLANG is $(FEATURE_SUPPORT_CLANG))
 $(info FEATURE_SUPPORT_LIBBSD is $(FEATURE_SUPPORT_LIBBSD))
+$(info FEATURE_SUPPORT_STDRANGES is $(FEATURE_SUPPORT_STDRANGES))
 
 # sanitization
 ifeq ($(FEATURE_SUPPORT_SANITIZE),enabled)
@@ -43,6 +45,11 @@ endif
 ifeq ($(FEATURE_SUPPORT_LIBBSD),disabled)
   CXXFLAGS := $(CXXFLAGS) -DFLAG_BSD
   LDFLAGS := -lbsd $(LDFLAGS)
+endif
+
+# ranges
+ifeq ($(FEATURE_SUPPORT_LIBBSD),disabled)
+  CXXFLAGS := $(CXXFLAGS) -DFLAG_STDRANGES
 endif
 # CXXFLAGS += -fopt-info
 

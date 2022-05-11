@@ -7,7 +7,10 @@
 #include <iostream>
 #include <concepts>
 #include <string_view>
+
+#ifndef FLAG_STDRANGES
 #include <ranges>
+#endif
 
 #include <Optimizations.hpp>
 
@@ -25,7 +28,7 @@ namespace str {
 template <typename T> concept Stringable = requires (T a) { { std::string(a) }; };
 template <typename T> concept ToStringable = requires (T a) { { std::to_string(a) }; };
 
-#ifndef __clang__
+#ifndef FLAG_STDRANGES
 decltype(auto) split(const std::string_view &s, const std::string_view &sep=" "s) {
   return s | std::views::split(sep);
 }

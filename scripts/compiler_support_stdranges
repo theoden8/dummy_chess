@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+
+
+CXX=$1; shift
+[ -z "${CXX}" ] && {
+  CXX=c++
+}
+
+if printf "#include <ranges>\nint main(){}" | ${CXX} -x c++ -std=c++20 - -o /dev/null 2>/dev/null; then
+  echo "enabled"
+else
+  echo "disabled"
+fi

@@ -6,10 +6,7 @@ CC=$1; shift
   CC=cc
 }
 
-if echo -e '
-#include <stdlib.h>
-int main(){printf("%d", (int)arc4random());}' \
- | ${CC} -x c - -o /dev/null 2>/dev/null; then
+if printf "#include <stdlib.h>\nint main(){arc4random();}" | ${CC} -x c - -o /dev/null 2>/dev/null; then
   echo "bsd"
 else
   echo "disabled"
