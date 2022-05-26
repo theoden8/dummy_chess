@@ -8,6 +8,8 @@
 
 #include <m42.h>
 
+#define self (*this)
+
 // pieces
 typedef enum : pos_t { PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING, EMPTY, NO_PIECES=EMPTY } PIECE;
 
@@ -156,6 +158,7 @@ namespace board {
 
 namespace piece {
   INLINE constexpr piece_bitboard_t pos_mask(pos_t k) {
+    assert(k < 64);
     return 1ULL << k;
   }
 

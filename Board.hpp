@@ -18,7 +18,6 @@
 #include <MoveLine.hpp>
 
 
-#define self (*this)
 // board view of the game
 class Board {
 protected:
@@ -320,6 +319,7 @@ public:
 
   // remove i from bitboard representation
   INLINE void unset_pos(pos_t i) {
+    assert(i < 64);
     const piece_bitboard_t i_mask = piece::pos_mask(i);
     if(bits[WHITE] & i_mask) {
       piece::unset_pos(bits[WHITE], i);
@@ -1081,7 +1081,7 @@ public:
     int repetitions = 1;
     const size_t no_iter = !crazyhouse ? std::min<size_t>(state_hist.size(), get_halfmoves())
                                        : state_hist.size();
-    for(size_t i = 0; i < no_iter; ++i) {
+    for(size_t i = NO_COLORS - 1; i < no_iter; i += NO_COLORS) {
       const auto &state_iter = state_hist[state_hist.size() - i - 1];
       if(state.info == state_iter.info && !state_iter.null_move_state) {
         ++repetitions;
@@ -1264,7 +1264,8 @@ public:
 
   NEVER_INLINE std::string _move_str(move_t m) const {
     if(m==board::nullmove)return "0000"s;
-    return board::_move_str(m, bits_pawns & piece::pos_mask(bitmask::first(m)));
+    const pos_t _i = bitmask::first(m) & board::MOVEMASK;
+    return board::_move_str(m, bits_pawns & piece::pos_mask(_i));
   }
 
   NEVER_INLINE std::vector<std::string> _line_str(const MoveLine &line, bool thorough=false) {

@@ -515,9 +515,9 @@ pgn::PGN load_from_file(const std::string &fname, Board &board) {
 
 // external methods
 NEVER_INLINE std::string MoveLine::pgn(Board &b) const {
-  return pgn::_line_str(b, *this);
+  return pgn::_line_str(b, self);
 }
 
 NEVER_INLINE std::string MoveLine::pgn_full(Board &b) const {
-  return pgn::_line_str_full(b, *this);
+  return pgn::_line_str_full(b, self);
 }

@@ -37,16 +37,16 @@ struct MoveLine {
   }
 
   INLINE bool empty() const {
-    return size() == 0;
+    return self.size() == 0;
   }
 
-  INLINE bool operator==(const MoveLine &tline) const {
-    return size() == tline.size() && startswith(tline);
+  INLINE bool operator==(const MoveLine &other) const {
+    return self.size() == other.size() && self.startswith(other);
   }
 
-  INLINE bool startswith(const MoveLine &tline) const {
-    for(size_t i = 0; i < std::min(size(), tline.size()); ++i) {
-      if((*this)[i] != tline[i])return false;
+  INLINE bool startswith(const MoveLine &other) const {
+    for(size_t i = 0; i < std::min(size(), other.size()); ++i) {
+      if(self[i] != other[i])return false;
     }
     return true;
   }
@@ -68,7 +68,11 @@ struct MoveLine {
   }
 
   INLINE move_t front() const {
-    return empty() ? board::nullmove : line[start];
+    return self.empty() ? board::nullmove : line[start];
+  }
+
+  INLINE move_t back() const {
+    return self.empty() ? board::nullmove : line.back();
   }
 
   INLINE decltype(auto) begin() const {
@@ -84,20 +88,20 @@ struct MoveLine {
   }
 
   INLINE void shift_start() {
-    assert(!empty());
+    assert(!self.empty());
     ++start;
   }
 
   INLINE void premove(move_t m) {
-    if(empty()) {
-      put(m);
-    } else if(m == front()) {
+    if(self.empty()) {
+      self.put(m);
+    } else if(m == self.front()) {
       ;
     } else {
-      clear();
-      put(m);
+      self.resize(1);
+      self[0] = m;
     }
-    shift_start();
+    self.shift_start();
   }
 
   INLINE void recall() {
@@ -105,7 +109,7 @@ struct MoveLine {
   }
 
   INLINE void total_recall() {
-    while(start)recall();
+    while(start)self.recall();
   }
 
   INLINE MoveLine full() const {
@@ -119,16 +123,16 @@ struct MoveLine {
   }
 
   INLINE void replace_line(const MoveLine &other) {
-    resize(other.size());
+    self.resize(other.size());
     for(size_t i = 0; i < other.size(); ++i) {
-      (*this)[i] = other[i];
+      self[i] = other[i];
     }
     assert(line.size() == start + other.size());
   }
 
   INLINE void draft(move_t m) {
-    premove(m);
-    recall();
+    self.premove(m);
+    self.recall();
   }
 
   template <size_t N>
@@ -136,11 +140,10 @@ struct MoveLine {
     size_t sz = 0;
     for(sz = 0; sz < m_hint.size(); ++sz) {
       if(m_hint[sz] == board::nullmove)break;
-      premove(m_hint[sz]);
+      self.premove(m_hint[sz]);
     }
-    for(size_t i = 0; i < sz; ++i) {
-      recall();
-    }
+    assert(self.start >= sz);
+    self.start -= sz;
   }
 
   INLINE bool is_mainline() const {
@@ -148,7 +151,7 @@ struct MoveLine {
   }
 
   INLINE bool find(move_t m) const {
-    return std::find(begin(), end(), m) != end();
+    return std::find(self.begin(), self.end(), m) != self.end();
   }
 
   INLINE bool find_even(move_t m, size_t start_index) const {
@@ -162,11 +165,11 @@ struct MoveLine {
   }
 
   INLINE MoveLine get_future() const {
-    return MoveLine(std::vector<move_t>(begin(), end()), mainline, true);
+    return MoveLine(std::vector<move_t>(self.begin(), self.end()), mainline, true);
   }
 
   INLINE MoveLine get_past() const {
-    return MoveLine(std::vector<move_t>(line.begin(), begin()), mainline);
+    return MoveLine(std::vector<move_t>(line.begin(), self.begin()), mainline);
   }
 
   INLINE move_t get_previous_move() const {
@@ -179,21 +182,21 @@ struct MoveLine {
   }
 
   INLINE move_t get_next_move() const {
-    if(size() < 2)return board::nullmove;
+    if(self.size() < 2)return board::nullmove;
     return line[start + 1];
   }
 
   INLINE MoveLine as_past() const {
-    MoveLine mline = *this;
+    MoveLine mline = self;
     mline.start = line.size();
     return mline;
   }
 
   INLINE MoveLine branch_from_past(move_t m=board::nullmove) const {
-    if(front() == m && m != board::nullmove) {
-      return *this;
+    if(self.front() == m && m != board::nullmove) {
+      return self;
     }
-    MoveLine mline = get_past();
+    MoveLine mline = self.get_past();
     mline.start = start;
     mline.mainline = false;
     return mline;
