@@ -23,7 +23,7 @@ public:
                         ENABLE_SEL_DELTA = true && ENABLE_SELECTIVITY,
                         ENABLE_SEL_NMR = true && ENABLE_SELECTIVITY,
                         ENABLE_SEL_LMR = true && ENABLE_SELECTIVITY;
-  static constexpr bool ENABLE_IID = false;
+  static constexpr bool ENABLE_IID = true;
 
   // callbacks
   INLINE void make_move(pos_t i, pos_t j) {
@@ -220,6 +220,7 @@ public:
     for(size_t i = NO_COLORS - 1; i < no_iter; i += NO_COLORS) {
       const auto &state_iter = state_hist[state_hist.size() - i - 1];
       if(state.info == state_iter.info) {
+//        str::print("repeated", pline.pgn_full(self));
         return true;
       }
     }
@@ -486,18 +487,16 @@ public:
 
   typedef enum { TT_EXACT, TT_ALLNODE, TT_CUTOFF } TT_NODE_TYPE;
   struct tt_ab_entry {
-    board_info info;
-    depth_t depth;
+    TT_NODE_TYPE ndtype : 2;
+    depth_t depth : 15;
+    ply_index_t age : 15;
     score_t score;
+    board_info info;
   #ifndef NDEBUG
     std::array<move_t, 3> m_hint;
+    MoveLine subpline;
   #else
     std::array<move_t, 20> m_hint;
-  #endif
-    ply_index_t age;
-    TT_NODE_TYPE ndtype;
-  #ifndef NDEBUG
-    MoveLine subpline;
   #endif
 
     INLINE bool can_apply(const board_info &_info, depth_t _depth, ply_index_t _age) const {
@@ -560,8 +559,8 @@ public:
     return [&](...) -> bool { return true; };
   }
 
-  decltype(auto) ab_ttable_probe(score_t &alpha, score_t &beta, depth_t depth, move_t &hashmove, MoveLine &pline,
-                                  alpha_beta_state &ab_state, bool allow_nullmoves, int8_t nchecks=0)
+  decltype(auto) ab_ttable_probe(score_t &alpha, score_t &beta, depth_t depth, move_t &hashmove, move_t &your_threatmove,
+                                 MoveLine &pline, alpha_beta_state &ab_state, bool allow_nullmoves, int8_t nchecks=0)
   {
     const zobrist::key_t k = zb_hash();
     const bool tt_has_entry = ab_state.ab_ttable[k].can_apply(state.info, depth, tt_age);
@@ -637,9 +636,13 @@ public:
           abort();
         }
       }
-      hashmove = zb.m_hint.front();
+      if(zb.m_hint.size() > 0) {
+        hashmove = zb.m_hint.front();
+      }
     } else if(zb.can_use_move(state.info, depth, tt_age)) {
-      hashmove = zb.m_hint.front();
+      if(zb.m_hint.size() > 0) {
+        hashmove = zb.m_hint.front();
+      }
     }
     return std::make_pair(k, maybe_result);
   }
@@ -657,13 +660,13 @@ public:
     if(piece::pos_mask(i) & ~bits_pawns)return false;
     const COLOR c = activePlayer();
     const COLOR ec = enemy_of(c);
-    const pos_t jbit = piece::pos_mask(j);
+    const pos_t j_mask = piece::pos_mask(j);
     const piece_bitboard_t notpinned = bits[ec] & ~state.pins[ec];
     return (~(
-            piece::get_knight_attacks(get_knight_bits() & notpinned)
-            | piece::get_pawn_attacks(bits_pawns & notpinned, ec)
-           ) & jbit)
-           && (~piece::get_sliding_diag_attacks(bits_slid_diag & ~bits_slid_orth & notpinned, bits[c] | bits[ec]) & jbit)
+              piece::get_knight_attacks(get_knight_bits() & notpinned)
+              | piece::get_pawn_attacks(bits_pawns & notpinned, ec)
+             ) & j_mask)
+           && (~piece::get_sliding_diag_attacks(bits_slid_diag & ~bits_slid_orth & notpinned, bits[c] | bits[ec]) & j_mask)
            && piece::size(piece::get_pawn_attack(j, c) & bits[ec] & ~bits_pawns) == 2;
   }
 
@@ -679,7 +682,8 @@ public:
     return has_moves;
   }
 
-  decltype(auto) ab_get_quiesc_moves(depth_t depth, MoveLine &pline, const std::vector<float> &cmh_table, int8_t nchecks, bool king_in_check, move_t hashmove=board::nullmove) const
+  decltype(auto) abq_get_ordered_moves(depth_t depth, MoveLine &pline, const std::vector<float> &cmh_table,
+                                       int8_t nchecks, bool king_in_check, move_t hashmove=board::nullmove) const
   {
     std::vector<std::tuple<float, move_t, bool>> quiescmoves;
     quiescmoves.reserve(8);
@@ -770,7 +774,8 @@ public:
 
     // ttable probe
     move_t hashmove = board::nullmove;
-    const auto [k, maybe_score] = ab_ttable_probe(alpha, beta, depth, hashmove, pline, ab_state, false, nchecks);
+    move_t your_threatmove = board::nullmove;
+    const auto [k, maybe_score] = ab_ttable_probe(alpha, beta, depth, hashmove, your_threatmove, pline, ab_state, false, nchecks);
     auto &zb = ab_state.ab_ttable[k];
     if(maybe_score.has_value()) {
       return maybe_score.value();
@@ -779,7 +784,7 @@ public:
     constexpr bool overwrite = true && ENABLE_TT;
 
     // filter out and order quiescent moves
-    decltype(auto) quiescmoves = ab_get_quiesc_moves(depth, pline, ab_state.cmh_table, nchecks, king_in_check, hashmove);
+    decltype(auto) quiescmoves = abq_get_ordered_moves(depth, pline, ab_state.cmh_table, nchecks, king_in_check, hashmove);
     if(quiescmoves.empty()) {
       ++nodes_searched;
       if(king_in_check) {
@@ -802,13 +807,13 @@ public:
       if(delta_prune_allowed && score + std::round(m_val * MATERIAL_PAWN) < alpha - DELTA) {
         continue;
       }
-      bool new_isdraw_pathdep = false;
       // recurse
-      {
+      bool new_isdraw_pathdep = false;
+      { // quescence sub-search move scope
         decltype(auto) mscope = self.engine_mline_scope(m, pline_alt);
         new_isdraw_pathdep = is_draw_halfmoves() || is_draw_repetition();
         score = -score_decay(alpha_beta_quiescence(-beta, -alpha, depth - 1, pline_alt, ab_state, reduce_nchecks ? nchecks - 1 : nchecks));
-      }
+      } // end move scope
       debug.update_q(depth, alpha, beta, bestscore, score, m, pline, pline_alt);
       debug.check_score(depth, score, pline_alt);
       if(score >= beta) {
@@ -921,7 +926,7 @@ public:
     // ttable probe
     move_t hashmove = my_threatmove;
     move_t your_threatmove = board::nullmove;
-    const auto [k, maybe_score] = ab_ttable_probe(alpha, beta, depth, hashmove, pline, ab_state, allow_nullmoves, 0);
+    const auto [k, maybe_score] = ab_ttable_probe(alpha, beta, depth, hashmove, your_threatmove, pline, ab_state, allow_nullmoves, 0);
     auto &zb = ab_state.ab_ttable[k];
     if(maybe_score.has_value()) {
       return maybe_score.value();
@@ -1027,7 +1032,7 @@ public:
     // ttable probe
     move_t hashmove = my_threatmove;
     move_t your_threatmove = board::nullmove;
-    const auto [k, maybe_score] = ab_ttable_probe(alpha, beta, depth, hashmove, pline, ab_state, allow_nullmoves, 0);
+    const auto [k, maybe_score] = ab_ttable_probe(alpha, beta, depth, hashmove, your_threatmove, pline, ab_state, allow_nullmoves, 0);
     auto &zb = ab_state.ab_ttable[k];
     if(maybe_score.has_value()) {
       return maybe_score.value();
@@ -1042,21 +1047,23 @@ public:
     assert(!moves.empty());
 
     // internal iterative deepening
-    const bool iid_allow = ENABLE_IID && true && moves.front().first < 999. && depth >= 5;
+    const bool iid_allow = ENABLE_IID && true && moves.front().first < 999. && depth >= 9;
     if(iid_allow) {
       MoveLine internal_pline = pline;
-      alpha_beta_pv(alpha, beta, depth / 2, internal_pline, ab_state, true, callback_f);
+      alpha_beta_pv(alpha, beta, depth / 2, internal_pline, ab_state, true, callback_f, your_threatmove);
       const move_t m = internal_pline.front();
+      bool found_iid_move = false;
       for(size_t move_index = 0; move_index < moves.size(); ++move_index) {
         if(moves[move_index].second == m) {
           moves[move_index].first += 1000.;
           std::sort(moves.begin(), moves.end());
           pline.replace_line(internal_pline);
-          str::perror("iid allowed", depth);
+          //fprintf(stderr, "PV iid allowed %d\n", (int)depth);
+          found_iid_move = true;
           break;
         }
       }
-      str::perror("iid allowed", depth);
+      assert(found_iid_move);
     }
 
     // pvsearch main loop
