@@ -220,7 +220,6 @@ public:
     for(size_t i = NO_COLORS - 1; i < no_iter; i += NO_COLORS) {
       const auto &state_iter = state_hist[state_hist.size() - i - 1];
       if(state.info == state_iter.info) {
-//        str::print("repeated", pline.pgn_full(self));
         return true;
       }
     }
@@ -1055,10 +1054,11 @@ public:
       bool found_iid_move = false;
       for(size_t move_index = 0; move_index < moves.size(); ++move_index) {
         if(moves[move_index].second == m) {
-          moves[move_index].first += 1000.;
-          std::sort(moves.begin(), moves.end());
+          moves[move_index].first = 1000.;
+          std::sort(moves.begin(), moves.end(), std::greater<>());
           pline.replace_line(internal_pline);
           //fprintf(stderr, "PV iid allowed %d\n", (int)depth);
+          //fflush(stderr);
           found_iid_move = true;
           break;
         }
