@@ -27,6 +27,7 @@ public:
                         ENABLE_SEL_LMR = true && ENABLE_SELECTIVITY;
   static constexpr bool ENABLE_IID = true;
   static constexpr bool ENABLE_SYZYGY = true;
+  static constexpr bool ENABLE_SYZYGY_MOVE_PRUNING = ENABLE_SYZYGY && true;
 
   // callbacks
   INLINE void make_move(pos_t i, pos_t j) {
@@ -1391,7 +1392,8 @@ public:
         }
       }
       // at this point bestscore <= beta and opponent has a few pieces up
-      if(tb_can_probe() && ((score_is_tb(beta) && score_material(beta) <= -350*CENTIPAWN)
+      if(ENABLE_SYZYGY_MOVE_PRUNING && tb_can_probe()
+          && ((score_is_tb(beta) && score_material(beta) <= -350*CENTIPAWN)
                             || score_is_mate(beta))
           && beta < 0 && move_index > 3 && !mval_is_primary(m_val))
       {
