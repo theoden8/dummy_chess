@@ -12,6 +12,7 @@
 #include <memory>
 #include <mutex>
 #include <atomic>
+#include <filesystem>
 
 #include <FEN.hpp>
 #include <Engine.hpp>
@@ -44,6 +45,8 @@ struct UCI {
     size_t hash_mb = 64;
     bool chess960 = false;
     bool crazyhouse = false;
+    std::optional<std::string> syzygy_path;
+    bool tb_initialized = false;
   };
   Options engine_options;
 
@@ -61,6 +64,14 @@ struct UCI {
     _printf("init\n");
     const size_t zobrist_size = (engine_options.hash_mb << (20 - 7));
     engine_ptr.reset(new Engine(f, zobrist_size));
+    if(engine_options.syzygy_path.has_value()) {
+      bool res = tb::init(engine_options.syzygy_path.value());
+      if(!res) {
+        str::perror("error: tb::init failed with syzygy_path = <" + engine_options.syzygy_path.value() + ">");
+        abort();
+      }
+      engine_options.tb_initialized = true;
+    }
     engine_ab_storage_ptr.reset(new Engine::ab_storage_t(engine_ptr->get_zobrist_alphabeta_scope()));
   }
 
@@ -71,6 +82,9 @@ struct UCI {
       _printf("destroy\n");
       engine_ab_storage_ptr.reset(nullptr);
       engine_ptr.reset(nullptr);
+      if(engine_options.tb_initialized && !engine_options.syzygy_path.has_value()) {
+        tb::free();
+      }
     }
   }
 
@@ -230,17 +244,21 @@ struct UCI {
   }
 
   // bunch of options
-  std::map<std::string, bool> boolOptions = {
+  const std::map<std::string, bool> boolOptions = {
     {"UCI_Chess960"s, false},
     {"Ponder"s, false},
   };
 
-  std::map<std::string, std::tuple<int, int, int64_t>> spinOptions = {
-    {"Hash"s, std::make_tuple(4, 4096, engine_options.hash_mb)},
+  const std::map<std::string, std::tuple<int, int, int>> spinOptions = {
+    {"Hash"s, std::make_tuple(4, 4096, (int)engine_options.hash_mb)},
   };
 
-  std::map<std::string, std::pair<std::vector<std::string>, std::string>> comboOptions = {
+  const std::map<std::string, std::pair<std::vector<std::string>, std::string>> comboOptions = {
     {"UCI_Variant"s, std::make_pair(std::vector<std::string>{"chess"s, "crazyhouse"s}, "chess"s)},
+  };
+
+  const std::map<std::string, std::string> stringOptions {
+    {"SyzygyPath"s, "<empty>"s},
   };
 
   void process_cmd(std::vector<std::string> cmd) {
@@ -265,7 +283,10 @@ struct UCI {
         }
         for(const auto &[name, args] : comboOptions) {
           const auto &[vals, dflt] = args;
-          respond(RESP_OPTION, "name"s, name, "type"s, "combo"s, "default", dflt, "var "s + str::join(vals, " var "s));
+          respond(RESP_OPTION, "name"s, name, "type"s, "combo"s, "default"s, dflt, "var "s + str::join(vals, " var "s));
+        }
+        for(const auto &[name, dflt] : stringOptions) {
+          respond(RESP_OPTION, "name"s, name, "type"s, "string"s, "default"s, dflt);
         }
         respond(RESP_UCIOK);
       return;
@@ -293,41 +314,76 @@ struct UCI {
             optname.emplace(cmd[++i]);
             str::pdebug("info string name:", optname.value());
           } else if(cmd[i] == "value"s && cmd.size() > i + 1) {
-            optvalue.emplace(cmd[++i]);
+            std::vector<std::string> cmd_value = std::vector<std::string>(cmd.begin() + i + 1, cmd.end());
+            optvalue.emplace(str::join(cmd_value, " "s));
             str::pdebug("info string value:", optvalue.value());
+            break;
           }
         }
         if(optname.has_value() && optvalue.has_value()) {
           if(boolOptions.contains(optname.value())) {
-            bool val = boolOptions.at(optname.value());
+            const bool &dflt = boolOptions.at(optname.value());
+            bool val = dflt;
             if(optvalue.value() == "true"s) {
               val = true;
-              str::pdebug("info string set option", optname.value(), "true"s);
             } else if(optvalue.value() == "false"s) {
               val = false;
-              str::pdebug("info string set option", optname.value(), "false"s);
             } else {
               str::perror("error: unknown optvalue", optvalue.value(), "for option", optname.value());
+              abort();
             }
             if(optname.value() == "UCI_Chess960"s) {
+              lock_guard guard(engine_mtx);
               engine_options.chess960 = val;
+              str::pdebug("info string setoption UCI_Chess960 =", optvalue.value());
+            } else {
+              str::pdebug("info string unknown option", optname.value());
             }
           } else if(spinOptions.contains(optname.value())) {
-            auto &[_lo, _hi, val] = spinOptions.at(optname.value());
+            const auto &[_lo, _hi, _dflt] = spinOptions.at(optname.value());
             int v = atoi(optvalue.value().c_str());
-            val = std::min(_hi, std::max(_lo, v));
-            str::pdebug("info string set option", optname.value(), val);
+            int val = std::min(_hi, std::max(_lo, v));
+            if(optname.value() == "Hash"s) {
+              lock_guard guard(engine_mtx);
+              engine_options.hash_mb = val;
+              str::pdebug("info string setoption Hash =", optname.value(), val);
+            } else {
+              str::pdebug("info string unknown option", optname.value());
+            }
           } else if(comboOptions.contains(optname.value())) {
-            auto &[_vals, val] = comboOptions.at(optname.value());
+            const auto &[_vals, _dflt] = comboOptions.at(optname.value());
             if(std::find(_vals.begin(), _vals.end(), optvalue.value()) == std::end(_vals)) {
               str::perror("error: unknown optvalue", optvalue.value(), "for option", optname.value());
             }
-            if(optvalue.value() == "chess") {
-              engine_options.crazyhouse = false;
-            } else if(optvalue.value() == "crazyhouse") {
-              engine_options.crazyhouse = true;
+            if(optname.value() == "UCI_Variant"s) {
+              lock_guard guard(engine_mtx);
+              if(optvalue.value() == "chess"s) {
+                engine_options.crazyhouse = false;
+              } else if(optvalue.value() == "crazyhouse"s) {
+                engine_options.crazyhouse = true;
+              }
+              str::pdebug("info string setoption UCI_Variant =", optname.value());
+            } else {
+              str::pdebug("info string unknown option", optname.value());
             }
-            str::pdebug("info string set option", optname.value(), val);
+          } else if(stringOptions.contains(optname.value())) {
+            const auto &_dflt = stringOptions.at(optname.value());
+            if(optname.value() == "SyzygyPath"s) {
+              lock_guard guard(engine_mtx);
+              if(optvalue.value() != _dflt) {
+                std::filesystem::path syzygy_path(optvalue.value());
+                if(!std::filesystem::exists(syzygy_path)) {
+                  str::perror("syzygy path doesn't exist <", syzygy_path, ">");
+                  abort();
+                }
+                engine_options.syzygy_path.emplace(optvalue.value());
+              } else {
+                engine_options.syzygy_path.reset();
+              }
+              str::pdebug("info string setoption SyzygyPath =", optvalue.value());
+            } else {
+              str::pdebug("info string unknown option", optname.value());
+            }
           }
         } else {
           str::perror("error: unknown option name or value");
@@ -389,6 +445,7 @@ struct UCI {
         const double hit_rate = double(engine_ptr->zb_hit) / double(1e-9 + engine_ptr->zb_hit + engine_ptr->zb_miss);
         respond(RESP_DISPLAY, "stat_hashfull:"s, hashfull);
         respond(RESP_DISPLAY, "stat_hit_rate:"s, hit_rate);
+        respond(RESP_DISPLAY, "stat_tb_hits:"s, engine_ptr->tb_hit);
         respond(RESP_DISPLAY, "stat_nodes_searched:"s, engine_ptr->nodes_searched);
       }
       return;
@@ -536,6 +593,7 @@ struct UCI {
                        "seldepth"s, engine_idstate.pline.size(),
                        "nodes"s, engine_ptr->nodes_searched,
                        "nps"s, size_t(nps),
+                       "tb_hits", engine_ptr->tb_hit,
                        "score"s, get_score_type_string(engine_idstate.eval),
                        "pv"s, engine_ptr->_line_str(engine_idstate.pline, true),
                        "time"s, int(round(time_spent * 1e3)),
@@ -548,6 +606,7 @@ struct UCI {
     respond(RESP_INFO, "depth"s, engine_idstate.curdepth,
                        "seldepth"s, engine_idstate.pline.size(),
                        "nodes"s, engine_ptr->nodes_searched,
+                       "tb_hits", engine_ptr->tb_hit,
                        "score"s, get_score_type_string(engine_idstate.eval),
                        "pv"s, engine_ptr->_line_str(engine_idstate.pline, true),
                        "time"s, int(round(time_spent * 1e3)),

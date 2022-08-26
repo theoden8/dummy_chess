@@ -20,7 +20,6 @@
 typedef uint8_t pos_t;
 typedef uint16_t pos_pair_t;
 
-
 // https://graphics.stanford.edu/~seander/bithacks.html
 // bit-hacks from stanford graphics, to be placed here
 
@@ -66,8 +65,28 @@ namespace bitmask {
   }
 
   template <typename T>
-  inline constexpr pos_t log2_msb(T t) {
+  inline constexpr pos_t log2_lsb(T t) {
+#if defined(__GNUC__)
+    return __builtin_ffsll(t)-1;
+#elif defined(_MSC_VER)
+    assert(b != 0);
+    DWORD index;
+#ifdef _WIN64
+    _BitScanForward64(&index,b);
+    return (unsigned)index;
+#else
+    if (b & 0xffffffffULL) {
+      _BitScanForward(&index,(unsigned long)(b & 0xffffffffULL));
+      return (unsigned)index;
+    }
+    else {
+      _BitScanForward(&index,(unsigned long)(b >> 32));
+      return 32 + (unsigned)index;
+    }
+#endif
+#else
     return std::countr_zero(t);
+#endif
   }
 
   // https://www.chessprogramming.org/BitScan#DeBruijnMultiplation
@@ -124,7 +143,7 @@ namespace bitmask {
   inline constexpr void foreach(T mask, F &&func) {
     if(!mask)return;
     while(mask) {
-      const pos_t r = bitmask::log2_msb(mask);
+      const pos_t r = bitmask::log2_lsb(mask);
       func(r);
       // unset r-th bit
       assert(mask & (T(1) << r));
@@ -137,7 +156,7 @@ namespace bitmask {
   inline constexpr void foreach_early_stop(T mask, F &&func) {
     if(!mask)return;
     while(mask) {
-      const pos_t r = bitmask::log2_msb(mask);
+      const pos_t r = bitmask::log2_lsb(mask);
       if(!func(r)) {
         break;
       }

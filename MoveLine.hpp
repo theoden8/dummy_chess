@@ -18,12 +18,13 @@ struct MoveLine {
   std::vector<move_t> line;
   size_t start = 0;
   bool mainline = true;
+  bool tb = false;
 
   INLINE MoveLine()
   {}
 
-  explicit INLINE MoveLine(const std::vector<move_t> &line, bool mainline=true, bool shrink=false):
-    line(line), mainline(mainline)
+  explicit INLINE MoveLine(const std::vector<move_t> &line, bool mainline=true, bool shrink=false, bool tb=false):
+    line(line), mainline(mainline), tb(tb)
   {
     if(!shrink) {
       this->line.reserve(16);
@@ -56,6 +57,7 @@ struct MoveLine {
   }
 
   INLINE void put(move_t m) {
+    tb = false;
     line.emplace_back(m);
   }
 
@@ -84,6 +86,7 @@ struct MoveLine {
   }
 
   INLINE void resize(size_t new_size) {
+    tb = false;
     line.resize(start + new_size);
   }
 
@@ -93,6 +96,7 @@ struct MoveLine {
   }
 
   INLINE void premove(move_t m) {
+    tb = false;
     if(self.empty()) {
       self.put(m);
     } else if(m == self.front()) {
@@ -108,12 +112,16 @@ struct MoveLine {
     if(start > 0)--start;
   }
 
+  INLINE void recall_n(decltype(start) n) {
+    start = std::max<decltype(n)>(start - n, 0);
+  }
+
   INLINE void total_recall() {
     while(start)self.recall();
   }
 
   INLINE MoveLine full() const {
-    MoveLine f = *this;
+    MoveLine f = self;
     f.start = 0;
     return f;
   }
@@ -124,6 +132,7 @@ struct MoveLine {
 
   INLINE void replace_line(const MoveLine &other) {
     self.resize(other.size());
+    tb = other.tb;
     for(size_t i = 0; i < other.size(); ++i) {
       self[i] = other[i];
     }
@@ -131,12 +140,14 @@ struct MoveLine {
   }
 
   INLINE void draft(move_t m) {
+    tb = false;
     self.premove(m);
     self.recall();
   }
 
   template <size_t N>
   INLINE void draft_line(const std::array<move_t, N> &m_hint) {
+    tb = false;
     size_t sz = 0;
     for(sz = 0; sz < m_hint.size(); ++sz) {
       if(m_hint[sz] == board::nullmove)break;
@@ -165,11 +176,11 @@ struct MoveLine {
   }
 
   INLINE MoveLine get_future() const {
-    return MoveLine(std::vector<move_t>(self.begin(), self.end()), mainline, true);
+    return MoveLine(std::vector<move_t>(self.begin(), self.end()), mainline, true, tb);
   }
 
   INLINE MoveLine get_past() const {
-    return MoveLine(std::vector<move_t>(line.begin(), self.begin()), mainline);
+    return MoveLine(std::vector<move_t>(line.begin(), self.begin()), mainline, true, false);
   }
 
   INLINE move_t get_previous_move() const {
@@ -192,8 +203,9 @@ struct MoveLine {
     return mline;
   }
 
-  INLINE MoveLine branch_from_past(move_t m=board::nullmove) const {
+  INLINE MoveLine branch_from_past(move_t m=board::nullmove) {
     if(self.front() == m && m != board::nullmove) {
+      tb = false;
       return self;
     }
     MoveLine mline = self.get_past();

@@ -125,6 +125,7 @@ public:
     const size_t mem_perft = size_perft * sizeof(tt_perft_entry);
     return zobrist::make_store_object_scope<tt_perft_entry>(perft_ttable, size_perft);
   }
+
   size_t _perft(depth_t depth, std::vector<tt_perft_entry> &perft_ttable) {
     if(depth == 1 || depth == 0) {
       return count_moves(activePlayer());
@@ -158,7 +159,7 @@ public:
     return _perft(depth, store_scope.get_object());
   }
 
-  Perft(const fen::FEN &fen=fen::starting_pos, size_t zbsize=ZOBRIST_SIZE):
+  explicit Perft(const fen::FEN &fen=fen::starting_pos, size_t zbsize=ZOBRIST_SIZE):
     Board(fen, zbsize)
   {}
 };

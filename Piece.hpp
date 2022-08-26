@@ -12,6 +12,7 @@
 
 // pieces
 typedef enum : pos_t { PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING, EMPTY, NO_PIECES=EMPTY } PIECE;
+using piece_index_t = pos_t;
 
 // two bytes, one for each move; second byte may contain information about promotion (2 bits)
 typedef pos_pair_t move_t;

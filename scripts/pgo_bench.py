@@ -23,6 +23,7 @@ def run_traditional_pgo(uci_exec: str) -> None:
     run_fen(sess, fen='rnq1kbnr/p1p4p/1p2pp2/3p2p1/2PP3N/4P3/PP1B1PQP/RN2K2R w KQkq - 0 11')
     run_fen(sess, fen='2rqkb1r/p2b1pp1/2n5/1p1n2Pp/N3p2P/1PPp4/P2P1P2/R1BQKBNR w KQk - 0 15')
     run_fen(sess, fen='r3kb1r/p1p1ppp1/pq2Nn1p/4N3/3P1B2/8/PPP2PPP/R2Q1RK1 b kq - 0 12')
+    run_fen(sess, fen='8/8/8/4p3/3k4/8/5PK1/7R w - - 0 1')
     next(sess.run('./dummy_chess_uci', noprint))
 
 

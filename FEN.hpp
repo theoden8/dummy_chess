@@ -17,7 +17,7 @@ class Board;
 // shredder-fen
 // https://www.chessprogramming.org/Forsyth-Edwards_Notation#Shredder-FEN
 namespace fen {
-  typedef struct _FEN {
+  struct FEN {
     COLOR active_player : 2;
     std::string board;
     std::string subs;
@@ -29,14 +29,14 @@ namespace fen {
     bool crazyhouse;
     piece_bitboard_t crazyhouse_promoted;
 
-    inline bool operator==(const struct _FEN &other) const {
+    inline bool operator==(const struct FEN &other) const {
       return active_player == other.active_player
              && board == other.board && subs == other.subs
              && castlings == other.castlings
              && enpassant == other.enpassant && halfmove_clock == other.halfmove_clock
              && fullmove == other.fullmove;
     }
-  } FEN;
+  };
 
   fen::FEN load_from_string(const std::string &s) {
     size_t i = 0;

@@ -3,6 +3,10 @@
 
 
 int main(int argc, char *argv[]) {
+  bool ret = tb::init();
+  if(ret) {
+    printf("tablebase opened successfully, max=%u\n", TB_LARGEST);
+  }
   int depth = 8;
   if(argc >= 2) {
     depth = atoi(argv[1]);
@@ -21,4 +25,6 @@ int main(int argc, char *argv[]) {
   printf("nodes searched: %lu\n", b.nodes_searched);
   printf("hit rate: %.5f\n", double(b.zb_hit) / double(1e-9+ b.zb_hit + b.zb_miss));
   printf("hashfull: %.5f\n", double(b.zb_occupied) / double(ZOBRIST_SIZE));
+  //printf("eval: %f\n", Engine::score_float(b.evaluate()));
+  tb::free();
 }

@@ -32,11 +32,15 @@ using key_t = uint_fast32_t;
 using ind_t = uint_fast16_t;
 
 constexpr ind_t rnd_start_piecepos = 0;
-constexpr ind_t rnd_start_enpassant = rnd_start_piecepos + key_t(board::SIZE) * board::NO_PIECE_INDICES;
+constexpr ind_t rnd_start_enpassant = rnd_start_piecepos + ind_t(board::SIZE) * ind_t(board::NO_PIECE_INDICES);
 constexpr ind_t rnd_start_castlings = rnd_start_enpassant + 8;
 constexpr ind_t rnd_start_moveside = rnd_start_castlings + 4;
 constexpr ind_t rnd_size = rnd_start_moveside + 1;
 std::array<key_t, rnd_size> rnd_hashes;
+
+INLINE zobrist::key_t piece_hash(COLOR c, PIECE p, pos_t square) {
+  return rnd_hashes[rnd_start_piecepos + ind_t(board::SIZE) * Piece(p,c).piece_index + square];
+}
 
 // http://vigna.di.unimi.it/ftp/papers/xorshift.pdf
 uint64_t g_seed = 0x78473ULL;
