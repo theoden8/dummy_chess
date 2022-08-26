@@ -203,10 +203,11 @@ struct MoveLine {
     return mline;
   }
 
-  INLINE MoveLine branch_from_past(move_t m=board::nullmove) {
+  INLINE MoveLine branch_from_past(move_t m=board::nullmove) const {
     if(self.front() == m && m != board::nullmove) {
-      tb = false;
-      return self;
+      MoveLine mline = self;
+      mline.tb = false;
+      return mline;
     }
     MoveLine mline = self.get_past();
     mline.start = start;

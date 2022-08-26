@@ -415,7 +415,7 @@ public:
     return NO_INDEX;
   }
 
-  INLINE mval_t move_heuristic_cmt(move_t m, const MoveLine &pline, const std::vector<mval_t> &cmh_table) const {
+  INLINE mval_t move_heuristic_cmt(move_t m, const MoveLine &pline, const std::vector<float> &cmh_table) const {
     const size_t cmt_index = get_cmt_index(pline, m);
     if(cmt_index != SIZE_MAX) {
       return cmh_table[cmt_index];
@@ -694,9 +694,9 @@ public:
     if(tt_has_entry) {
       debug.update_mem(depth, alpha, beta, zb, pline);
       if(zb.ndtype == TT_EXACT || (zb.score < alpha && zb.ndtype == TT_ALLNODE) || (zb.score >= beta && zb.ndtype == TT_CUTOFF)) {
+        bool draw_pathdep = false;
         if(ENABLE_TT_RETURN && zb.back() == board::nullmove) {
           ++nodes_searched;
-          bool draw_pathdep = false;
           walk_early_stop(zb.m_hint,
             [&](const move_t m) mutable -> bool {
               if(m == board::nullmove) {
@@ -717,59 +717,68 @@ public:
             return std::make_pair(k, maybe_result);
           }
         }
-//        pline.draft_line(zb.m_hint);
-        bool draw_pathdep = false;
-        bool can_return_score = false;
-        depth_t R = 0;
-        walk_early_stop(zb.m_hint,
-          // foreach
-          [&](const move_t m) mutable -> bool {
-            if(m == board::nullmove) {
-              return false;
-            }
-            assert(check_valid_move(m));
-            if(is_draw_repetition() || is_draw_halfmoves()) {
-              draw_pathdep = true;
-              return false;
-            }
-            pline.premove(m);
-            return true;
-          },
-          // endfunc
-          [&](const ply_index_t nsteps) mutable -> void {
-            R = nsteps;
-            // doesn't lead to path-dependent draw
-            // changed halfmove clock or pvline at least zb.depth - depth
-            const depth_t subdepth = zb.depth - R;
-            can_return_score = !draw_pathdep && (subdepth < depth || get_halfmoves() < R) && (state.info != zb.info);
-            if(can_return_score) {
-              score_t _alpha=alpha, _beta=beta;
-              if(R & 1)_alpha=-beta,_beta=-alpha;
-              score_t score = NOSCORE;
-              if(subdepth >= 0) {
-                if(!scoutsearch) {
-                  score = alpha_beta_pv(_alpha,_beta,subdepth,pline,ab_state,allow_nullmoves,make_callback_f());
-                  debug.check_score(depth, score, pline);
-                } else {
-                  assert(_alpha + 1 == _beta);
-                  score = alpha_beta_scout(_beta,subdepth,pline,ab_state,allow_nullmoves);
-                  debug.check_score(depth, score, pline);
-                }
-              } else {
-                score = alpha_beta_quiescence(_alpha,_beta,subdepth,pline,ab_state,nchecks);
-                debug.check_score(depth, score, pline);
+        if(!draw_pathdep) {
+  //        pline.draft_line(zb.m_hint);
+          bool can_return_score = false;
+          depth_t R = 0;
+          MoveLine pline_alt = pline.branch_from_past();
+          walk_early_stop(zb.m_hint,
+            // foreach
+            [&](const move_t m) mutable -> bool {
+              if(m == board::nullmove) {
+                return false;
               }
-              assert(check_valid_sequence(pline));
-              // note: current position rolls back only after return statement
-              maybe_result = score_decay(score, R);
+              assert(check_valid_move(m));
+              if(is_draw_repetition() || is_draw_halfmoves()) {
+                draw_pathdep = true;
+                return false;
+              }
+              pline_alt.premove(m);
+              return true;
+            },
+            // endfunc
+            [&](const ply_index_t nsteps) mutable -> void {
+              R = nsteps;
+              // doesn't lead to path-dependent draw
+              // changed halfmove clock or pvline at least zb.depth - depth
+              const depth_t subdepth = zb.depth - R;
+              can_return_score = !draw_pathdep && (R < (ssize_t)zb.m_hint.size() || subdepth < depth || get_halfmoves() < R) && (state.info != zb.info);
+              if(can_return_score) {
+                score_t _alpha=alpha, _beta=beta;
+                if(R & 1)_alpha=-beta,_beta=-alpha;
+                score_t score = NOSCORE;
+                if(subdepth >= 0) {
+                  if(!scoutsearch) {
+                    score = alpha_beta_pv(_alpha,_beta,subdepth,pline_alt,ab_state,allow_nullmoves,make_callback_f());
+                    debug.check_score(depth, score, pline_alt);
+                  } else {
+                    assert(_alpha + 1 == _beta);
+                    score = alpha_beta_scout(_beta,subdepth,pline_alt,ab_state,allow_nullmoves);
+                    debug.check_score(depth, score, pline_alt);
+                  }
+                } else {
+                  score = alpha_beta_quiescence(_alpha,_beta,subdepth,pline_alt,ab_state,nchecks);
+                  debug.check_score(depth, score, pline_alt);
+                }
+                debug.check_score(subdepth, score, pline_alt);
+                if((score < alpha && zb.ndtype == TT_ALLNODE) || (score >= beta && zb.ndtype == TT_CUTOFF)) {
+                  // note: current position rolls back only after return statement
+                  maybe_result = score_decay(score, R);
+                } else {
+                  can_return_score = false;
+                }
+                assert(check_valid_sequence(pline_alt));
+              }
             }
-            pline.recall_n(R);
+          );
+          pline_alt.recall_n(R);
+          assert(check_valid_sequence(pline_alt));
+          if(can_return_score) {
+            pline.replace_line(pline_alt);
+            assert(check_valid_sequence(pline));
+            debug.check_score(zb.depth, maybe_result, pline);
+            return std::make_pair(k, maybe_result);
           }
-        );
-        if(can_return_score) {
-          debug.check_score(zb.depth, maybe_result, pline);
-          assert(check_valid_sequence(pline));
-          return std::make_pair(k, maybe_result);
         }
       } else if(alpha < zb.score && zb.score < beta) {
         if(zb.ndtype == TT_CUTOFF) {
@@ -1273,22 +1282,17 @@ public:
     const mval_t _max_mval = moves.front().first;
     const bool iid_allow = ENABLE_IID && true && !(mval_is_primary(_max_mval) || mval_is_tbwin(_max_mval)) && depth >= 9;
     if(iid_allow) {
-      MoveLine internal_pline = pline;
-      alpha_beta_pv(alpha, beta, depth / 2, internal_pline, ab_state, true, callback_f, your_threatmove);
-      const move_t m = internal_pline.front();
-      bool found_iid_move = false;
-      for(size_t move_index = 0; move_index < moves.size(); ++move_index) {
-        if(moves[move_index].second == m) {
-          moves[move_index].first = 1000.;
-          std::sort(moves.begin(), moves.end(), std::greater<>());
-          pline.replace_line(internal_pline);
-          //fprintf(stderr, "PV iid allowed %d\n", (int)depth);
-          //fflush(stderr);
-          found_iid_move = true;
-          break;
-        }
-      }
-      assert(found_iid_move);
+      assert(pline.empty());
+      alpha_beta_pv(alpha, beta, depth / 2, pline, ab_state, true, callback_f, your_threatmove);
+      const move_t m = pline.front();
+      // find move index
+      size_t m_ind = 0;
+      for(m_ind = 0; moves[m_ind].second != m && m_ind < moves.size(); ++m_ind)
+        ;
+      assert(m_ind != moves.size());
+      moves[m_ind].first = 1000.;
+      std::sort(moves.begin(), moves.end(), std::greater<>());
+      //_perror("PV iid allowed %d\n", (int)depth);
     }
 
     // pvsearch main loop
