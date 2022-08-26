@@ -435,6 +435,15 @@ public:
     return std::abs(score) > MATERIAL_KING / 4 - 1000 && !score_is_mate(score);
   }
 
+  static INLINE score_t score_material(score_t score) {
+    if(score_is_mate(score)) {
+      return score;
+    } else if(score_is_tb(score)) {
+      return score > 0 ? score - 500 : score + 500;
+    }
+    return score;
+  }
+
   static INLINE score_t score_decay(score_t score) {
     if(score_is_mate(score)) {
       score += (score > 0) ? -1 : 1;
@@ -1380,6 +1389,13 @@ public:
         if(!callback_f(depth, bestscore)) {
           return bestscore;
         }
+      }
+      // at this point bestscore <= beta and opponent has a few pieces up
+      if(tb_can_probe() && ((score_is_tb(beta) && score_material(beta) <= -350*CENTIPAWN)
+                            || score_is_mate(beta))
+          && beta < 0 && move_index > 3 && !mval_is_primary(m_val))
+      {
+        break;
       }
     }
     if(overwrite && !isdraw_pathdep && !pline.tb && !pline.find(board::nullmove)) {

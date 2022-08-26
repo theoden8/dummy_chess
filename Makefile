@@ -2,13 +2,13 @@
 
 DBGFLAGS := -g3
 
-FEATURE_SUPPORT_SANITIZE = $(shell ./scripts/compiler_support_sanitize $(CXX))
-FEATURE_SUPPORT_PGO = $(shell ./scripts/compiler_support_pgo $(CXX))
-FEATURE_SUPPORT_GCC = $(shell ./scripts/compiler_support_gccflags $(CXX))
-FEATURE_SUPPORT_CLANG = $(shell ./scripts/compiler_support_clangflags $(CXX))
-FEATURE_SUPPORT_LIBBSD = $(shell ./scripts/compiler_support_libbsd $(CXX))
-FEATURE_SUPPORT_JEMALLOC = $(shell ./scripts/compiler_support_jemalloc $(CXX))
-FEATURE_SUPPORT_STDRANGES = $(shell ./scripts/compiler_support_stdranges $(CXX))
+FEATURE_SUPPORT_SANITIZE ?= $(shell ./scripts/compiler_support_sanitize $(CXX))
+FEATURE_SUPPORT_PGO ?= $(shell ./scripts/compiler_support_pgo $(CXX))
+FEATURE_SUPPORT_GCC ?= $(shell ./scripts/compiler_support_gccflags $(CXX))
+FEATURE_SUPPORT_CLANG ?= $(shell ./scripts/compiler_support_clangflags $(CXX))
+FEATURE_SUPPORT_LIBBSD ?= $(shell ./scripts/compiler_support_libbsd $(CXX))
+FEATURE_SUPPORT_JEMALLOC ?= $(shell ./scripts/compiler_support_jemalloc $(CXX))
+FEATURE_SUPPORT_STDRANGES ?= $(shell ./scripts/compiler_support_stdranges $(CXX))
 
 $(info CXX is $(CXX))
 $(info FEATURE_SUPPORT_SANITIZE is $(FEATURE_SUPPORT_SANITIZE))
@@ -106,7 +106,7 @@ dummy_chess_alphabeta: $(DEPS_ALPHABETA)
 	$(CXX) $(PROFFLAGS) $(CXXFLAGS) alphabeta.cpp $(SOURCES) $(LDFLAGS) -o $@
 
 dummy_chess_uci: $(DEPS_UCI)
-	$(CXX) $(OPTFLAGS) $(CXXFLAGS) uci.cpp $(SOURCES) $(LDFLAGS) -o $@
+	$(CXX) $(OPTFLAGS) $(CXXFLAGS) -DMUTE_ERRORS uci.cpp $(SOURCES) $(LDFLAGS) -o $@
 else ifeq ($(FEATURE_SUPPORT_PGO),gcc)
 dummy_chess_bench: $(DEPS_BENCH) dummy_chess_uci
 	$(CXX) $(OPTFLAGS) -fprofile-use $(CXXFLAGS) bench.cpp $(SOURCES) $(LDFLAGS) -o $@
@@ -116,9 +116,9 @@ dummy_chess_alphabeta: $(DEPS_ALPHABETA) dummy_chess_uci
 
 dummy_chess_uci: $(DEPS_UCI)
 	rm -vf *.gcda
-	$(CXX) $(OPTFLAGS) -fprofile-generate $(CXXFLAGS) uci.cpp $(SOURCES) $(LDFLAGS) -o $@
+	$(CXX) $(OPTFLAGS) -fprofile-generate $(CXXFLAGS) -DMUTE_ERRORS uci.cpp $(SOURCES) $(LDFLAGS) -o $@
 	./scripts/pgo_bench.py "./dummy_chess_uci"
-	$(CXX) $(OPTFLAGS) -fprofile-use -fprofile-correction $(CXXFLAGS) uci.cpp $(SOURCES) $(LDFLAGS) -o $@
+	$(CXX) $(OPTFLAGS) -fprofile-use -fprofile-correction $(CXXFLAGS) -DMUTE_ERRORS uci.cpp $(SOURCES) $(LDFLAGS) -o $@
 else ifeq ($(FEATURE_SUPPORT_PGO),clang)
 dummy_chess_bench: $(DEPS_BENCH) dummy_chess_uci
 	$(CXX) $(OPTFLAGS) -fprofile-use=uci.profdata $(CXXFLAGS) bench.cpp $(SOURCES) $(LDFLAGS) -o $@
@@ -129,10 +129,10 @@ dummy_chess_alphabeta: $(DEPS_ALPHABETA) dummy_chess_uci
 dummy_chess_uci: $(DEPS_UCI)
 	rm -rvf uci.d.profdata
 	rm -vf uci.profdata
-	$(CXX) $(OPTFLAGS) -fprofile-generate=uci.d.profdata $(CXXFLAGS) uci.cpp $(SOURCES) $(LDFLAGS) -o $@
+	$(CXX) $(OPTFLAGS) -fprofile-generate=uci.d.profdata -DMUTE_ERRORS $(CXXFLAGS) uci.cpp $(SOURCES) $(LDFLAGS) -o $@
 	./scripts/pgo_bench.py "./dummy_chess_uci"
 	$(LLVM_PROFDATA) merge -output=uci.profdata uci.d.profdata
-	$(CXX) $(OPTFLAGS) -fprofile-use=uci.profdata $(CXXFLAGS) uci.cpp $(SOURCES) $(LDFLAGS) -o $@
+	$(CXX) $(OPTFLAGS) -fprofile-use=uci.profdata $(CXXFLAGS) -DMUTE_ERRORS uci.cpp $(SOURCES) $(LDFLAGS) -o $@
 endif
 
 dummy_chess_uci_dbg: $(DEPS_UCI)

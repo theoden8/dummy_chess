@@ -22,6 +22,8 @@ using namespace std::string_literals;
 #define _printf(...)
 #endif
 
+#define _perror(...) fprintf(stderr, __VA_ARGS__)
+
 
 namespace str {
 
