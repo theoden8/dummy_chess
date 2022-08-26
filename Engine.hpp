@@ -27,7 +27,6 @@ public:
                         ENABLE_SEL_LMR = true && ENABLE_SELECTIVITY;
   static constexpr bool ENABLE_IID = true;
   static constexpr bool ENABLE_SYZYGY = true;
-  static constexpr bool ENABLE_SYZYGY_MOVE_PRUNING = ENABLE_SYZYGY && true;
 
   // callbacks
   INLINE void make_move(pos_t i, pos_t j) {
@@ -279,19 +278,6 @@ public:
       wdl_score = 0;
     }
     return wdl_score + heuristic_of(c) - heuristic_of(enemy_of(c));
-  }
-
-  INLINE bool is_repeated_thought(const MoveLine &pline) {
-    assert(check_valid_sequence(pline));
-    const size_t thought_moves = pline.start;
-    const size_t no_iter = !crazyhouse ? std::min<size_t>(self.get_halfmoves(), thought_moves) : thought_moves;
-    for(size_t i = NO_COLORS - 1; i < no_iter; i += NO_COLORS) {
-      const auto &state_iter = state_hist[state_hist.size() - i - 1];
-      if(state.info == state_iter.info) {
-        return true;
-      }
-    }
-    return false;
   }
 
   INLINE mval_t move_heuristic_extra_material(pos_t i, pos_t j) const {
@@ -1390,14 +1376,6 @@ public:
         if(!callback_f(depth, bestscore)) {
           return bestscore;
         }
-      }
-      // at this point bestscore <= beta and opponent has a few pieces up
-      if(ENABLE_SYZYGY_MOVE_PRUNING && tb_can_probe()
-          && ((score_is_tb(beta) && score_material(beta) <= -350*CENTIPAWN)
-                            || score_is_mate(beta))
-          && beta < 0 && move_index > 3 && !mval_is_primary(m_val))
-      {
-        break;
       }
     }
     if(overwrite && !isdraw_pathdep && !pline.tb && !pline.find(board::nullmove)) {
