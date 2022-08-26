@@ -372,18 +372,18 @@ namespace tb {
     return 0;
   }
 
-  INLINE decltype(auto) get_ranked_moves(const Board &b, bool prune=false) {
+  INLINE decltype(auto) get_ranked_moves(Board &b, bool prune=false) {
     assert(tb::can_probe(b));
     std::vector<std::pair<float, move_t>> tbmoves;
     tbmoves.reserve(8);
     int32_t min_tbrank = INT32_MIN, min_tbscore = INT32_MIN;
     auto &&func = [&](move_t m, int32_t tbRank, int32_t tbScore) mutable -> void {
 //      if(prune && (min_tbrank < tbRank || (min_tbrank == tbRank && min_tbscore < tbScore))) {
-      if(prune && min_tbscore < tbScore) {
+      if(prune && min_tbrank < tbRank) {
         tbmoves.clear();
         min_tbrank=tbRank, min_tbscore=tbScore;
       }
-      if(!prune || min_tbscore == tbScore) {
+      if(!prune || min_tbrank == tbRank) {
         float val = float(tbRank) + (float(tbScore) / float(TB_VALUE_MATE));
         tbmoves.emplace_back(val / 2, m);
       }

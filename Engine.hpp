@@ -1282,7 +1282,7 @@ public:
     const mval_t _max_mval = moves.front().first;
     const bool iid_allow = ENABLE_IID && true && !(mval_is_primary(_max_mval) || mval_is_tbwin(_max_mval)) && depth >= 9;
     if(iid_allow) {
-      assert(pline.empty());
+      assert(tb_can_probe() || pline.empty());
       alpha_beta_pv(alpha, beta, depth / 2, pline, ab_state, true, callback_f, your_threatmove);
       const move_t m = pline.front();
       // find move index
