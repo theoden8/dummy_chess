@@ -384,7 +384,7 @@ namespace tb {
         min_tbrank=tbRank, min_tbscore=tbScore;
       }
       if(!prune || min_tbrank == tbRank) {
-        float val = float(tbRank) + (float(tbScore) / float(TB_VALUE_MATE));
+        float val = float(tbRank) / TB_VALUE_FPAWN + float(tbScore) / 1000.;
         tbmoves.emplace_back(val / 2, m);
       }
     };

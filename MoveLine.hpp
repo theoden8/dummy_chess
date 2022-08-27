@@ -112,8 +112,9 @@ struct MoveLine {
     if(start > 0)--start;
   }
 
-  INLINE void recall_n(decltype(start) n) {
-    start = std::max<decltype(n)>(start - n, 0);
+  INLINE void recall_n(size_t n) {
+    assert(n < start);
+    start -= n;
   }
 
   INLINE void total_recall() {
@@ -137,12 +138,6 @@ struct MoveLine {
       self[i] = other[i];
     }
     assert(line.size() == start + other.size());
-  }
-
-  INLINE void draft(move_t m) {
-    tb = false;
-    self.premove(m);
-    self.recall();
   }
 
   template <size_t N>

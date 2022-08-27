@@ -112,9 +112,9 @@ struct DebugTracer {
     if(filter_moveline(depth, pline) && show_q) {
       const char ast = (pline.get_past().startswith(debug_moveline)) ? ' ' : '*';
       _printf("%s%cdepth=%d, score=%.5f (%.5f, %.5f) %s -- %s (standpat)\n",
-        tab(depth).c_str(), ast, (int)depth,
-        EngineT::score_float(score), EngineT::score_float(alpha), EngineT::score_float(beta),
-        _line_str_full(pline).c_str(), actinfo_standpat(alpha, beta, score, nchecks).c_str());
+              tab(depth).c_str(), ast, (int)depth,
+              EngineT::score_float(score), EngineT::score_float(alpha), EngineT::score_float(beta),
+              _line_str_full(pline).c_str(), actinfo_standpat(alpha, beta, score, nchecks).c_str());
       update_line(depth, alpha, beta, pline);
     }
     assert(engine.check_valid_sequence(pline));
@@ -128,10 +128,10 @@ struct DebugTracer {
     if(filter_moveline(depth, pline_alt) && show_q) {
       const char ast = (pline_alt.full().startswith(debug_moveline)) ? ' ' : '*';
       _printf("%s%cdepth=%d, %s, score=%.5f (%.5f, %.5f) %s -- %s %s Q\n",
-        tab(depth).c_str(), ast, (int)depth, pgn::_move_str(engine, m).c_str(),
-        EngineT::score_float(score), EngineT::score_float(alpha), EngineT::score_float(beta),
-        _line_str_full(pline_alt).c_str(), actinfo(alpha, beta, bestscore, score).c_str(),
-        extra_inf.c_str());
+              tab(depth).c_str(), ast, (int)depth, pgn::_move_str(engine, m).c_str(),
+              EngineT::score_float(score), EngineT::score_float(alpha), EngineT::score_float(beta),
+              _line_str_full(pline_alt).c_str(), actinfo(alpha, beta, bestscore, score).c_str(),
+              extra_inf.c_str());
       update_line(depth, alpha, beta, pline_alt);
     }
     assert(engine.check_valid_sequence(pline_alt));
@@ -144,10 +144,10 @@ struct DebugTracer {
     pline_alt.replace_line(zb.subpline);
     if(filter_moveline(depth, pline_alt) && show_mem) {
       _printf("%s depth=%d, %s (%.5f, %.5f) %s -- %s (score=%.5f)\n",
-          tab(depth).c_str(), int(depth), pgn::_move_str(engine, zb.m_hint.front()).c_str(),
-          EngineT::score_float(alpha), EngineT::score_float(beta),
-          _line_str_full(pline_alt).c_str(), actinfo_mem(alpha, beta, zb).c_str(),
-          EngineT::score_float(zb.score));
+              tab(depth).c_str(), int(depth), pgn::_move_str(engine, zb.m_hint.front()).c_str(),
+              EngineT::score_float(alpha), EngineT::score_float(beta),
+              _line_str_full(pline_alt).c_str(), actinfo_mem(alpha, beta, zb).c_str(),
+              EngineT::score_float(zb.score));
       update_line(depth, alpha, beta, pline_alt);
     }
     assert(engine.check_valid_sequence(pline_alt));
@@ -171,10 +171,10 @@ struct DebugTracer {
       if(score<bestscore)return;
       const char ast = (pline_alt.full().startswith(debug_moveline)) ? ' ' : '*';
       _printf("%s%cdepth=%d, %s, score=%.5f (%.5f, %.5f) %s -- %s %s ZW\n",
-        tab(depth).c_str(), ast, int(depth), pgn::_move_str(engine, m).c_str(),
-        EngineT::score_float(score), EngineT::score_float(alpha), EngineT::score_float(beta),
-        _line_str_full(pline_alt).c_str(), actinfo(alpha, beta, bestscore, score).c_str(),
-        extra_inf.c_str());
+              tab(depth).c_str(), ast, int(depth), pgn::_move_str(engine, m).c_str(),
+              EngineT::score_float(score), EngineT::score_float(alpha), EngineT::score_float(beta),
+              _line_str_full(pline_alt).c_str(), actinfo(alpha, beta, bestscore, score).c_str(),
+              extra_inf.c_str());
       update_line(depth, alpha, beta, pline_alt);
     }
     assert(engine.check_valid_sequence(pline_alt));

@@ -141,9 +141,10 @@ struct RecursiveMoveLineScope {
   INLINE ~RecursiveMoveLineScope() {
     if(!is_acting_scope)return;
     for(int i = 0; i < counter; ++i) {
-      mline.recall();
       b.retract_move();
     }
+    mline.recall_n(counter);
+    counter = 0;
   }
 };
 

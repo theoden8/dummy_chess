@@ -936,13 +936,7 @@ public:
   INLINE bool check_valid_sequence(const LineT &mline, bool strict=false) {
     bool res = true;
     walk_early_stop(mline, [&](const move_t m) mutable -> bool {
-      res = check_valid_move(m, strict);
-      if(!res) {
-        str::pdebug("move", _move_str(m));
-        str::pdebug("fen", fen::export_as_string(export_as_fen()));
-        str::pdebug("[invalid "s, _line_str_full(mline, false), "]"s);
-      }
-      return res;
+      return (res = check_valid_move(m, strict));
     });
     return res;
   }

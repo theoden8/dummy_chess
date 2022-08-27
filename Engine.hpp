@@ -464,7 +464,7 @@ public:
     if(score == NOSCORE) {
       snprintf(s, sizeof(s), "noscore");
     } else if(score_is_mate(score)) {
-      snprintf(s, sizeof(s), "MATE%s%d", score > 0 ? "+":"", (int)score_mate_in(score));
+      snprintf(s, sizeof(s), "MATE%s%d", score > 0 ? "+":(score_mate_in(score)==0?"-":""), (int)score_mate_in(score));
     } else {
       snprintf(s, sizeof(s), "%s%.05f", score>0?"+":(score==0?" ":""), score_float(score));
     }
@@ -707,9 +707,13 @@ public:
             }
           );
           if(!draw_pathdep) {
+            draw_pathdep = is_draw_repetition() || is_draw_halfmoves();
+          }
+          if(!draw_pathdep) {
             pline.clear();
             pline.draft_line(zb.m_hint);
             maybe_result = zb.score;
+            debug.check_score(zb.depth, maybe_result, pline);
             return std::make_pair(k, maybe_result);
           }
         }
@@ -735,6 +739,9 @@ public:
             // endfunc
             [&](const ply_index_t nsteps) mutable -> void {
               R = nsteps;
+              if(!draw_pathdep) {
+                draw_pathdep = is_draw_repetition() || is_draw_halfmoves();
+              }
               // doesn't lead to path-dependent draw
               // changed halfmove clock or pvline at least zb.depth - depth
               const depth_t subdepth = zb.depth - R;
@@ -770,8 +777,8 @@ public:
           pline_alt.recall_n(R);
           assert(check_valid_sequence(pline_alt));
           if(can_return_score) {
-            pline.replace_line(pline_alt);
             assert(check_valid_sequence(pline));
+            pline.replace_line(pline_alt);
             debug.check_score(zb.depth, maybe_result, pline);
             return std::make_pair(k, maybe_result);
           }
@@ -1112,7 +1119,7 @@ public:
         }
       }
     }
-    assert(check_valid_move(pline.front()) || pline.front() == board::nullmove);
+    assert(check_valid_move(pline.front(), false));
     assert(check_valid_sequence(pline));
     // drop to quiescence search
     if(depth <= 0) {
@@ -1182,7 +1189,7 @@ public:
       } // end move scope
       debug.update_zw(depth, alpha, beta, bestscore, score, m, pline, pline_alt);
       debug.check_score(depth, score, pline_alt);
-//        debug.log_pv(depth, pline_alt, "move "s + pgn::_move_str(self, m) + " score "s + std::to_string(score_float(score)));
+//      debug.log_pv(depth, pline_alt, "move "s + pgn::_move_str(self, m) + " score "s + score_string(score));
       if(score > bestscore) {
         pline.replace_line(pline_alt);
         bestscore = score;
@@ -1279,14 +1286,14 @@ public:
     const bool iid_allow = ENABLE_IID && true && !(mval_is_primary(_max_mval) || mval_is_tbwin(_max_mval)) && depth >= 9;
     if(iid_allow) {
       assert(tb_can_probe() || pline.empty());
-      alpha_beta_pv(alpha, beta, depth / 2, pline, ab_state, true, callback_f, your_threatmove);
+      alpha_beta_pv(alpha, beta, depth / 2, pline, ab_state, true, make_callback_f(), your_threatmove);
       const move_t m = pline.front();
       // find move index
       size_t m_ind = 0;
       for(m_ind = 0; moves[m_ind].second != m && m_ind < moves.size(); ++m_ind)
         ;
       assert(m_ind != moves.size());
-      moves[m_ind].first = 1000.;
+      moves[m_ind].first = move_heuristic_pv(moves[m_ind].second, pline, board::nullmove, board::nullmove);
       std::sort(moves.begin(), moves.end(), std::greater<>());
       //_perror("PV iid allowed %d\n", (int)depth);
     }
@@ -1305,7 +1312,7 @@ public:
       MoveLine pline_alt = pline.branch_from_past(m);
       score_t score = 0;
       // PV or hash move, full window
-      if(mval_is_primary(m_val) || mval_is_tbwin(m_val)) {
+      if(mval_is_primary(m_val) || (mval_is_tbwin(m_val) && move_index == 0)) {
         { // PV move scope
           decltype(auto) mscope = self.engine_mline_scope(m, pline_alt);
           isdraw_pathdep = is_draw_halfmoves() || is_draw_repetition();
@@ -1332,11 +1339,14 @@ public:
           const bool interesting_move = (is_drop_move(i, j) || is_castling_move(i, j) || is_promotion_move(i, j) || (is_naively_capture_move(i, j) && m_val > -3.5) || (is_naively_checking_move(i, j) && m_val > -9.));
           const bool lmr_allowed = ENABLE_SEL_LMR && move_index >= (pline.is_mainline() ? 15 : 4) && depth >= 3 && state.checkline[c] == bitmask::full && m_val < .1 && !interesting_move;
           MoveLine pline_alt2 = pline_alt;
+          score_t subscore = NOSCORE;
           if(lmr_allowed) {
-            score = -score_decay(alpha_beta_scout(-alpha, depth - 2, pline_alt2, ab_state, allow_nullmoves, your_threatmove));
+            subscore = alpha_beta_scout(-alpha, depth - 2, pline_alt2, ab_state, allow_nullmoves, your_threatmove);
           } else {
-            score = -score_decay(alpha_beta_scout(-alpha, depth - 1, pline_alt2, ab_state, allow_nullmoves, your_threatmove));
+            subscore = alpha_beta_scout(-alpha, depth - 1, pline_alt2, ab_state, allow_nullmoves, your_threatmove);
           }
+          score = -score_decay(subscore);
+          debug.check_score(depth, subscore, pline_alt2);
           if(score > alpha && score < beta) {
             // zw search successful, perform full-window search
             pline_alt.replace_line(pline_alt2);
@@ -1345,8 +1355,6 @@ public:
             if(score > alpha) {
               alpha = score;
               ndtype = TT_EXACT;
-            } else {
-              your_threatmove = pline_alt.get_next_move();
             }
           } else {
             pline_alt.replace_line(pline_alt2);
@@ -1356,8 +1364,10 @@ public:
         debug.check_score(depth, score, pline_alt);
 //        debug.log_pv(depth, pline_alt, "move "s + pgn::_move_str(self, m) + " score "s + std::to_string(score_float(score)));
       }
+      debug.check_score(depth, score, pline_alt);
       if(score > bestscore) {
         pline.replace_line(pline_alt);
+        your_threatmove = pline.get_next_move();
         bestscore = score;
         if(score >= beta) {
           if(overwrite && zb.should_replace(depth, TT_CUTOFF, tt_age) && !isdraw_pathdep && !pline.tb && !pline.find(board::nullmove)) {
@@ -1448,7 +1458,7 @@ public:
     }
     bool should_stop = false;
     for(depth_t d = idstate.curdepth; d <= depth; ++d) {
-      if(check_line_terminates(idstate.pline) && ssize_t(idstate.pline.size()) < d) {
+      if(check_line_terminates(idstate.pline) && ssize_t(idstate.pline.size()) < d && !idstate.pline.tb) {
         idstate.eval = get_pvline_score(idstate.pline);
 //        fprintf(stderr, "pv: (%s) %s\n", score_string(idstate.eval).c_str(), idstate.pline.pgn_full(self).c_str());
 //        fflush(stderr);

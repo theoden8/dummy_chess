@@ -3,11 +3,11 @@
 
 #define NEVER_INLINE __attribute__ ((noinline))
 #ifndef NDEBUG
-  #define INLINE inline
+  #define INLINE NEVER_INLINE
   #if __APPLE__
-  #define ALWAYS_INLINE __attribute__((always_inline))
+    #define ALWAYS_INLINE __attribute__((always_inline))
   #else
-  #define ALWAYS_INLINE __always_inline
+    #define ALWAYS_INLINE __always_inline
   #endif
 #else
   #define INLINE inline
@@ -15,7 +15,7 @@
 #endif
 
 #ifndef NDEBUG
-#define ALWAYS_UNROLL
+  #define ALWAYS_UNROLL
 #else
-#define ALWAYS_UNROLL __attribute__((optimize("unroll-loops")))
+  #define ALWAYS_UNROLL __attribute__((optimize("unroll-loops")))
 #endif
