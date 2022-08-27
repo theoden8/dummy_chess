@@ -1,10 +1,20 @@
 #!/usr/bin/env bash
 
-cmd=$1; shift
-[ -z "$cmd" ] && cmd=./dummy_chess_uci
+fen=$1; shift
+test -z "$fen" && fen=
 
-cutechess-cli -engine name='d1' cmd="$cmd" tc="100/0:30+0" dir=. restart=off proto=uci \
-              -engine name="d2" cmd="$cmd" tc="100/0:30+0" dir=. restart=off proto=uci \
+cmd=./dummy_chess_uci
+test -z "$fen" && {
+  openings=
+} || {
+  echo "[FEN \"$fen\"]" > /tmp/startfen
+  openings="-openings file=/tmp/startfen format=pgn"
+}
+option_load_syzygy="setoption name SyzygyPath value external/syzygy/src"
+cutechess-cli -engine name='d1' cmd="$cmd" tc="100/0:30+0" dir=. restart=off proto=uci initstr="$option_load_syzygy" \
+              -engine name="d2" cmd="$cmd" tc="100/0:30+0" dir=. restart=off proto=uci initstr="$option_load_syzygy" \
+              -variant standard \
+              $openings \
               -srand 0 -debug \
               | env python3 -c "
 import sys
@@ -12,10 +22,12 @@ import chess
 import chess.pgn
 
 board = chess.Board()
+if len('$fen') > 0:
+    board.set_fen('$fen')
 moves = []
 seen = 0
 for line in sys.stdin:
-    filt = 'position startpos moves'
+    filt = 'position fen $fen moves' if len('$fen') > 0 else 'position startpos moves'
     if filt in line:
         new_moves = line[line.index(filt) + len(filt) + 1:].split()
         #print(new_moves)
@@ -37,4 +49,5 @@ for line in sys.stdin:
         sys.stdout.flush()
         seen = len(s)
 print(board.result())
+#print(str(g).split('\n')[-1], board.result())
 "
