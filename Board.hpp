@@ -938,8 +938,8 @@ public:
     walk(mline,
       // each step
       [&](const move_t m, auto &&do_step_f) mutable -> void {
-        do_step_f();
         assert(!is_draw() && can_move());
+        do_step_f();
       },
       // end
       [&](const ply_index_t depth) {
