@@ -875,23 +875,17 @@ public:
   }
 
   template <typename LineT, typename F>
-  INLINE ply_index_t walk_early_stop(const LineT &mline, F &&func) {
-    auto &&rec_mscope = self.recursive_move_scope();
-    foreach_early_stop(mline, [&](const move_t m) mutable -> bool {
-      if(!func(m))return false;
-      rec_mscope.scope(m);
-      return true;
-    });
-    return rec_mscope.counter;
+  INLINE void walk_early_stop(const LineT &mline, F &&func) {
+    walk_early_stop(mline, std::forward<F>(func), [](ply_index_t){});
   }
 
   template <typename LineT, typename F, typename FF>
   INLINE void walk_early_stop(const LineT &mline, F &&func, FF &&endfunc) {
     auto &&rec_mscope = self.recursive_move_scope();
     foreach_early_stop(mline, [&](const move_t m) mutable -> bool {
-      if(!func(m))return false;
-      rec_mscope.scope(m);
-      return true;
+      return func(m, [&]() mutable -> void {
+        rec_mscope.scope(m);
+      });
     });
     endfunc((ply_index_t)rec_mscope.counter);
   }
@@ -904,21 +898,17 @@ public:
   }
 
   template <typename LineT, typename F>
-  INLINE ply_index_t walk(const LineT &mline, F &&func) {
-    auto &&rec_mscope = self.recursive_move_scope();
-    foreach(mline, [&](const move_t m) mutable -> void {
-      func(m);
-      rec_mscope.scope(m);
-    });
-    return rec_mscope.counter;
+  INLINE void walk(const LineT &mline, F &&func) {
+    walk(mline, std::forward<F>(func), [](ply_index_t){});
   }
 
   template <typename LineT, typename F, typename FF>
   INLINE void walk(const LineT &mline, F &&func, FF &&endfunc) {
     auto &&rec_mscope = self.recursive_move_scope();
     foreach(mline, [&](const move_t m) mutable -> void {
-      func(m);
-      rec_mscope.scope(m);
+      func(m, [&]() mutable -> void {
+        rec_mscope.scope(m);
+      });
     });
     endfunc((ply_index_t)rec_mscope.counter);
   }
@@ -935,8 +925,10 @@ public:
   template <typename LineT>
   INLINE bool check_valid_sequence(const LineT &mline, bool strict=false) {
     bool res = true;
-    walk_early_stop(mline, [&](const move_t m) mutable -> bool {
-      return (res = check_valid_move(m, strict));
+    walk_early_stop(mline, [&](const move_t m, auto &&do_step_f) mutable -> bool {
+      res = check_valid_move(m, strict);
+      do_step_f();
+      return res;
     });
     return res;
   }
@@ -945,7 +937,8 @@ public:
     bool res = false;
     walk(mline,
       // each step
-      [&](const move_t m) mutable -> void {
+      [&](const move_t m, auto &&do_step_f) mutable -> void {
+        do_step_f();
         assert(!is_draw() && can_move());
       },
       // end

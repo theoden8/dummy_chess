@@ -199,6 +199,7 @@ struct MoveLine {
   }
 
   INLINE MoveLine branch_from_past(move_t m=board::nullmove) const {
+#ifndef NDEBUG
     if(self.front() == m && m != board::nullmove) {
       MoveLine mline = self;
       mline.tb = false;
@@ -208,6 +209,9 @@ struct MoveLine {
     mline.start = start;
     mline.mainline = false;
     return mline;
+#else
+    return MoveLine({}, self.front() == m && m != board::nullmove, false, false);
+#endif
   }
 
   INLINE void clear() {

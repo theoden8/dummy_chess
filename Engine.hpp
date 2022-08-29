@@ -280,6 +280,19 @@ public:
     return wdl_score + heuristic_of(c) - heuristic_of(enemy_of(c));
   }
 
+  INLINE bool is_repeated_thought(const MoveLine &pline) {
+    assert(check_valid_sequence(pline));
+    const size_t thought_moves = pline.start;
+    const size_t no_iter = !crazyhouse ? std::min<size_t>(self.get_halfmoves(), thought_moves) : thought_moves;
+    for(size_t i = NO_COLORS - 1; i < no_iter; i += NO_COLORS) {
+      const auto &state_iter = state_hist[state_hist.size() - i - 1];
+      if(state.info == state_iter.info) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   INLINE mval_t move_heuristic_extra_material(pos_t i, pos_t j) const {
     const pos_t _j = j & board::MOVEMASK;
     if(crazyhouse && is_drop_move(i, j)) {
@@ -694,11 +707,12 @@ public:
         if(ENABLE_TT_RETURN && zb.back() == board::nullmove) {
           ++nodes_searched;
           walk_early_stop(zb.m_hint,
-            [&](const move_t m) mutable -> bool {
+            [&](const move_t m, auto &&do_step_f) mutable -> bool {
               if(m == board::nullmove) {
                 return false;
               }
               assert(check_valid_move(m));
+              do_step_f();
               if(is_draw_repetition() || is_draw_halfmoves()) {
                 draw_pathdep = true;
                 return false;
@@ -724,7 +738,7 @@ public:
           MoveLine pline_alt = pline.branch_from_past();
           walk_early_stop(zb.m_hint,
             // foreach
-            [&](const move_t m) mutable -> bool {
+            [&](const move_t m, auto &&do_step_f) mutable -> bool {
               if(m == board::nullmove) {
                 return false;
               }
@@ -734,6 +748,7 @@ public:
                 return false;
               }
               pline_alt.premove(m);
+              do_step_f();
               return true;
             },
             // endfunc
@@ -891,6 +906,7 @@ public:
 
   score_t alpha_beta_quiescence(score_t alpha, score_t beta, depth_t depth, MoveLine &pline, alpha_beta_state &ab_state, int8_t nchecks) {
     assert(alpha < beta);
+    assert(check_valid_sequence(pline));
     // check draw and checkmate
     if(self.is_draw()) {
       pline.clear();
@@ -898,17 +914,7 @@ public:
     } else if(self.is_checkmate()) {
       pline.clear();
       return -MATERIAL_KING;
-//    } else if(self.tb_can_probe()) {
-//      score_t maybe_tb_score = self.tb_probe_wdl();
-//      if(maybe_tb_score != NOSCORE) {
-//        if(maybe_tb_score != 0) {
-//          return evaluate() + maybe_tb_score;
-//        }
-//        return 0;
-//      }
     }
-    assert(check_valid_move(pline.front()) || pline.front() == board::nullmove);
-    assert(check_valid_sequence(pline));
 
     score_t score = -MATERIAL_KING;
     score_t bestscore = -MATERIAL_KING;
@@ -944,6 +950,7 @@ public:
     if(maybe_score != NOSCORE) {
       return maybe_score;
     }
+    assert(check_valid_move(hashmove, false));
 
     constexpr bool overwrite = true && ENABLE_TT;
 
@@ -1093,6 +1100,7 @@ public:
   {
     score_t alpha = zw_beta - 1, beta = zw_beta;
     assert(alpha + 1 == beta);
+    assert(check_valid_sequence(pline));
     // check draw and checkmate
     if(self.is_draw()) {
       ++nodes_searched;
@@ -1119,8 +1127,6 @@ public:
         }
       }
     }
-    assert(check_valid_move(pline.front(), false));
-    assert(check_valid_sequence(pline));
     // drop to quiescence search
     if(depth <= 0) {
       const int nchecks = 0;
@@ -1222,6 +1228,7 @@ public:
                         bool allow_nullmoves, F &&callback_f, move_t my_threatmove=board::nullmove)
   {
     assert(alpha < beta);
+    assert(check_valid_sequence(pline));
     // check draw and checkmate
     if(self.is_draw()) {
       ++nodes_searched;
@@ -1249,8 +1256,6 @@ public:
         }
       }
     }
-    assert(check_valid_move(pline.front(), false));
-    assert(check_valid_sequence(pline));
     // drop to quiescence search
     if(depth <= 0) {
       const int nchecks = 0;

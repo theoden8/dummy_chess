@@ -335,7 +335,7 @@ namespace tb {
       b.bits_slid_orth & ~b.bits_slid_diag,
       b.bits_slid_diag & ~b.bits_slid_orth,
       b.get_knight_bits(), b.bits_pawns,
-      b.get_halfmoves(), // anything except halfmoves == 0 is rejected
+      b.get_halfmoves() + 1,
       tb::internal::_get_castlings(b),
       tb::internal::_get_enpassant(b),
       tb::internal::_get_turn(b),
