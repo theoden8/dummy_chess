@@ -131,4 +131,40 @@ INLINE decltype(auto) make_store_object_scope(std::shared_ptr<zobrist::ttable<In
   return StoreScope<InnerObject>(zb_store, zbsize);
 }
 
+template <typename BoardT>
+zobrist::key_t zb_hash(const BoardT &board) {
+  zobrist::key_t zb = 0x00;
+  for(piece_index_t i = 0; i < board::NO_PIECE_INDICES; ++i) {
+    const Piece p = BoardT::pieces[i];
+    bitmask::foreach(board.get_mask(p), [&](pos_t pos) mutable -> void {
+      zb ^= zobrist::rnd_hashes[zobrist::rnd_start_piecepos + board::SIZE * i + pos];
+    });
+  }
+  if(board.is_castling(WHITE,QUEEN_SIDE))zb^=zobrist::rnd_hashes[zobrist::rnd_start_castlings + 0];
+  if(board.is_castling(WHITE,KING_SIDE)) zb^=zobrist::rnd_hashes[zobrist::rnd_start_castlings + 1];
+  if(board.is_castling(BLACK,QUEEN_SIDE))zb^=zobrist::rnd_hashes[zobrist::rnd_start_castlings + 2];
+  if(board.is_castling(BLACK,KING_SIDE)) zb^=zobrist::rnd_hashes[zobrist::rnd_start_castlings + 3];
+  if(board.enpassant_trace() != board::nopos) {
+    zb ^= zobrist::rnd_hashes[zobrist::rnd_start_enpassant + board::_x(board.enpassant_trace())];
+  }
+  if(board.activePlayer() == BLACK) {
+    zb ^= zobrist::rnd_hashes[zobrist::rnd_start_moveside];
+  }
+  return zb;
+}
+
+template <typename BoardT>
+zobrist::key_t zb_hash_material(const BoardT &board, bool mirror) {
+  zobrist::key_t zb = 0x00;
+  for(piece_index_t i = 0; i < board::NO_PIECE_INDICES; ++i) {
+    const Piece p = BoardT::pieces[i];
+    pos_t pcount = piece::size(board.get_mask(p));
+    if(board.crazyhouse)pcount += board.n_subs[i];
+    for(pos_t x = 0; x < pcount; ++x) {
+      zb ^= zobrist::piece_hash(!mirror ? p.color : enemy_of(p.color), p.value, x);
+    }
+  }
+  return zb;
+}
+
 } // zobrist

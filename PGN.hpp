@@ -488,10 +488,10 @@ NEVER_INLINE std::string _line_str(Board &b, const MoveLine &mline) {
 NEVER_INLINE std::string _line_str_full(Board &b, const MoveLine &mline) {
   assert(b.check_valid_sequence(mline));
   pgn::PGN pgn(b);
-  for(auto m : mline.get_past()) {
+  for(const move_t m : mline.get_past()) {
     b.retract_move();
   }
-  for(auto m : mline.get_past()) {
+  for(const move_t m : mline.get_past()) {
     pgn.handle_move(m);
   }
   std::string s = ""s;

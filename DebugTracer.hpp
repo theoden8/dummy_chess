@@ -214,6 +214,10 @@ struct DebugTracer {
     #endif
   }
 
+  void check_pathdep(bool pathdep, depth_t depth, score_t score, const MoveLine &pline) const {
+    assert(!pathdep || (score == 0 || engine.is_repeated_thought(pline)));
+  }
+
   void check_length(depth_t depth, const MoveLine &pline) const {
     #ifndef NDEBUG
     assert(pline.size() >= size_t(depth) || engine.check_line_terminates(pline));

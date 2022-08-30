@@ -124,7 +124,7 @@ dummy_chess_bench: $(DEPS_BENCH) dummy_chess_uci
 	$(CXX) $(OPTFLAGS) -fprofile-use=uci.profdata $(CXXFLAGS) bench.cpp $(SOURCES) $(LDFLAGS) -o $@
 
 dummy_chess_alphabeta: $(DEPS_ALPHABETA) dummy_chess_uci
-	$(CXX) $(PROFFLAGS) -fprofile-use=uci.profdata $(CXXFLAGS) alphabeta.cpp $(SOURCES) $(LDFLAGS) -o $@
+	$(CXX) $(PROFFLAGS) -fprofile-use=uci.profdata $(CXXFLAGS) -Wno-backend-plugin alphabeta.cpp $(SOURCES) $(LDFLAGS) -o $@
 
 dummy_chess_uci: $(DEPS_UCI)
 	rm -rvf uci.d.profdata

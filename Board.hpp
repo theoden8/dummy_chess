@@ -34,6 +34,17 @@ public:
   // general crazyhouse-specific variables
   const bool crazyhouse = false;
 
+  // cheap abstractions, pieces[Piece::piece_index(PAWN, BLACK)]
+  static constexpr std::array<Piece, board::NO_PIECE_INDICES+1>  pieces = {
+    Piece(PAWN, WHITE), Piece(PAWN, BLACK),
+    Piece(KNIGHT, WHITE), Piece(KNIGHT, BLACK),
+    Piece(BISHOP, WHITE), Piece(BISHOP, BLACK),
+    Piece(ROOK, WHITE), Piece(ROOK, BLACK),
+    Piece(QUEEN, WHITE), Piece(QUEEN, BLACK),
+    Piece(KING, WHITE), Piece(KING, BLACK),
+    Piece(EMPTY, NEUTRAL)
+  };
+
   // compressed (partially incomplete) board state for hashing
   struct board_info {
     COLOR active_player = NEUTRAL;
@@ -134,17 +145,6 @@ public:
   board_state state;
   // (only) previous states, for fast unmaking
   std::vector<board_state> state_hist;
-
-  // cheap abstractions, pieces[Piece::piece_index(PAWN, BLACK)]
-  const std::array<Piece, board::NO_PIECE_INDICES+1>  pieces = {
-    Piece(PAWN, WHITE), Piece(PAWN, BLACK),
-    Piece(KNIGHT, WHITE), Piece(KNIGHT, BLACK),
-    Piece(BISHOP, WHITE), Piece(BISHOP, BLACK),
-    Piece(ROOK, WHITE), Piece(ROOK, BLACK),
-    Piece(QUEEN, WHITE), Piece(QUEEN, BLACK),
-    Piece(KING, WHITE), Piece(KING, BLACK),
-    Piece(EMPTY, NEUTRAL)
-  };
 
   size_t zobrist_size;
   explicit Board(const fen::FEN &f=fen::starting_pos, size_t zbsize=ZOBRIST_SIZE):
@@ -561,38 +561,12 @@ public:
     return mask & bits[c];
   }
 
-  zobrist::key_t zb_hash() const {
-    zobrist::key_t zb = 0x00;
-    for(piece_index_t i = 0; i < board::NO_PIECE_INDICES; ++i) {
-      const Piece p = self.pieces[i];
-      bitmask::foreach(get_mask(p), [&](pos_t pos) mutable -> void {
-        zb ^= zobrist::rnd_hashes[zobrist::rnd_start_piecepos + board::SIZE * i + pos];
-      });
-    }
-    if(is_castling(WHITE,QUEEN_SIDE))zb^=zobrist::rnd_hashes[zobrist::rnd_start_castlings + 0];
-    if(is_castling(WHITE,KING_SIDE)) zb^=zobrist::rnd_hashes[zobrist::rnd_start_castlings + 1];
-    if(is_castling(BLACK,QUEEN_SIDE))zb^=zobrist::rnd_hashes[zobrist::rnd_start_castlings + 2];
-    if(is_castling(BLACK,KING_SIDE)) zb^=zobrist::rnd_hashes[zobrist::rnd_start_castlings + 3];
-    if(enpassant_trace() != board::nopos) {
-      zb ^= zobrist::rnd_hashes[zobrist::rnd_start_enpassant + board::_x(enpassant_trace())];
-    }
-    if(activePlayer() == BLACK) {
-      zb ^= zobrist::rnd_hashes[zobrist::rnd_start_moveside];
-    }
-    return zb;
+  INLINE zobrist::key_t zb_hash() const {
+    return zobrist::zb_hash(self);
   }
 
-  zobrist::key_t zb_hash_material(bool mirror=false) const {
-    zobrist::key_t zb = 0x00;
-    for(piece_index_t i = 0; i < board::NO_PIECE_INDICES; ++i) {
-      const Piece p = self.pieces[i];
-      pos_t pcount = piece::size(get_mask(p));
-      if(crazyhouse)pcount += n_subs[i];
-      for(pos_t x = 0; x < pcount; ++x) {
-        zb ^= zobrist::piece_hash(!mirror ? p.color : enemy_of(p.color), p.value, x);
-      }
-    }
-    return zb;
+  INLINE zobrist::key_t zb_hash_material(bool mirror=false) const {
+    return zobrist::zb_hash_material(self, mirror);
   }
 
   INLINE ply_index_t get_current_ply() const {
@@ -924,29 +898,24 @@ public:
 
   template <typename LineT>
   INLINE bool check_valid_sequence(const LineT &mline, bool strict=false) {
-    bool res = true;
-    walk_early_stop(mline, [&](const move_t m, auto &&do_step_f) mutable -> bool {
-      res = check_valid_move(m, strict);
-      do_step_f();
-      return res;
-    });
-    return res;
+    auto &&rec_mscope = recursive_move_scope();
+    for(const move_t m : mline) {
+      if(!check_valid_move(m, false)) {
+        return false;
+      }
+      rec_mscope.scope(m);
+    }
+    return true;
   }
 
-  INLINE bool check_line_terminates(const MoveLine &mline) {
-    bool res = false;
-    walk(mline,
-      // each step
-      [&](const move_t m, auto &&do_step_f) mutable -> void {
-        assert(!is_draw() && can_move());
-        do_step_f();
-      },
-      // end
-      [&](const ply_index_t depth) {
-        res = is_draw() || !can_move();
-      }
-    );
-    return res;
+  template <typename LineT>
+  INLINE bool check_line_terminates(const LineT &mline) {
+    auto &&rec_mscope = recursive_move_scope();
+    for(const move_t m : mline) {
+      assert(!is_draw() && can_move());
+      rec_mscope.scope(m);
+    }
+    return is_draw() || !can_move();
   }
 
   // methods that eventually generate completely legal moves

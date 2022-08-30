@@ -230,30 +230,9 @@ namespace tb {
   }
 
   INLINE unsigned _get_castlings(const Board &b) {
-    if(b.chess960) {
-      assert(b.get_castlings_rook_mask() == bitmask::_pos_pair(0x00, 0x00));
-      return 0x00;
-    }
-#if 1
     // anything except castlings == 0x00 is rejected
     assert(b.get_castlings_rook_mask() == bitmask::_pos_pair(0x00, 0x00));
     return 0x00;
-#else
-    unsigned castlings = 0x00;
-    if(b.is_castling(WHITE, KING_SIDE)) {
-      castlings |= TB_CASTLING_K;
-    }
-    if(b.is_castling(WHITE, QUEEN_SIDE)) {
-      castlings |= TB_CASTLING_Q;
-    }
-    if(b.is_castling(BLACK, KING_SIDE)) {
-      castlings |= TB_CASTLING_k;
-    }
-    if(b.is_castling(BLACK, QUEEN_SIDE)) {
-      castlings |= TB_CASTLING_q;
-    }
-    return castlings;
-#endif
   }
 
   MoveLine _get_rootmove_pline(TbRootMove &tb_root_move) {
@@ -376,16 +355,34 @@ namespace tb {
     assert(tb::can_probe(b));
     std::vector<std::pair<float, move_t>> tbmoves;
     tbmoves.reserve(8);
-    int32_t min_tbrank = INT32_MIN, min_tbscore = INT32_MIN;
-    auto &&func = [&](move_t m, int32_t tbRank, int32_t tbScore) mutable -> void {
+    ssize_t min_wdl = -1;
+    auto &&func = [&](move_t m, int32_t tbScore, int32_t tbRank) mutable -> void {
 //      if(prune && (min_tbrank < tbRank || (min_tbrank == tbRank && min_tbscore < tbScore))) {
-      if(prune && min_tbrank < tbRank) {
-        tbmoves.clear();
-        min_tbrank=tbRank, min_tbscore=tbScore;
+      ssize_t wdl = 0;
+      if(tbRank > 900) {
+        wdl = TB_WIN; // 4
+      } else if(tbRank > 800) {
+        wdl = TB_CURSED_WIN; // 3
+      } else if(tbRank < -900) {
+        wdl = TB_LOSS; // 0
+      } else if(tbRank < -800) {
+        wdl = TB_BLESSED_LOSS; // 1
+      } else {
+        wdl = TB_DRAW; // 2
       }
-      if(!prune || min_tbrank == tbRank) {
-        float val = float(tbRank) / TB_VALUE_FPAWN + float(tbScore) / 1000.;
-        tbmoves.emplace_back(val / 2, m);
+      if(prune && min_wdl < wdl) {
+        tbmoves.clear();
+        min_wdl = wdl;
+      }
+      if(!prune || min_wdl == wdl) {
+        float val = float(tbRank);
+        if(wdl != TB_WIN && wdl != TB_LOSS) {
+          val += float(tbScore) / TB_VALUE_FPAWN;
+          val /= 2;
+        } else {
+          val -= 100 * val / std::abs(val);
+        }
+        tbmoves.emplace_back(val, m);
       }
     };
     int8_t ret = probe_root_dtz(b, func);

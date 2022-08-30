@@ -5,7 +5,7 @@
 #include <memory>
 #include <algorithm>
 #include <valarray>
-#include <map>
+#include <unordered_set>
 #include <optional>
 
 #include <FEN.hpp>
@@ -284,6 +284,9 @@ public:
     assert(check_valid_sequence(pline));
     const size_t thought_moves = pline.start;
     const size_t no_iter = !crazyhouse ? std::min<size_t>(self.get_halfmoves(), thought_moves) : thought_moves;
+    if(no_iter < 3) {
+      return false;
+    }
     for(size_t i = NO_COLORS - 1; i < no_iter; i += NO_COLORS) {
       const auto &state_iter = state_hist[state_hist.size() - i - 1];
       if(state.info == state_iter.info) {
@@ -291,6 +294,10 @@ public:
       }
     }
     return false;
+  }
+
+  INLINE bool is_path_dependent(const MoveLine &pline) {
+    return is_draw_halfmoves() || is_draw_repetition() || is_repeated_thought(pline);
   }
 
   INLINE mval_t move_heuristic_extra_material(pos_t i, pos_t j) const {
@@ -489,7 +496,15 @@ public:
   }
 
   static INLINE bool mval_is_tbwin(mval_t mval) {
-    return !mval_is_primary(mval) && mval > 400.;
+    return !mval_is_primary(mval) && mval > 800.;
+  }
+
+  static INLINE bool mval_is_tb_cursedwin(mval_t mval) {
+    return !mval_is_primary(mval) && !mval_is_tbwin(mval) && mval > 350.;
+  }
+
+  static INLINE bool mval_is_tb_windraw(mval_t mval) {
+    return mval_is_tbwin(mval) || mval_is_tb_cursedwin(mval);
   }
 
   INLINE score_t get_pvline_score(const MoveLine &pline) {
@@ -713,16 +728,13 @@ public:
               }
               assert(check_valid_move(m));
               do_step_f();
-              if(is_draw_repetition() || is_draw_halfmoves()) {
+              if(is_draw_halfmoves() || is_draw_repetition()) {
                 draw_pathdep = true;
                 return false;
               }
               return true;
             }
           );
-          if(!draw_pathdep) {
-            draw_pathdep = is_draw_repetition() || is_draw_halfmoves();
-          }
           if(!draw_pathdep) {
             pline.clear();
             pline.draft_line(zb.m_hint);
@@ -743,12 +755,12 @@ public:
                 return false;
               }
               assert(check_valid_move(m));
-              if(is_draw_repetition() || is_draw_halfmoves()) {
+              pline_alt.premove(m);
+              do_step_f();
+              if(is_draw_halfmoves() || is_draw_repetition()) {
                 draw_pathdep = true;
                 return false;
               }
-              pline_alt.premove(m);
-              do_step_f();
               return true;
             },
             // endfunc
@@ -966,7 +978,7 @@ public:
     }
 
     // main alpha-beta loop
-    bool isdraw_pathdep = false;
+    bool ispathdep = false;
     TT_NODE_TYPE ndtype = TT_ALLNODE;
     move_t m_best = board::nullmove;
     for(size_t move_index = 0; move_index < quiescmoves.size(); ++move_index) {
@@ -979,24 +991,25 @@ public:
         continue;
       }
       // recurse
-      bool new_isdraw_pathdep = false;
+      bool new_ispathdep = false;
       { // quescence sub-search move scope
         decltype(auto) mscope = self.engine_mline_scope(m, pline_alt);
-        new_isdraw_pathdep = is_draw_halfmoves() || is_draw_repetition();
+        new_ispathdep = is_path_dependent(pline_alt);
         score = -score_decay(alpha_beta_quiescence(-beta, -alpha, depth - 1, pline_alt, ab_state, reduce_nchecks ? nchecks - 1 : nchecks));
+        debug.check_pathdep(new_ispathdep, depth, score, pline_alt);
       } // end move scope
       debug.update_q(depth, alpha, beta, bestscore, score, m, pline, pline_alt);
       debug.check_score(depth, score, pline_alt);
       if(score >= beta) {
         pline.replace_line(pline_alt);
-        if(overwrite && zb.should_replace(depth, TT_CUTOFF, tt_age) && !isdraw_pathdep && !pline.tb && !pline.find(board::nullmove)) {
+        if(overwrite && zb.should_replace(depth, TT_CUTOFF, tt_age) && !ispathdep && !pline.tb && !pline.find(board::nullmove)) {
           if(zb.is_inactive(tt_age))++zb_occupied;
           zb.write(state.info, score, depth, tt_age, TT_CUTOFF, pline);
         }
         return score;
       } else if(score > bestscore) {
         pline.replace_line(pline_alt);
-        isdraw_pathdep = new_isdraw_pathdep;
+        ispathdep = new_ispathdep;
         bestscore = score;
         m_best = m;
         if(score > alpha) {
@@ -1005,7 +1018,7 @@ public:
         }
       }
     }
-    if(overwrite && m_best != board::nullmove && !isdraw_pathdep && !pline.find(board::nullmove)) {
+    if(overwrite && m_best != board::nullmove && !ispathdep && !pline.find(board::nullmove)) {
       // ALLNODE or EXACT
       if(zb.should_replace(depth, ndtype, tt_age) && !pline.tb) {
         if(zb.is_inactive(tt_age))++zb_occupied;
@@ -1156,9 +1169,9 @@ public:
     }
 
     std::vector<std::pair<mval_t, move_t>> moves;
-//    // ablated away
+//    ablated away
 //    if(tb_can_probe()) {
-//      moves = tb_get_ordered_moves(pline, hashmove, my_threatmove, true);
+//      moves = tb_get_ordered_moves(pline, hashmove, my_threatmove, ab_state.cmh_table, true);
 //    }
     if(moves.empty()) {
       // move ordering: PV | hashmove | SEE | CMH
@@ -1170,7 +1183,7 @@ public:
 
     // pvsearch main loop
     score_t bestscore = -MATERIAL_KING;
-    bool isdraw_pathdep = false;
+    bool ispathdep = false;
     TT_NODE_TYPE ndtype = TT_ALLNODE;
     for(size_t move_index = 0; move_index < moves.size(); ++move_index) {
       const auto [m_val, m] = moves[move_index];
@@ -1180,27 +1193,30 @@ public:
       }
       MoveLine pline_alt = pline.branch_from_past(m);
       score_t score = 0;
+      bool new_ispathdep = false;
       { // move scope
         decltype(auto) mscope = self.engine_mline_scope(m, pline_alt);
-        isdraw_pathdep = is_draw_halfmoves() || is_draw_repetition();
+        new_ispathdep = is_path_dependent(pline_alt);
         pos_t i = bitmask::first(m), j = bitmask::second(m) & board::MOVEMASK;
         const bool interesting_move = (is_drop_move(i, j) || is_castling_move(i, j) || is_promotion_move(i, j) || (is_naively_capture_move(i, j) && m_val > -3.5) || (is_naively_checking_move(i, j) && m_val > -9.));
-        const bool lmr_allowed = ENABLE_SEL_LMR && move_index >= (pline.is_mainline() ? 15 : 4)
-                                  && depth >= 3 && state.checkline[c] == bitmask::full && m_val < .1 && !interesting_move;
+        const bool lmr_allowed = ENABLE_SEL_LMR && move_index >= 4 && depth >= 3
+                                 && state.checkline[c] == bitmask::full && m_val < .1 && !interesting_move;
         if(lmr_allowed) {
           score = -score_decay(alpha_beta_scout(-alpha, depth - 2, pline_alt, ab_state, allow_nullmoves, your_threatmove));
         } else {
           score = -score_decay(alpha_beta_scout(-alpha, depth - 1, pline_alt, ab_state, allow_nullmoves, your_threatmove));
         }
+        debug.check_pathdep(new_ispathdep, depth, score, pline_alt);
       } // end move scope
       debug.update_zw(depth, alpha, beta, bestscore, score, m, pline, pline_alt);
       debug.check_score(depth, score, pline_alt);
 //      debug.log_pv(depth, pline_alt, "move "s + pgn::_move_str(self, m) + " score "s + score_string(score));
       if(score > bestscore) {
         pline.replace_line(pline_alt);
+        ispathdep = new_ispathdep;
         bestscore = score;
         if(score >= beta) {
-          if(overwrite && zb.should_replace(depth, TT_CUTOFF, tt_age) && !isdraw_pathdep && !pline.tb && !pline.find(board::nullmove)) {
+          if(overwrite && zb.should_replace(depth, TT_CUTOFF, tt_age) && !ispathdep && !pline.tb && !pline.find(board::nullmove)) {
             if(zb.is_inactive(tt_age))++zb_occupied;
             zb.write(state.info, score, depth, tt_age, TT_CUTOFF, pline);
           }
@@ -1213,7 +1229,7 @@ public:
         }
       }
     }
-    if(overwrite && !isdraw_pathdep && !pline.tb && !pline.find(board::nullmove)) {
+    if(overwrite && !ispathdep && !pline.tb && !pline.find(board::nullmove)) {
       if(ndtype == TT_ALLNODE && zb.should_replace(depth, TT_ALLNODE, tt_age)) {
         if(zb.is_inactive(tt_age))++zb_occupied;
         zb.write(state.info, bestscore, depth, tt_age, TT_ALLNODE, pline);
@@ -1288,7 +1304,9 @@ public:
 
     // internal iterative deepening
     const mval_t _max_mval = moves.front().first;
-    const bool iid_allow = ENABLE_IID && true && !(mval_is_primary(_max_mval) || mval_is_tbwin(_max_mval)) && depth >= 9;
+    const bool iid_allow = true && ENABLE_IID
+                           && !(mval_is_primary(_max_mval) || mval_is_tb_windraw(_max_mval))
+                           && depth >= 9;
     if(iid_allow) {
       assert(tb_can_probe() || pline.empty());
       alpha_beta_pv(alpha, beta, depth / 2, pline, ab_state, true, make_callback_f(), your_threatmove);
@@ -1305,7 +1323,7 @@ public:
 
     // pvsearch main loop
     score_t bestscore = -MATERIAL_KING;
-    bool isdraw_pathdep = false;
+    bool ispathdep = false;
     TT_NODE_TYPE ndtype = TT_ALLNODE;
     for(size_t move_index = 0; move_index < moves.size(); ++move_index) {
       const auto [m_val, m] = moves[move_index];
@@ -1316,17 +1334,19 @@ public:
       // pv for full-window score
       MoveLine pline_alt = pline.branch_from_past(m);
       score_t score = 0;
+      bool new_ispathdep = false;
       // PV or hash move, full window
-      if(mval_is_primary(m_val) || (mval_is_tbwin(m_val) && move_index == 0)) {
+      if(mval_is_primary(m_val) || (mval_is_tb_windraw(m_val) && move_index == 0)) {
         { // PV move scope
           decltype(auto) mscope = self.engine_mline_scope(m, pline_alt);
-          isdraw_pathdep = is_draw_halfmoves() || is_draw_repetition();
+          new_ispathdep = is_path_dependent(pline_alt);
           score = -score_decay(alpha_beta_pv(-beta, -alpha, depth - 1, pline_alt, ab_state, allow_nullmoves, callback_f, your_threatmove));
+          debug.check_pathdep(new_ispathdep, depth, score, pline_alt);
         } // end move scope
         debug.update_pv(depth, alpha, beta, bestscore, score, m, pline, pline_alt, "hashmove"s);
         debug.check_score(depth, score, pline_alt);
 //        debug.log_pv(depth, pline, "move "s + pgn::_move_str(self, m) + " score "s + std::to_string(score_float(score)));
-        if(m == pline.front() && score < alpha && ab_state.initdepth == depth && !isdraw_pathdep) {
+        if(m == pline.front() && score < alpha && ab_state.initdepth == depth && !ispathdep) {
           // fail low on aspiration. re-do the search
           return score;
         }
@@ -1339,10 +1359,11 @@ public:
         { // scout move scope
           const COLOR c = activePlayer();
           decltype(auto) mscope = self.engine_mline_scope(m, pline_alt);
-          isdraw_pathdep = is_draw_halfmoves() || is_draw_repetition();
-          pos_t i = bitmask::first(m), j = bitmask::second(m) & board::MOVEMASK;
+          new_ispathdep = is_path_dependent(pline_alt);
+          const pos_t i = bitmask::first(m), j = bitmask::second(m) & board::MOVEMASK;
           const bool interesting_move = (is_drop_move(i, j) || is_castling_move(i, j) || is_promotion_move(i, j) || (is_naively_capture_move(i, j) && m_val > -3.5) || (is_naively_checking_move(i, j) && m_val > -9.));
-          const bool lmr_allowed = ENABLE_SEL_LMR && move_index >= (pline.is_mainline() ? 15 : 4) && depth >= 3 && state.checkline[c] == bitmask::full && m_val < .1 && !interesting_move;
+          const bool lmr_allowed = ENABLE_SEL_LMR && move_index >= (pline.is_mainline() ? 15 : 4)
+                                   && depth >= 3 && state.checkline[c] == bitmask::full && m_val < .1 && !interesting_move;
           MoveLine pline_alt2 = pline_alt;
           score_t subscore = NOSCORE;
           if(lmr_allowed) {
@@ -1352,10 +1373,13 @@ public:
           }
           score = -score_decay(subscore);
           debug.check_score(depth, subscore, pline_alt2);
+          debug.check_pathdep(new_ispathdep, depth, score, pline_alt);
           if(score > alpha && score < beta) {
             // zw search successful, perform full-window search
             pline_alt.replace_line(pline_alt2);
+            new_ispathdep = is_path_dependent(pline_alt);
             score = -score_decay(alpha_beta_pv(-beta, -alpha, depth - 1, pline_alt, ab_state, allow_nullmoves, callback_f, your_threatmove));
+            debug.check_pathdep(new_ispathdep, depth, score, pline_alt);
             // score > beta included
             if(score > alpha) {
               alpha = score;
@@ -1372,10 +1396,11 @@ public:
       debug.check_score(depth, score, pline_alt);
       if(score > bestscore) {
         pline.replace_line(pline_alt);
+        ispathdep = new_ispathdep;
         your_threatmove = pline.get_next_move();
         bestscore = score;
         if(score >= beta) {
-          if(overwrite && zb.should_replace(depth, TT_CUTOFF, tt_age) && !isdraw_pathdep && !pline.tb && !pline.find(board::nullmove)) {
+          if(overwrite && zb.should_replace(depth, TT_CUTOFF, tt_age) && !ispathdep && !pline.tb && !pline.find(board::nullmove)) {
             if(zb.is_inactive(tt_age))++zb_occupied;
             zb.write(state.info, score, depth, tt_age, TT_CUTOFF, pline);
           }
@@ -1393,7 +1418,7 @@ public:
         }
       }
     }
-    if(overwrite && !isdraw_pathdep && !pline.tb && !pline.find(board::nullmove)) {
+    if(overwrite && !ispathdep && !pline.tb && !pline.find(board::nullmove)) {
       if(ndtype == TT_ALLNODE && zb.should_replace(depth, TT_ALLNODE, tt_age)) {
         if(zb.is_inactive(tt_age))++zb_occupied;
         zb.write(state.info, bestscore, depth, tt_age, TT_ALLNODE, pline);
