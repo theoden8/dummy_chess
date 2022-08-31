@@ -74,7 +74,7 @@ struct DebugTracer {
     return "q-ignored"s;
   }
 
-  std::string _line_str_full(const MoveLine &mline) const {
+  std::string _line_str_full(const MoveLine &mline) {
     if(!engine.check_valid_sequence(mline)) {
       return "[invalid "s + engine._line_str_full(mline) + "]"s;
     }

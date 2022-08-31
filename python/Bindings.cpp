@@ -4,6 +4,9 @@
 #include <boost/python/call.hpp>
 #include <boost/python/numpy.hpp>
 
+#define CONST_COPYABLE
+#define CONST_IS_EMPTY
+
 #include <Engine.hpp>
 
 
@@ -76,14 +79,15 @@ struct BoardBindings {
     np::initialize();
   }
 
-  explicit BoardBindings(const python::str &fenstring)
+  explicit BoardBindings(const python::str &fenstring):
+    BoardBindings()
   {
-    np::initialize();
     set_fen(fenstring);
   }
 
   void set_fen(const python::str &fenstring) {
-    engine.reset(new Engine(fen::load_from_string(python::extract<std::string>(fenstring))));
+    const fen::FEN f = fen::load_from_string(python::extract<std::string>(fenstring));
+    engine->set_fen(f);
   }
 
   void make_move(const MoveBindings &py_m) {
@@ -108,13 +112,13 @@ struct BoardBindings {
     python::list legalmoves;
     engine->iter_moves([&](pos_t i, pos_t j) mutable noexcept -> void {
       const move_t m = bitmask::_pos_pair(i, j);
-      legalmoves.append(MoveBindings(engine->self, m));
+      legalmoves.append(MoveBindings(engine->as_board(), m));
     });
     return legalmoves;
   }
 
   decltype(auto) sample() const {
-    return MoveBindings(engine->self, engine->get_random_move());
+    return MoveBindings(engine->as_board(), engine->get_random_move());
   }
 
   Status status() const {
@@ -157,7 +161,7 @@ struct BoardBindings {
     size_t start = 0;
     for(COLOR c : {WHITE, BLACK}) {
       for(PIECE p : {PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING}) {
-        bitmask::foreach(engine->self.get_mask(Piece(p, c)), [&](pos_t i) mutable noexcept -> void {
+        bitmask::foreach(engine->as_board().get_mask(Piece(p, c)), [&](pos_t i) mutable noexcept -> void {
           phi[start + i] = 1;
         });
         start += board::SIZE;
@@ -183,23 +187,23 @@ struct BoardBindings {
     }
   }
 
-  python::tuple _return_move_score(move_t m, Engine::score_t score) {
-    double py_score = float(score) / Engine::MATERIAL_PAWN;
-    return python::make_tuple(MoveBindings(engine->self, m), py_score);
+  inline python::tuple _return_move_score(move_t m, Engine::score_t score) {
+    const double py_score = Engine::score_float(score);
+    return python::make_tuple(MoveBindings(engine->as_board(), m), py_score);
   }
 
-  python::tuple get_fixed_depth_move(const python::long_ depth) {
+  python::tuple get_fixed_depth_move(const python::long_ &depth) {
     init_abstorage_scope();
     Engine::iddfs_state idstate;
     const Engine::depth_t d = python::extract<Engine::depth_t>(depth);
-    move_t bestmove = engine->start_thinking(d, idstate);
-    return _return_move_score(bestmove, float(idstate.eval) / Engine::MATERIAL_PAWN);
+    const move_t bestmove = engine->start_thinking(d, idstate);
+    return _return_move_score(bestmove, idstate.eval);
   }
 
   python::dict _make_callback_info(double time_spent, const Engine::iddfs_state &idstate, bool verbose=true) {
       python::dict info;
       info[python::str("depth")] = python::long_(idstate.curdepth);
-      info[python::str("pline")] = python::str(pgn::_line_str(engine->self, idstate.pline)).split();
+      info[python::str("pline")] = python::str(pgn::_line_str(engine->as_board(), idstate.pline)).split();
       info[python::str("score")] = double(float(idstate.eval) / Engine::MATERIAL_PAWN);
       info[python::str("time_elapsed")] = time_spent;
       info[python::str("stat_nodes")] = python::long_(engine->nodes_searched);
@@ -210,18 +214,19 @@ struct BoardBindings {
       return info;
   }
 
-  python::tuple start_thinking(python::object &visitor) {
+  python::tuple start_thinking(const python::object &visitor) {
     init_abstorage_scope();
     Engine::iddfs_state idstate;
     const auto start = system_clock::now();
     const move_t bestmove = engine->start_thinking(1000, idstate, [&](bool verbose) mutable -> bool {
+      if(!verbose)return true;
       const double time_spent = 1e-9*duration_cast<nanoseconds>(system_clock::now()-start).count();
       return visitor(_make_callback_info(time_spent, idstate, verbose));
     }, {});
     return _return_move_score(bestmove, idstate.eval);
   }
 
-  python::tuple iterate_depths(python::long_ maxdepth, python::object &visitor) {
+  python::tuple iterate_depths(python::long_ maxdepth, const python::object &visitor) {
     init_abstorage_scope();
     Engine::depth_t dmax = python::extract<Engine::depth_t>(maxdepth);
     Engine::iddfs_state idstate;
@@ -237,6 +242,10 @@ struct BoardBindings {
       return idstate.curdepth < dmax;
     }, {});
     return _return_move_score(bestmove, idstate.eval);
+  }
+
+  python::long_ score() const {
+    return python::long_(engine->evaluate());
   }
 
   double evaluate() const {
@@ -361,6 +370,7 @@ BOOST_PYTHON_MODULE(dummy_chess) {
     .def("get_depth_move", &BoardBindings::get_fixed_depth_move)
     .def("start_thinking", &BoardBindings::start_thinking)
     .def("iterate_depths", &BoardBindings::iterate_depths)
+    .def("score", &BoardBindings::score)
     .def("evaluate", &BoardBindings::evaluate)
     .def("get_simple_features", &BoardBindings::get_simple_feature_set)
     .def("get_move_from_move_t", &BoardBindings::get_move_from_move_t)

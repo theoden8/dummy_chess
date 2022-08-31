@@ -28,6 +28,14 @@ public:
   static constexpr bool ENABLE_IID = true;
   static constexpr bool ENABLE_SYZYGY = true;
 
+  inline Board &as_board() {
+    return (Board &)self;
+  }
+
+  inline const Board &as_board() const {
+    return (const Board &)self;
+  }
+
   // callbacks
   INLINE void make_move(pos_t i, pos_t j) {
     Perft::make_move(i, j);
@@ -1487,6 +1495,7 @@ public:
       std::fill(cmh_table.begin(), cmh_table.end(), .0);
     }
     bool should_stop = false;
+    str::pdebug("iterative deepening");
     for(depth_t d = idstate.curdepth; d <= depth; ++d) {
       if(check_line_terminates(idstate.pline) && ssize_t(idstate.pline.size()) < d && !idstate.pline.tb) {
         idstate.eval = get_pvline_score(idstate.pline);

@@ -6,6 +6,7 @@
 #include <vector>
 #include <stack>
 #include <bitset>
+#include <unordered_set>
 
 #include <Piece.hpp>
 #include <Board.hpp>
@@ -404,6 +405,23 @@ struct halfkp {
   std::array<std::vector<size_t>, NO_COLORS> input_indices;
 
   //std::stack<std::array<float, SIZE_H1>> prev_acc[NO_COLORS];
+#ifdef NDEBUG
+  std::unordered_set<size_t> dbg_sparse_indices[NO_COLORS] = {{}, {}};
+#endif
+
+  INLINE void dbg_set_index(pos_t color_index, size_t ind) {
+    #ifdef NDEBUG
+    assert(!dbg_sparse_indices[color_index].contains(ind));
+    dbg_sparse_indices[color_index].emplace(ind);
+    #endif
+  }
+
+  INLINE void dbg_unset_index(pos_t color_index, size_t ind) {
+    #ifdef NDEBUG
+    assert(dbg_sparse_indices[color_index].contains(ind));
+    dbg_sparse_indices[color_index].erase(ind);
+    #endif
+  }
 
   explicit halfkp():
     model()
@@ -450,6 +468,9 @@ struct halfkp {
     for(pos_t color_index = 0; color_index < NO_COLORS; ++color_index) {
       const COLOR c = std::array<COLOR,2>{board.activePlayer(), enemy_of(board.activePlayer())}[color_index];
       input_indices[color_index].clear();
+      #ifdef NDEBUG
+      dbg_sparse_indices[color_index].clear();
+      #endif
       const bool iswhitepov = (c == WHITE);
       const size_t orient_kingpos = orient(iswhitepov, board.get_king_pos(c));
 //      const piece_bitboard_t occ = (board.bits[WHITE]|board.bits[BLACK]);
@@ -458,7 +479,9 @@ struct halfkp {
         if(board.empty_at_pos(pos))continue;
         const Piece p = board[pos];
         if(p.value == KING)continue;
-        input_indices[color_index].emplace_back(make_halfkp_index(board, c, orient_kingpos, pos));
+        const size_t hkp_index = make_halfkp_index(board, c, orient_kingpos, pos);
+        input_indices[color_index].emplace_back(hkp_index);
+        dbg_set_index(color_index, hkp_index);
       }
 //      bitmask::foreach_reversed(occ & ~board.get_king_bits(), [&](pos_t pos) mutable noexcept -> void {
 //        input_indices[color_index].emplace_back(make_halfkp_index(board, c, orient_kingpos, pos));
@@ -476,15 +499,18 @@ struct halfkp {
 //      COLOR c
 //  )
 //  {
+//    static constexpr size_t out_shape = model.FEATURE_TRANSFORMER_SIZE;
 //    for(size_t r : removed_features) {
 //      for(size_t i = 0; i < model.FEATURE_TRANSFORMER_SIZE; ++i) {
-//        y1[c][i] -= A1[c][r * Model::FEATURE_TRANSFORMER_SIZE + i];
+//        model.feature_transformer.y[out_shape * c + i] -= model.feature_transformer.affine.A[r * out_shape + i];
 //      }
+//      dbg_unset_index(c, r);
 //    }
 //    for(size_t a : added_features) {
 //      for(size_t i = 0; i < model.FEATURE_TRANSFORMER_SIZE; ++i) {
-//        y1[c][i] += A1[c][a * Model::FEATURE_TRANSFORMER_SIZE + i];
+//        model.feature_transformer.y[out_shape * c + i] += model.feature_transformer.affine.A[a * out_shape + i];
 //      }
+//      dbg_set_index(c, a);
 //    }
 //  }
 

@@ -18,6 +18,12 @@
 #include <MoveLine.hpp>
 
 
+#define self (*this)
+
+#ifndef CONST_COPYABLE
+#define CONST_COPYABLE const
+#endif
+
 // board view of the game
 class Board {
 protected:
@@ -26,13 +32,13 @@ protected:
   size_t current_ply_ = 0;
 public:
   // general chess960-specific variables
-  const bool chess960 = false;
+  CONST_COPYABLE bool chess960 = false;
   std::array<pos_t, NO_COLORS>
     kcastlrook = {0xff, 0xff},
     qcastlrook = {0xff, 0xff};
 
   // general crazyhouse-specific variables
-  const bool crazyhouse = false;
+  CONST_COPYABLE bool crazyhouse = false;
 
   // cheap abstractions, pieces[Piece::piece_index(PAWN, BLACK)]
   static constexpr std::array<Piece, board::NO_PIECE_INDICES+1>  pieces = {
@@ -147,10 +153,10 @@ public:
   std::vector<board_state> state_hist;
 
   size_t zobrist_size;
-  explicit Board(const fen::FEN &f=fen::starting_pos, size_t zbsize=ZOBRIST_SIZE):
-    activePlayer_(f.active_player),
-    current_ply_(f.fullmove * 2 - (f.active_player == WHITE ? 1 : 0)),
+  explicit inline Board(const fen::FEN &f=fen::starting_pos, size_t zbsize=ZOBRIST_SIZE):
+    #ifndef CONST_IS_EMPTY
     chess960(f.chess960), crazyhouse(f.crazyhouse),
+    #endif
     zobrist_size(bitmask::highest_bit(zbsize))
   {
     // external initializations (singleton)
@@ -159,6 +165,33 @@ public:
       zobrist::init(zobrist_size);
       initialized_ = true;
     }
+    set_fen(f);
+  }
+
+  virtual void set_fen(const fen::FEN &f) {
+    // reset all variables
+    #ifdef CONST_IS_EMPTY
+    chess960 = f.chess960, crazyhouse=f.crazyhouse;
+    #else
+    if(f.chess960 != chess960 || f.crazyhouse != crazyhouse) {
+      fprintf(stderr, "fen variant does not match current variant of the board\n");
+      fprintf(stderr, "%s\n", fen::export_as_string(f).c_str());
+      abort();
+    }
+    #endif
+    self.activePlayer_ = f.active_player,
+      self.current_ply_ = f.fullmove * 2 - (f.active_player == WHITE ? 1 : 0),
+      kcastlrook = {0xff, 0xff}, qcastlrook = {0xff, 0xff},
+      state_hist_enpassants.clear(),
+      std::fill(castlings.begin(), castlings.end(), board::nocastlings),
+      state_hist_halfmoves.clear(),
+      state_hist_repetitions = INT16_MAX,
+      bits = {0x00, 0x00},
+      bits_slid_diag = 0x00, bits_slid_orth = 0x00, bits_pawns = 0x00,
+      pos_king = {board::nopos, board::nopos},
+      bits_promoted_pawns = 0ULL,
+      std::fill(n_subs.begin(), n_subs.end(), 0),
+      state_hist.clear();
     // set bitboards
     for(pos_t i = 0; i < f.board.length(); ++i) {
       if(f.board[i]==' ')continue;
@@ -900,7 +933,9 @@ public:
   INLINE bool check_valid_sequence(const LineT &mline, bool strict=false) {
     auto &&rec_mscope = recursive_move_scope();
     for(const move_t m : mline) {
-      if(!check_valid_move(m, false)) {
+      if(!check_valid_move(m, strict)) {
+        str::pdebug("fen ", fen::export_as_string(export_as_fen()));
+        str::pdebug("[invalid "s, _line_str_full(mline), "]"s);
         return false;
       }
       rec_mscope.scope(m);
