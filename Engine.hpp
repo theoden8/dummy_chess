@@ -49,9 +49,6 @@ public:
     Perft::retract_move();
   }
 
-  INLINE Board &as_board() { return (Board &)self; }
-  INLINE const Board &as_board() const { return (const Board &)self; }
-
   // provide affected methods
   INLINE decltype(auto) engine_move_scope(move_t m) {
     return make_move_scope(self, m);
