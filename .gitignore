@@ -15,6 +15,7 @@ m42.*
 !/scripts/bench.py
 scripts/
 puzzles/
+external/
 
 tempfile
 /sync

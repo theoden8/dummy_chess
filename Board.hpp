@@ -1,6 +1,10 @@
 #pragma once
 
 
+#ifdef FLAG_JEMALLOC_EXTERNAL
+#include <jemalloc/jemalloc.h>
+#endif
+
 #include <vector>
 #include <list>
 #include <bitset>
@@ -23,11 +27,23 @@ protected:
 public:
   // general chess960-specific variables
   const bool chess960 = false;
-  pos_t kcastlrook[NO_COLORS] = {0xff, 0xff},
-        qcastlrook[NO_COLORS] = {0xff, 0xff};
+  std::array<pos_t, NO_COLORS>
+    kcastlrook = {0xff, 0xff},
+    qcastlrook = {0xff, 0xff};
 
   // general crazyhouse-specific variables
   const bool crazyhouse = false;
+
+  // cheap abstractions, pieces[Piece::piece_index(PAWN, BLACK)]
+  static constexpr std::array<Piece, board::NO_PIECE_INDICES+1>  pieces = {
+    Piece(PAWN, WHITE), Piece(PAWN, BLACK),
+    Piece(KNIGHT, WHITE), Piece(KNIGHT, BLACK),
+    Piece(BISHOP, WHITE), Piece(BISHOP, BLACK),
+    Piece(ROOK, WHITE), Piece(ROOK, BLACK),
+    Piece(QUEEN, WHITE), Piece(QUEEN, BLACK),
+    Piece(KING, WHITE), Piece(KING, BLACK),
+    Piece(EMPTY, NEUTRAL)
+  };
 
   // compressed (partially incomplete) board state for hashing
   struct board_info {
@@ -93,9 +109,6 @@ public:
     }
   };
 public:
-  // shorthand
-  Board &self = *this;
-
   // irregular state variables:
   // plies at which en-passants are set
   std::vector<std::pair<ply_index_t, pos_t>> state_hist_enpassants;
@@ -132,17 +145,6 @@ public:
   board_state state;
   // (only) previous states, for fast unmaking
   std::vector<board_state> state_hist;
-
-  // cheap abstractions, pieces[Piece::piece_index(PAWN, BLACK)]
-  const std::array<Piece, board::NO_PIECE_INDICES+1>  pieces = {
-    Piece(PAWN, WHITE), Piece(PAWN, BLACK),
-    Piece(KNIGHT, WHITE), Piece(KNIGHT, BLACK),
-    Piece(BISHOP, WHITE), Piece(BISHOP, BLACK),
-    Piece(ROOK, WHITE), Piece(ROOK, BLACK),
-    Piece(QUEEN, WHITE), Piece(QUEEN, BLACK),
-    Piece(KING, WHITE), Piece(KING, BLACK),
-    Piece(EMPTY, NEUTRAL)
-  };
 
   size_t zobrist_size;
   explicit Board(const fen::FEN &f=fen::starting_pos, size_t zbsize=ZOBRIST_SIZE):
@@ -190,8 +192,8 @@ public:
     // set white castlings state (variation and position)
     if(bitmask::first(f.castlings)) {
       const pos_t wcastlmask = bitmask::first(f.castlings);
-      if(bitmask::log2_msb(wcastlmask) < board::_x(pos_king[WHITE])) {
-        qcastlrook[WHITE] = bitmask::log2_msb(wcastlmask);
+      if(bitmask::log2_lsb(wcastlmask) < board::_x(pos_king[WHITE])) {
+        qcastlrook[WHITE] = bitmask::log2_lsb(wcastlmask);
       } else {
         unset_castling(WHITE, QUEEN_SIDE);
       }
@@ -207,8 +209,8 @@ public:
     // set black castlings state (variation and position)
     if(bitmask::second(f.castlings)) {
       const pos_t bcastlmask = bitmask::second(f.castlings);
-      if(bitmask::log2_msb(bcastlmask) < board::_x(pos_king[BLACK])) {
-        qcastlrook[BLACK] = bitmask::log2_msb(bcastlmask);
+      if(bitmask::log2_lsb(bcastlmask) < board::_x(pos_king[BLACK])) {
+        qcastlrook[BLACK] = bitmask::log2_lsb(bcastlmask);
       } else {
         unset_castling(BLACK, QUEEN_SIDE);
       }
@@ -263,7 +265,7 @@ public:
   }
 
   // cheap lookup for emptiness
-  INLINE bool empty_at_pos(pos_t ind) {
+  INLINE bool empty_at_pos(pos_t ind) const {
     assert(ind <= board::MOVEMASK);
     return !piece::is_set(bits[WHITE]|bits[BLACK], ind);
   }
@@ -317,6 +319,7 @@ public:
 
   // remove i from bitboard representation
   INLINE void unset_pos(pos_t i) {
+    assert(i < 64);
     const piece_bitboard_t i_mask = piece::pos_mask(i);
     if(bits[WHITE] & i_mask) {
       piece::unset_pos(bits[WHITE], i);
@@ -558,25 +561,12 @@ public:
     return mask & bits[c];
   }
 
-  zobrist::key_t zb_hash() const {
-    zobrist::key_t zb = 0x00;
-    for(pos_t i = 0; i < board::NO_PIECE_INDICES; ++i) {
-      const Piece p = self.pieces[i];
-      bitmask::foreach(get_mask(p), [&](pos_t pos) mutable -> void {
-        zb ^= zobrist::rnd_hashes[zobrist::rnd_start_piecepos + board::SIZE * i + pos];
-      });
-    }
-    if(is_castling(WHITE,QUEEN_SIDE))zb^=zobrist::rnd_hashes[zobrist::rnd_start_castlings + 0];
-    if(is_castling(WHITE,KING_SIDE) )zb^=zobrist::rnd_hashes[zobrist::rnd_start_castlings + 1];
-    if(is_castling(BLACK,QUEEN_SIDE))zb^=zobrist::rnd_hashes[zobrist::rnd_start_castlings + 2];
-    if(is_castling(BLACK,KING_SIDE) )zb^=zobrist::rnd_hashes[zobrist::rnd_start_castlings + 3];
-    if(enpassant_trace() != board::nopos) {
-      zb ^= zobrist::rnd_hashes[zobrist::rnd_start_enpassant + board::_x(enpassant_trace())];
-    }
-    if(activePlayer() == BLACK) {
-      zb ^= zobrist::rnd_hashes[zobrist::rnd_start_moveside];
-    }
-    return zb;
+  INLINE zobrist::key_t zb_hash() const {
+    return zobrist::zb_hash(self);
+  }
+
+  INLINE zobrist::key_t zb_hash_material(bool mirror=false) const {
+    return zobrist::zb_hash_material(self, mirror);
   }
 
   INLINE ply_index_t get_current_ply() const {
@@ -602,15 +592,16 @@ public:
           );
   }
 
-  INLINE bool check_valid_move(pos_t i, pos_t j) const {
-    return (crazyhouse && check_valid_drop_move(i, j)) || (
-        i == (i & board::MOVEMASK)
+  INLINE bool check_valid_move(pos_t i, pos_t j, bool strict=true) const {
+    return (crazyhouse && check_valid_drop_move(i, j))
+      || (!strict && bitmask::_pos_pair(i, j) == board::nullmove)
+      || (i == (i & board::MOVEMASK)
            && (bits[activePlayer()] & piece::pos_mask(i))
            && (state.moves[i] & piece::pos_mask(j & board::MOVEMASK)));
   }
 
-  INLINE bool check_valid_move(move_t m) const {
-    return check_valid_move(bitmask::first(m), bitmask::second(m));
+  INLINE bool check_valid_move(const move_t m, bool strict=true) const {
+    return check_valid_move(bitmask::first(m), bitmask::second(m), strict);
   }
 
   // visitor methods for the engine
@@ -850,22 +841,79 @@ public:
     return make_recursive_mline_scope(self, mline);
   }
 
-  INLINE bool check_valid_sequence(const MoveLine &mline, bool strict=false) {
-    auto &&rec = self.recursive_move_scope();
-    for(const move_t &m : mline) {
-      if(!check_valid_move(m) && (strict || m != board::nullmove)) {
-        str::pdebug("[invalid "s, _line_str_full(mline), "]"s);
+  template <typename LineT, typename F>
+  INLINE void foreach_early_stop(const LineT &mline, F &&func) {
+    for(const move_t m : mline) {
+      if(!func(m))break;
+    }
+  }
+
+  template <typename LineT, typename F>
+  INLINE void walk_early_stop(const LineT &mline, F &&func) {
+    walk_early_stop(mline, std::forward<F>(func), [](ply_index_t){});
+  }
+
+  template <typename LineT, typename F, typename FF>
+  INLINE void walk_early_stop(const LineT &mline, F &&func, FF &&endfunc) {
+    auto &&rec_mscope = self.recursive_move_scope();
+    foreach_early_stop(mline, [&](const move_t m) mutable -> bool {
+      return func(m, [&]() mutable -> void {
+        rec_mscope.scope(m);
+      });
+    });
+    endfunc((ply_index_t)rec_mscope.counter);
+  }
+
+  template <typename LineT, typename F>
+  INLINE void foreach(const LineT &mline, F &&func) {
+    for(const move_t m : mline) {
+      func(m);
+    }
+  }
+
+  template <typename LineT, typename F>
+  INLINE void walk(const LineT &mline, F &&func) {
+    walk(mline, std::forward<F>(func), [](ply_index_t){});
+  }
+
+  template <typename LineT, typename F, typename FF>
+  INLINE void walk(const LineT &mline, F &&func, FF &&endfunc) {
+    auto &&rec_mscope = self.recursive_move_scope();
+    foreach(mline, [&](const move_t m) mutable -> void {
+      func(m, [&]() mutable -> void {
+        rec_mscope.scope(m);
+      });
+    });
+    endfunc((ply_index_t)rec_mscope.counter);
+  }
+
+  template <typename LineT, typename FF>
+  INLINE void walk_end(const LineT &mline, FF &&endfunc) {
+    auto &&rec_mscope = self.recursive_move_scope();
+    foreach(mline, [&](const move_t m) mutable -> void {
+      rec_mscope.scope(m);
+    });
+    endfunc((ply_index_t)rec_mscope.counter);
+  }
+
+  template <typename LineT>
+  INLINE bool check_valid_sequence(const LineT &mline, bool strict=false) {
+    auto &&rec_mscope = recursive_move_scope();
+    for(const move_t m : mline) {
+      if(!check_valid_move(m, false)) {
         return false;
       }
-      rec.scope(m);
+      rec_mscope.scope(m);
     }
     return true;
   }
 
-  INLINE bool check_line_terminates(const MoveLine &mline) {
-    auto &&rec = self.recursive_move_scope();
-    for(const move_t &m : mline) {
-      rec.scope(m);
+  template <typename LineT>
+  INLINE bool check_line_terminates(const LineT &mline) {
+    auto &&rec_mscope = recursive_move_scope();
+    for(const move_t m : mline) {
+      assert(!is_draw() && can_move());
+      rec_mscope.scope(m);
     }
     return is_draw() || !can_move();
   }
@@ -873,7 +921,8 @@ public:
   // methods that eventually generate completely legal moves
   // this method can be used on every iteration, but in fact is used on initialization only
   ALWAYS_UNROLL void init_state_attacks() {
-    for(auto&a:state.attacks)a=0ULL;
+    //for(auto&a:state.attacks)a=0ULL;
+    memset(state.attacks.data(), 0x00, sizeof(piece_bitboard_t)*board::SIZE);
     for(COLOR c : {WHITE, BLACK}) {
       const piece_bitboard_t occupied = (bits[WHITE] | bits[BLACK]) & ~piece::pos_mask(pos_king[enemy_of(c)]);
 
@@ -1078,7 +1127,7 @@ public:
     int repetitions = 1;
     const size_t no_iter = !crazyhouse ? std::min<size_t>(state_hist.size(), get_halfmoves())
                                        : state_hist.size();
-    for(size_t i = 0; i < no_iter; ++i) {
+    for(size_t i = NO_COLORS - 1; i < no_iter; i += NO_COLORS) {
       const auto &state_iter = state_hist[state_hist.size() - i - 1];
       if(state.info == state_iter.info && !state_iter.null_move_state) {
         ++repetitions;
@@ -1259,12 +1308,13 @@ public:
     str::print("FEN:", fen::export_as_string(export_as_fen()));
   }
 
-  NEVER_INLINE std::string _move_str(move_t m) const {
+  NEVER_INLINE std::string _move_str(const move_t m) const {
     if(m==board::nullmove)return "0000"s;
-    return board::_move_str(m, bits_pawns & piece::pos_mask(bitmask::first(m)));
+    const pos_t _i = bitmask::first(m) & board::MOVEMASK;
+    return board::_move_str(m, bits_pawns & piece::pos_mask(_i));
   }
 
-  NEVER_INLINE std::vector<std::string> _line_str(const MoveLine &line, bool thorough=false) {
+  NEVER_INLINE std::vector<std::string> _line_str(const MoveLine &line, bool thorough=true) {
     std::vector<std::string> s;
     if(thorough)assert(check_valid_sequence(line));
     decltype(auto) rec_mscope = self.recursive_move_scope();
@@ -1278,7 +1328,7 @@ public:
     return s;
   }
 
-  NEVER_INLINE std::string _line_str_full(const MoveLine &line, bool thorough_fut=false) {
+  NEVER_INLINE std::string _line_str_full(const MoveLine &line, bool thorough_fut=true) {
     std::string s = "["s + str::join(_line_str(line.get_past(), false), " "s) + "]"s;
     if(!line.empty()) {
       s += " "s + str::join(_line_str(line.get_future(), thorough_fut), " "s);

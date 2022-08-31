@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+
+
+if test $(uname -m) = 'x86_64' && test $(uname) = Linux -o $(uname) = Darwin; then
+  echo "enabled"
+else
+  echo "disabled"
+fi

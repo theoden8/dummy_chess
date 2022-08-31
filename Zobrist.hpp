@@ -1,9 +1,17 @@
 #pragma once
 
 
+#ifdef FLAG_JEMALLOC_EXTERNAL
+#include <jemalloc/jemalloc.h>
+#endif
+
 #include <ctime>
 #include <cstdlib>
 #include <cstdint>
+
+#ifdef FLAG_BSD
+#include <bsd/stdlib.h>
+#endif
 
 #include <memory>
 #include <array>
@@ -24,11 +32,15 @@ using key_t = uint_fast32_t;
 using ind_t = uint_fast16_t;
 
 constexpr ind_t rnd_start_piecepos = 0;
-constexpr ind_t rnd_start_enpassant = rnd_start_piecepos + key_t(board::SIZE) * board::NO_PIECE_INDICES;
+constexpr ind_t rnd_start_enpassant = rnd_start_piecepos + ind_t(board::SIZE) * ind_t(board::NO_PIECE_INDICES);
 constexpr ind_t rnd_start_castlings = rnd_start_enpassant + 8;
 constexpr ind_t rnd_start_moveside = rnd_start_castlings + 4;
 constexpr ind_t rnd_size = rnd_start_moveside + 1;
 std::array<key_t, rnd_size> rnd_hashes;
+
+INLINE zobrist::key_t piece_hash(COLOR c, PIECE p, pos_t square) {
+  return rnd_hashes[rnd_start_piecepos + ind_t(board::SIZE) * Piece(p,c).piece_index + square];
+}
 
 // http://vigna.di.unimi.it/ftp/papers/xorshift.pdf
 uint64_t g_seed = 0x78473ULL;
@@ -45,6 +57,9 @@ INLINE uint64_t randint() {
 }
 
 void init(size_t zbsize) {
+#ifdef NDEBUG
+  set_seed(((uint64_t)arc4random() << 32) | arc4random());
+#endif
   assert(bitmask::is_exp2(zbsize));
   assert(rnd_start_moveside + 1 < zbsize);
   std::unordered_set<key_t> rnd_seen = {0};
@@ -114,6 +129,42 @@ struct StoreScope {
 template <typename InnerObject>
 INLINE decltype(auto) make_store_object_scope(std::shared_ptr<zobrist::ttable<InnerObject>> &zb_store, size_t zbsize) {
   return StoreScope<InnerObject>(zb_store, zbsize);
+}
+
+template <typename BoardT>
+zobrist::key_t zb_hash(const BoardT &board) {
+  zobrist::key_t zb = 0x00;
+  for(piece_index_t i = 0; i < board::NO_PIECE_INDICES; ++i) {
+    const Piece p = BoardT::pieces[i];
+    bitmask::foreach(board.get_mask(p), [&](pos_t pos) mutable -> void {
+      zb ^= zobrist::rnd_hashes[zobrist::rnd_start_piecepos + board::SIZE * i + pos];
+    });
+  }
+  if(board.is_castling(WHITE,QUEEN_SIDE))zb^=zobrist::rnd_hashes[zobrist::rnd_start_castlings + 0];
+  if(board.is_castling(WHITE,KING_SIDE)) zb^=zobrist::rnd_hashes[zobrist::rnd_start_castlings + 1];
+  if(board.is_castling(BLACK,QUEEN_SIDE))zb^=zobrist::rnd_hashes[zobrist::rnd_start_castlings + 2];
+  if(board.is_castling(BLACK,KING_SIDE)) zb^=zobrist::rnd_hashes[zobrist::rnd_start_castlings + 3];
+  if(board.enpassant_trace() != board::nopos) {
+    zb ^= zobrist::rnd_hashes[zobrist::rnd_start_enpassant + board::_x(board.enpassant_trace())];
+  }
+  if(board.activePlayer() == BLACK) {
+    zb ^= zobrist::rnd_hashes[zobrist::rnd_start_moveside];
+  }
+  return zb;
+}
+
+template <typename BoardT>
+zobrist::key_t zb_hash_material(const BoardT &board, bool mirror) {
+  zobrist::key_t zb = 0x00;
+  for(piece_index_t i = 0; i < board::NO_PIECE_INDICES; ++i) {
+    const Piece p = BoardT::pieces[i];
+    pos_t pcount = piece::size(board.get_mask(p));
+    if(board.crazyhouse)pcount += board.n_subs[i];
+    for(pos_t x = 0; x < pcount; ++x) {
+      zb ^= zobrist::piece_hash(!mirror ? p.color : enemy_of(p.color), p.value, x);
+    }
+  }
+  return zb;
 }
 
 } // zobrist

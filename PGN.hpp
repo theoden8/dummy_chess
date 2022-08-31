@@ -19,7 +19,7 @@ struct PGN {
   std::vector<std::string> ply;
   std::string ending = "";
 
-  PGN(Board &board):
+  explicit PGN(Board &board):
     board(board)
   {
     startfen = board.export_as_fen();
@@ -190,7 +190,7 @@ struct PGN {
 
   // write move, advance board state and determine game-state
   void handle_move(move_t m) {
-    assert(m == board::nullmove || board.check_valid_move(m));
+    assert(board.check_valid_move(m, false));
     write_move(m);
     board.make_move(m);
     const COLOR c = board.activePlayer();
@@ -215,6 +215,12 @@ struct PGN {
 
   void handle_move(pos_t i, pos_t j) {
     handle_move(bitmask::_pos_pair(i, j));
+  }
+
+  void handle_line(MoveLine &mline) {
+    for(const move_t &m : mline) {
+      handle_move(m);
+    }
   }
 
   // read and return move, return whether check or mate are explicitly annotated
@@ -432,8 +438,13 @@ struct PGN {
   NEVER_INLINE std::string str() const {
     std::string s;
     if(startfen != fen::starting_pos) {
-      s += "[FEN] \""s + fen::export_as_string(startfen) + "\"]\n\n";
-      s += "[FEN] \""s + fen::export_as_string(fen::starting_pos) + "\"]\n\n";
+      if(!board.chess960 && !board.crazyhouse) {
+        s += "[Variant \"From Position\"]\n";
+      }
+      s += "[FEN \""s + fen::export_as_string(startfen) + "\"]\n";
+      s += "\n";
+    } else {
+      //s += "[FEN \""s + fen::export_as_string(fen::starting_pos) + "\"]\n\n";
     }
     for(size_t i = 0; i < cur_ply; ++i) {
       if(!(i & 1)) {
@@ -464,7 +475,7 @@ move_t _read_move(Board &b, const std::string &s) {
 NEVER_INLINE std::string _line_str(Board &b, const MoveLine &mline) {
   assert(b.check_valid_sequence(mline));
   pgn::PGN pgn(b);
-  for(auto m : mline) {
+  for(const move_t m : mline) {
     pgn.handle_move(m);
   }
   std::string s = str::join(pgn.ply, " "s);
@@ -477,10 +488,10 @@ NEVER_INLINE std::string _line_str(Board &b, const MoveLine &mline) {
 NEVER_INLINE std::string _line_str_full(Board &b, const MoveLine &mline) {
   assert(b.check_valid_sequence(mline));
   pgn::PGN pgn(b);
-  for(auto m : mline.get_past()) {
+  for(const move_t m : mline.get_past()) {
     b.retract_move();
   }
-  for(auto m : mline.get_past()) {
+  for(const move_t m : mline.get_past()) {
     pgn.handle_move(m);
   }
   std::string s = ""s;
@@ -515,9 +526,9 @@ pgn::PGN load_from_file(const std::string &fname, Board &board) {
 
 // external methods
 NEVER_INLINE std::string MoveLine::pgn(Board &b) const {
-  return pgn::_line_str(b, *this);
+  return pgn::_line_str(b, self);
 }
 
 NEVER_INLINE std::string MoveLine::pgn_full(Board &b) const {
-  return pgn::_line_str_full(b, *this);
+  return pgn::_line_str_full(b, self);
 }

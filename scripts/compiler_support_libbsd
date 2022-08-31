@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+
+
+CC=$1; shift
+[ -z "${CC}" ] && {
+  CC=cc
+}
+
+if printf "#include <stdlib.h>\nint main(){arc4random();}" | ${CC} -x c - -o /dev/null 2>/dev/null; then
+  echo "bsd"
+else
+  echo "disabled"
+fi
