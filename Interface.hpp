@@ -16,7 +16,6 @@ struct Interface {
       CELL_MH = 1,
       CELL_PMW = 1,
       CELL_PMH = 0;
-  float evaluation = .0;
 
   Interface(Engine &board):
     board(board), pgn(board)
@@ -272,7 +271,7 @@ struct Interface {
 
   void draw_pgn(const int LEFT, const int TOP, int &top) {
     move(top, LEFT);
-    printw("Evaluation: %.5f", evaluation);
+    printw("Evaluation: %s", Engine::score_string(board.evaluate()).c_str());
     move(++top, LEFT);
     int turn = 1;
     constexpr size_t initial_margin = 5,
@@ -281,7 +280,14 @@ struct Interface {
     constexpr size_t turn_length = initial_margin + ply_length + space_between + ply_length;
     constexpr size_t start_white = initial_margin,
                      start_black = initial_margin + ply_length + space_between;
-    for(size_t i = (pgn.size() > 20) ? pgn.size() - 20 : 0; i < pgn.size(); ++i) {
+    int cols, rows;
+    getmaxyx(stdscr, rows, cols); // acquires screen height and width
+    int pgn_limit = rows - 2*top;
+    if(pgn_limit < 0) {
+      pgn_limit = std::min<int>(rows - top, 20);
+    }
+    int pgn_first = std::max<int>((int)pgn.size() - pgn_limit * 2, 0);
+    for(size_t i = (size_t)pgn_first; i < pgn.size(); ++i) {
       if(!(i & 1)) {
         move(top, LEFT);
         printw("%d.", turn);
@@ -386,9 +392,6 @@ struct Interface {
           }
         }
       break;
-      case 'e':
-        evaluation = Engine::score_float(board.evaluate());
-        break;
       case ' ':
         pgn.handle_move(board::nullmove);
       break;
