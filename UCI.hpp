@@ -231,8 +231,6 @@ struct UCI {
   void join_engine_thread() {
     should_stop = true;
     if(job_started == true) {
-      while(!engine_thread.joinable())
-        ;
       engine_thread.join();
       str::pdebug("info string joining engine thread"s);
       job_started = false;
@@ -658,24 +656,25 @@ struct UCI {
         str::pdebug("info string changed time", movetime);
       }
       return_from_search = return_from_search || check_if_should_stop(args, time_spent, movetime);
-			if(verbose && !pondering && !should_stop) {
+      if(verbose && !pondering && !should_stop) {
         respond_full_iddfs(engine_idstate, nps, time_spent);
-			}
+      }
       return !return_from_search;
     }, searchmoves);
-		while(pondering && !should_stop) {
+    while(pondering && !should_stop) {
       if(should_ponderhit) {
         pondering = false;
       }
+      std::this_thread::yield();
     }
     if(!pondering && !should_stop) {
       respond_final_iddfs(engine_idstate, bestmove, time_spent);
     }
-		if(engine_idstate.pondermove() != board::nullmove) {
-			respond(RESP_BESTMOVE, engine_ptr->_move_str(bestmove), "ponder"s, engine_ptr->_move_str(engine_idstate.pondermove()));
-		} else {
-			respond(RESP_BESTMOVE, engine_ptr->_move_str(bestmove));
-		}
+    if(engine_idstate.pondermove() != board::nullmove) {
+      respond(RESP_BESTMOVE, engine_ptr->_move_str(bestmove), "ponder"s, engine_ptr->_move_str(engine_idstate.pondermove()));
+    } else {
+      respond(RESP_BESTMOVE, engine_ptr->_move_str(bestmove));
+    }
     str::pdebug("info string NOTE: search is over");
     should_stop = true;
     should_ponderhit = false;
@@ -722,8 +721,9 @@ struct UCI {
   }
 
   ~UCI() {
-    str::pdebug("info string job state", job_started);
-    join_engine_thread();
+    if(!should_quit) {
+      perform_quit();
+    }
     destroy();
   }
 };
