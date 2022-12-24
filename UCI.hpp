@@ -38,7 +38,6 @@ struct UCI {
   std::atomic<bool> should_quit = false;
   std::atomic<bool> should_stop = false;
   std::atomic<bool> should_ponderhit = false;
-  std::atomic<bool> job_started = false;
 
   // these are used to initialize engine for a new game
   struct Options {
@@ -230,10 +229,9 @@ struct UCI {
   // tell engine to stop; wait until it stops if it's running; clean up
   void join_engine_thread() {
     should_stop = true;
-    if(job_started == true) {
+    if(engine_thread.joinable()) {
       engine_thread.join();
       str::pdebug("info string joining engine thread"s);
-      job_started = false;
     }
   }
 
@@ -462,7 +460,6 @@ struct UCI {
           go_perft_command g = (go_perft_command){
             .depth = depth_t(atoi(cmd[ind].c_str()))
           };
-          job_started = true;
           engine_thread = std::thread([&](auto g) mutable -> void {
             perform_go_perft(g);
           }, g);
@@ -503,7 +500,6 @@ struct UCI {
             }
             ++ind;
           }
-          job_started = true;
           engine_thread = std::thread([&](auto g) mutable -> void {
             perform_go(g);
           }, g);
@@ -712,7 +708,7 @@ struct UCI {
     should_stop = true;
     join_engine_thread();
     should_quit = true;
-    str::pdebug("info string job state", job_started);
+    str::pdebug("info string job state", engine_thread.joinable() ? 1 : 0);
   }
 
   template <typename... Str>
