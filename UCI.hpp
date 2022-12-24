@@ -227,7 +227,7 @@ struct UCI {
   } go_perft_command;
 
   // tell engine to stop; wait until it stops if it's running; clean up
-  void join_engine_thread() {
+  void stop_engine_thread() {
     should_stop = true;
     if(engine_thread.joinable()) {
       engine_thread.join();
@@ -297,7 +297,7 @@ struct UCI {
       return;
       case CMD_ISREADY:
       {
-        join_engine_thread();
+        stop_engine_thread();
         respond(RESP_READYOK);
       }
       return;
@@ -390,13 +390,13 @@ struct UCI {
       case CMD_REGISTER:return;
       case CMD_UCINEWGAME:
         {
-          join_engine_thread();
+          stop_engine_thread();
           destroy();
         }
       return;
       case CMD_POSITION:
       {
-        join_engine_thread();
+        stop_engine_thread();
         fen::FEN f;
         size_t ind = 1;
         if(cmd[ind] == "startpos"s) {
@@ -434,7 +434,10 @@ struct UCI {
       return;
       case CMD_DISPLAY:
       {
-        join_engine_thread();
+        lock_guard guard(engine_mtx);
+        if(engine_ptr == nullptr) {
+          process_cmd({"position"s, "startpos"s});
+        }
         const fen::FEN f = engine_ptr->export_as_fen();
         respond(RESP_DISPLAY, "fen:"s, fen::export_as_string(f));
         const double hashfull = double(engine_ptr->zb_occupied) / double(engine_ptr->zobrist_size);
@@ -447,7 +450,7 @@ struct UCI {
       return;
       case CMD_GO:
       {
-        join_engine_thread();
+        stop_engine_thread();
         should_stop = false;
         // perft command
         size_t ind = 1;
@@ -509,7 +512,7 @@ struct UCI {
       case CMD_STOP:
       {
         should_stop = true;
-        join_engine_thread();
+        stop_engine_thread();
       }
       return;
       case CMD_PONDERHIT:
@@ -706,7 +709,7 @@ struct UCI {
 
   void perform_quit() {
     should_stop = true;
-    join_engine_thread();
+    stop_engine_thread();
     should_quit = true;
     str::pdebug("info string job state", engine_thread.joinable() ? 1 : 0);
   }
