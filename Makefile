@@ -26,7 +26,7 @@ ifeq ($(FEATURE_SUPPORT_SANITIZE),enabled)
   endif
   DBGFLAGS := $(DBGFLAGS) -fsanitize=address -fsanitize=undefined -fno-omit-frame-pointer
 else ifeq ($(FEATURE_SUPPORT_SANITIZE),minimal)
-  DBGFLAGS := $(DBGFLAGS) -fsanitize-minimal-runtime
+  DBGFLAGS := $(DBGFLAGS) -fsanitize-minimal-runtime -fno-omit-frame-pointer
 endif
 
 PROFFLAGS = -O1 -DNDEBUG -flto -DUSE_INTRIN -pg
