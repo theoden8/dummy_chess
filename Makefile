@@ -67,7 +67,6 @@ ifeq ($(FEATURE_SUPPORT_STDRANGES),disabled)
 endif
 # CXXFLAGS += -fopt-info
 
-LLVM_PROFDATA ?= llvm-profdata
 NC_CFLAGS =  $(shell $(PKGCONFIG) --cflags ncursesw)
 NC_LDFLAGS = $(shell $(PKGCONFIG) --libs ncursesw)
 
@@ -122,6 +121,7 @@ dummy_chess_uci: $(DEPS_UCI)
 	./scripts/pgo_bench.py "./dummy_chess_uci"
 	$(CXX) $(OPTFLAGS) -fprofile-use -fprofile-correction $(CXXFLAGS) -DMUTE_ERRORS uci.cpp $(SOURCES) $(LDFLAGS) -o $@
 else ifeq ($(FEATURE_SUPPORT_PGO),clang)
+LLVM_PROFDATA = $(shell $(CXX) -print-prog-name=llvm-profdata)
 dummy_chess_bench: $(DEPS_BENCH) dummy_chess_uci
 	$(CXX) $(OPTFLAGS) -fprofile-use=uci.profdata $(CXXFLAGS) bench.cpp $(SOURCES) $(LDFLAGS) -o $@
 

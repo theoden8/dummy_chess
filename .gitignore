@@ -8,6 +8,9 @@ default*.profraw
 default*.profdata
 m42.*
 
+*.swp
+*.swo
+
 !/scripts/m42_download
 !/scripts/perft_compare.py
 !/scripts/uci_utilities.py
