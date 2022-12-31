@@ -2,6 +2,7 @@
 
 
 #include <cfloat>
+#include <atomic>
 
 #include <string>
 #include <vector>
@@ -11,7 +12,6 @@
 #include <optional>
 #include <memory>
 #include <mutex>
-#include <atomic>
 #include <filesystem>
 
 #include <FEN.hpp>
@@ -34,10 +34,10 @@ struct UCI {
   using depth_t = typename Engine::depth_t;
 
   // state-changing message passing
-  std::atomic<bool> debug_mode = false;
-  std::atomic<bool> should_quit = false;
-  std::atomic<bool> should_stop = false;
-  std::atomic<bool> should_ponderhit = false;
+  atomic_bool debug_mode = false;
+  atomic_bool should_quit = false;
+  atomic_bool should_stop = false;
+  atomic_bool should_ponderhit = false;
 
   // these are used to initialize engine for a new game
   struct Options {

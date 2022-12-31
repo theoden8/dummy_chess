@@ -168,6 +168,7 @@ namespace piece {
   }
 
   INLINE constexpr piece_bitboard_t file_mask(pos_t f) {
+    assert(f <= H);
     return bitmask::vline << f;
   }
 
