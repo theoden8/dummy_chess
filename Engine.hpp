@@ -1676,6 +1676,7 @@ public:
       if(should_stop)break;
     }
     if(idstate.pline.empty() || idstate.pline.front() == board::nullmove) {
+      make_move_finalize();
       const move_t m = get_random_move();
       if(m != board::nullmove) {
         str::pdebug("replace move with random move", _move_str(m), m);

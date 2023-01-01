@@ -233,7 +233,7 @@ public:
     state_hist.reserve(100);
     init_state_attacks();
     init_state_checkline(activePlayer());
-    clear_state_moves();
+    clear_state_unfinalize();
     init_state_moves();
     update_state_info();
     state.null_move_state = false;
@@ -780,7 +780,7 @@ public:
     if(state_hist_repetitions > self.get_current_ply()) {
       update_state_repetitions();
     }
-    clear_state_moves();
+    clear_state_unfinalize();
     init_state_checkline(activePlayer());
     if(b_finalize)make_move_finalize();
   }
@@ -985,8 +985,7 @@ public:
       if(!state.moves_initialized) {
         make_move_finalize();
         const bool res = check_valid_move(m, false);
-        clear_state_moves();
-        state.pins = {0,0};
+        clear_state_unfinalize();
         if(!res) {
           return false;
         }
@@ -1215,8 +1214,13 @@ public:
     return is_draw_stalemate();
   }
 
-  INLINE bool is_draw() const {
+  INLINE bool is_draw_() const {
     return is_draw_halfmoves() || is_draw_material() || is_draw_stalemate() || is_draw_repetition();
+  }
+
+  INLINE bool is_draw() const {
+    assert(((is_draw_nogenmoves() || is_draw_with_genmoves()) ? 1 : 0) == (is_draw_() ? 1 : 0));
+    return is_draw_();
   }
 
   INLINE void update_state_repetitions() {
@@ -1247,12 +1251,15 @@ public:
   INLINE bool can_skip_genmoves() const {
     const COLOR c = activePlayer();
     const piece_bitboard_t kingcells = state.attacks[pos_king[c]];
+    // - get_attack_mask ignores enemy king's presence
+    // - occupancy is accounted for in kingcells
     return (get_attack_mask(enemy_of(c)) & kingcells) != kingcells;
   }
 
-  INLINE void clear_state_moves() {
+  INLINE void clear_state_unfinalize() {
     state.moves_initialized = false;
     for(auto&m:state.moves)m=0x00;
+    state.pins = {0x00,0x00};
   }
 
   // move-generation, this is the main reason attack-generation and such exist
@@ -1344,7 +1351,7 @@ public:
     // for efficiency can avoid the loop
     for(COLOR c : {WHITE, BLACK}) {
 //    const COLOR c = activePlayer(); {
-      state.pins[c] = 0x00ULL;
+      //state.pins[c] = 0x00ULL;
       const piece_bitboard_t kingmask = piece::pos_mask(pos_king[c]);
       iter_attacking_xrays(pos_king[c], [&](pos_t attacker, piece_bitboard_t r) mutable -> void {
         // include attacker into the ray
