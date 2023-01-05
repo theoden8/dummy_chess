@@ -1,5 +1,6 @@
-#!/bin/bash -v
+#!/usr/bin/env bash
 
+set -ex
 
 [ -d 'external/syzygy' ] && exit 0
 CURDIR=$PWD

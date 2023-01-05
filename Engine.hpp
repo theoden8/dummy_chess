@@ -1412,7 +1412,7 @@ public:
     const auto [n_moves, result] = ab_iterate_ranked_moves(pline,
       // should_use_pvmove_f
       [&](move_t pvmove) mutable -> bool {
-        return tb_can_probe();
+        return !tb_can_probe();
       },
       // get_ordered_moves_f
       [&]() mutable -> decltype(auto) {

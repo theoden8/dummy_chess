@@ -232,8 +232,8 @@ public:
     // initialize regular state variables
     state_hist.reserve(100);
     init_state_attacks();
-    init_state_checkline(activePlayer());
     clear_state_unfinalize();
+    init_state_checkline(activePlayer());
     init_state_moves();
     update_state_info();
     state.null_move_state = false;
