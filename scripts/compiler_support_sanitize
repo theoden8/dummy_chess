@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 
 
-if test $(uname -m) = 'x86_64' && test $(uname) = Linux -o $(uname) = Darwin; then
-  echo "enabled"
+# https://man.openbsd.org/clang-local.1
+
+if test $(uname -m) = 'OpenBSD'; then
+  echo "minimal"
 else
-  echo "disabled"
+  echo "enabled"
 fi

@@ -18,7 +18,9 @@ using namespace std::string_literals;
 
 #ifndef NDEBUG
 #define _printf printf
+#define _fprintf(fp, ...) {fprintf(fp, __VA_ARGS__);fflush(fp);}
 #else
+#define _fprintf(...)
 #define _printf(...)
 #endif
 

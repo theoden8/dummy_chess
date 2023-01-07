@@ -34,8 +34,41 @@ struct MoveScope {
 
 
 template <board::IndexableView BoardT>
+struct MoveUnfinalizedScope {
+  BoardT &b;
+  bool is_acting_scope = true;
+
+  // make a move on constructor
+  INLINE explicit MoveUnfinalizedScope(BoardT &b, move_t m) noexcept:
+    b(b)
+  {
+    //b.make_move_unfinalized(m);
+    b.make_move(m);
+  }
+
+  explicit MoveUnfinalizedScope(const MoveUnfinalizedScope &other) = delete;
+  explicit INLINE MoveUnfinalizedScope(MoveUnfinalizedScope &&other):
+    b(other.b)
+  {
+    other.is_acting_scope = false;
+  }
+
+  // unmake a move when leaving scope
+  INLINE ~MoveUnfinalizedScope() noexcept {
+    if(!is_acting_scope)return;
+    b.retract_move();
+  }
+};
+
+
+template <board::IndexableView BoardT>
 INLINE decltype(auto) make_move_scope(BoardT &b, move_t m) {
   return MoveScope<BoardT>(b, m);
+}
+
+template <board::IndexableView BoardT>
+INLINE decltype(auto) make_move_unfinalized_scope(BoardT &b, move_t m) {
+  return MoveUnfinalizedScope<BoardT>(b, m);
 }
 
 template <board::IndexableView BoardT>
@@ -75,6 +108,43 @@ INLINE decltype(auto) make_recursive_move_scope(BoardT &b) {
 
 
 template <board::IndexableView BoardT>
+struct RecursiveMoveUnfinalizedScope {
+  BoardT &b;
+  int counter = 0;
+  bool is_acting_scope = true;
+
+  INLINE explicit RecursiveMoveUnfinalizedScope(BoardT &b) noexcept:
+    b(b)
+  {}
+
+  explicit RecursiveMoveUnfinalizedScope(const RecursiveMoveUnfinalizedScope &other) = delete;
+  INLINE explicit RecursiveMoveUnfinalizedScope(RecursiveMoveUnfinalizedScope &&other):
+    b(other.b), counter(other.counter)
+  {
+    other.is_acting_scope = false;
+  }
+
+  INLINE void scope(move_t m) {
+    //b.make_move_unfinalized(m);
+    b.make_move(m);
+    ++counter;
+  }
+
+  INLINE ~RecursiveMoveUnfinalizedScope() {
+    if(!is_acting_scope)return;
+    for(int i = 0; i < counter; ++i) {
+      b.retract_move();
+    }
+  }
+};
+
+template <board::IndexableView BoardT>
+INLINE decltype(auto) make_recursive_move_unfinalized_scope(BoardT &b) {
+  return RecursiveMoveUnfinalizedScope<BoardT>(b);
+}
+
+
+template <board::IndexableView BoardT>
 struct MoveLineScope {
   BoardT &b;
   MoveLine &mline;
@@ -104,6 +174,39 @@ struct MoveLineScope {
 template <board::IndexableView BoardT>
 INLINE decltype(auto) make_mline_scope(BoardT &b, move_t m, MoveLine &mline) {
   return MoveLineScope<BoardT>(b, m, mline);
+}
+
+
+template <board::IndexableView BoardT>
+struct MoveLineUnfinalizedScope {
+  BoardT &b;
+  MoveLine &mline;
+  bool is_acting_scope = true;
+
+  INLINE explicit MoveLineUnfinalizedScope(BoardT &b, move_t m, MoveLine &mline):
+    b(b), mline(mline)
+  {
+    b.make_move_unfinalized(m);
+    mline.premove(m);
+  }
+
+  explicit MoveLineUnfinalizedScope(const MoveLineUnfinalizedScope &other) = delete;
+  INLINE explicit MoveLineUnfinalizedScope(MoveLineUnfinalizedScope &&other):
+    b(other.b), mline(other.mline)
+  {
+    other.is_acting_scope = false;
+  }
+
+  INLINE ~MoveLineUnfinalizedScope() {
+    if(!is_acting_scope)return;
+    mline.recall();
+    b.retract_move();
+  }
+};
+
+template <board::IndexableView BoardT>
+INLINE decltype(auto) make_mline_unfinalized_scope(BoardT &b, move_t m, MoveLine &mline) {
+  return MoveLineUnfinalizedScope<BoardT>(b, m, mline);
 }
 
 

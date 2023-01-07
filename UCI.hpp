@@ -2,6 +2,7 @@
 
 
 #include <cfloat>
+#include <atomic>
 
 #include <string>
 #include <vector>
@@ -11,7 +12,6 @@
 #include <optional>
 #include <memory>
 #include <mutex>
-#include <atomic>
 #include <filesystem>
 
 #include <FEN.hpp>
@@ -34,11 +34,10 @@ struct UCI {
   using depth_t = typename Engine::depth_t;
 
   // state-changing message passing
-  std::atomic<bool> debug_mode = false;
-  std::atomic<bool> should_quit = false;
-  std::atomic<bool> should_stop = false;
-  std::atomic<bool> should_ponderhit = false;
-  std::atomic<bool> job_started = false;
+  atomic_bool debug_mode = false;
+  atomic_bool should_quit = false;
+  atomic_bool should_stop = false;
+  atomic_bool should_ponderhit = false;
 
   // these are used to initialize engine for a new game
   struct Options {
@@ -228,14 +227,11 @@ struct UCI {
   } go_perft_command;
 
   // tell engine to stop; wait until it stops if it's running; clean up
-  void join_engine_thread() {
+  void stop_engine_thread() {
     should_stop = true;
-    if(job_started == true) {
-      while(!engine_thread.joinable())
-        ;
+    if(engine_thread.joinable()) {
       engine_thread.join();
       str::pdebug("info string joining engine thread"s);
-      job_started = false;
     }
   }
 
@@ -301,7 +297,7 @@ struct UCI {
       return;
       case CMD_ISREADY:
       {
-        join_engine_thread();
+        stop_engine_thread();
         respond(RESP_READYOK);
       }
       return;
@@ -394,13 +390,13 @@ struct UCI {
       case CMD_REGISTER:return;
       case CMD_UCINEWGAME:
         {
-          join_engine_thread();
+          stop_engine_thread();
           destroy();
         }
       return;
       case CMD_POSITION:
       {
-        join_engine_thread();
+        stop_engine_thread();
         fen::FEN f;
         size_t ind = 1;
         if(cmd[ind] == "startpos"s) {
@@ -438,7 +434,10 @@ struct UCI {
       return;
       case CMD_DISPLAY:
       {
-        join_engine_thread();
+        lock_guard guard(engine_mtx);
+        if(engine_ptr == nullptr) {
+          process_cmd({"position"s, "startpos"s});
+        }
         const fen::FEN f = engine_ptr->export_as_fen();
         respond(RESP_DISPLAY, "fen:"s, fen::export_as_string(f));
         const double hashfull = double(engine_ptr->zb_occupied) / double(engine_ptr->zobrist_size);
@@ -451,7 +450,7 @@ struct UCI {
       return;
       case CMD_GO:
       {
-        join_engine_thread();
+        stop_engine_thread();
         should_stop = false;
         // perft command
         size_t ind = 1;
@@ -464,7 +463,6 @@ struct UCI {
           go_perft_command g = (go_perft_command){
             .depth = depth_t(atoi(cmd[ind].c_str()))
           };
-          job_started = true;
           engine_thread = std::thread([&](auto g) mutable -> void {
             perform_go_perft(g);
           }, g);
@@ -505,7 +503,6 @@ struct UCI {
             }
             ++ind;
           }
-          job_started = true;
           engine_thread = std::thread([&](auto g) mutable -> void {
             perform_go(g);
           }, g);
@@ -515,7 +512,7 @@ struct UCI {
       case CMD_STOP:
       {
         should_stop = true;
-        join_engine_thread();
+        stop_engine_thread();
       }
       return;
       case CMD_PONDERHIT:
@@ -658,24 +655,25 @@ struct UCI {
         str::pdebug("info string changed time", movetime);
       }
       return_from_search = return_from_search || check_if_should_stop(args, time_spent, movetime);
-			if(verbose && !pondering && !should_stop) {
+      if(verbose && !pondering && !should_stop) {
         respond_full_iddfs(engine_idstate, nps, time_spent);
-			}
+      }
       return !return_from_search;
     }, searchmoves);
-		while(pondering && !should_stop) {
+    while(pondering && !should_stop) {
       if(should_ponderhit) {
         pondering = false;
       }
+      std::this_thread::yield();
     }
     if(!pondering && !should_stop) {
       respond_final_iddfs(engine_idstate, bestmove, time_spent);
     }
-		if(engine_idstate.pondermove() != board::nullmove) {
-			respond(RESP_BESTMOVE, engine_ptr->_move_str(bestmove), "ponder"s, engine_ptr->_move_str(engine_idstate.pondermove()));
-		} else {
-			respond(RESP_BESTMOVE, engine_ptr->_move_str(bestmove));
-		}
+    if(engine_idstate.pondermove() != board::nullmove) {
+      respond(RESP_BESTMOVE, engine_ptr->_move_str(bestmove), "ponder"s, engine_ptr->_move_str(engine_idstate.pondermove()));
+    } else {
+      respond(RESP_BESTMOVE, engine_ptr->_move_str(bestmove));
+    }
     str::pdebug("info string NOTE: search is over");
     should_stop = true;
     should_ponderhit = false;
@@ -711,9 +709,9 @@ struct UCI {
 
   void perform_quit() {
     should_stop = true;
-    join_engine_thread();
+    stop_engine_thread();
     should_quit = true;
-    str::pdebug("info string job state", job_started);
+    str::pdebug("info string job state", engine_thread.joinable() ? 1 : 0);
   }
 
   template <typename... Str>
@@ -722,8 +720,9 @@ struct UCI {
   }
 
   ~UCI() {
-    str::pdebug("info string job state", job_started);
-    join_engine_thread();
+    if(!should_quit) {
+      perform_quit();
+    }
     destroy();
   }
 };

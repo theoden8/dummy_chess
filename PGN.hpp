@@ -56,7 +56,7 @@ struct PGN {
         // [d]xc4
         resolve += name_of_file(board::_x(i));
         file_resolved = true;
-        const pos_t jfile = piece::file_mask(board::_x(j));
+        const pos_t jfile = board::_x(j);
         if(jfile == A) {
           imask = piece::file_mask(B);
         } else if(jfile == H) {

@@ -354,35 +354,39 @@ namespace tb {
   INLINE decltype(auto) get_ranked_moves(Board &b, bool prune=false) {
     assert(tb::can_probe(b));
     std::vector<std::pair<float, move_t>> tbmoves;
-    tbmoves.reserve(8);
+    tbmoves.reserve(16);
     ssize_t min_wdl = -1;
     auto &&func = [&](move_t m, int32_t tbScore, int32_t tbRank) mutable -> void {
 //      if(prune && (min_tbrank < tbRank || (min_tbrank == tbRank && min_tbscore < tbScore))) {
-      ssize_t wdl = 0;
+      ssize_t wdl = -1, dtz = 0;
+      float mval = .0;
       if(tbRank > 900) {
         wdl = TB_WIN; // 4
+        dtz = 1000 - tbRank;
+        mval = 900. - dtz;
       } else if(tbRank > 800) {
         wdl = TB_CURSED_WIN; // 3
+        dtz = 900 - tbRank;
+        mval = 500. - dtz;
       } else if(tbRank < -900) {
         wdl = TB_LOSS; // 0
+        dtz = -1000 - tbRank;
+        mval = -900. - dtz;
       } else if(tbRank < -800) {
         wdl = TB_BLESSED_LOSS; // 1
+        dtz = -900 - tbRank;
+        mval = -500. - dtz;
       } else {
         wdl = TB_DRAW; // 2
+        dtz = 0;
+        mval = .0;
       }
       if(prune && min_wdl < wdl) {
         tbmoves.clear();
         min_wdl = wdl;
       }
       if(!prune || min_wdl == wdl) {
-        float val = float(tbRank);
-        if(wdl != TB_WIN && wdl != TB_LOSS) {
-          val += float(tbScore) / TB_VALUE_FPAWN;
-          val /= 2;
-        } else {
-          val -= 100 * val / std::abs(val);
-        }
-        tbmoves.emplace_back(val, m);
+        tbmoves.emplace_back(mval, m);
       }
     };
     int8_t ret = probe_root_dtz(b, func);

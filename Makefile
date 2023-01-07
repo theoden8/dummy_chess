@@ -24,14 +24,16 @@ ifeq ($(FEATURE_SUPPORT_SANITIZE),enabled)
   ifeq ($(FEATURE_SUPPORT_GCC),gcc)
     DBGFLAGS := -static-libasan $(DBGFLAGS)
   endif
-  DBGFLAGS := $(DBGFLAGS) -fsanitize=address -fsanitize=undefined
+  DBGFLAGS := $(DBGFLAGS) -fsanitize=address -fsanitize=undefined -fno-omit-frame-pointer
+else ifeq ($(FEATURE_SUPPORT_SANITIZE),minimal)
+  DBGFLAGS := $(DBGFLAGS) -fsanitize-minimal-runtime -fno-omit-frame-pointer
 endif
 
 PROFFLAGS = -O1 -DNDEBUG -flto -DUSE_INTRIN -pg
 OPTFLAGS := -Ofast -DNDEBUG -flto -fno-trapping-math -fno-signed-zeros -m64 -march=native -DUSE_INTRIN -fno-exceptions
 
 PKGCONFIG ?= $(shell ./scripts/command_pkgconfig)
-CXXFLAGS := -std=c++20 -I. -Wall -Wextra
+CXXFLAGS := -std=c++20 -I. -Wall -Wextra -fno-stack-protector
 LDFLAGS := -pthread
 # compiler-specific
 ifeq ($(FEATURE_SUPPORT_GCC),gcc)
@@ -65,7 +67,6 @@ ifeq ($(FEATURE_SUPPORT_STDRANGES),disabled)
 endif
 # CXXFLAGS += -fopt-info
 
-LLVM_PROFDATA ?= llvm-profdata
 NC_CFLAGS =  $(shell $(PKGCONFIG) --cflags ncursesw)
 NC_LDFLAGS = $(shell $(PKGCONFIG) --libs ncursesw)
 
@@ -123,6 +124,7 @@ dummy_chess_uci: $(DEPS_UCI)
 	./scripts/pgo_bench.py "./dummy_chess_uci"
 	$(CXX) $(OPTFLAGS) -fprofile-use -fprofile-correction $(CXXFLAGS) -DMUTE_ERRORS uci.cpp $(SOURCES) $(LDFLAGS) -o $@
 else ifeq ($(FEATURE_SUPPORT_PGO),clang)
+LLVM_PROFDATA = $(shell $(CXX) -print-prog-name=llvm-profdata)
 dummy_chess_bench: $(DEPS_BENCH) dummy_chess_uci
 	$(CXX) $(OPTFLAGS) -fprofile-use=uci.profdata $(CXXFLAGS) bench.cpp $(SOURCES) $(LDFLAGS) -o $@
 

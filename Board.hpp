@@ -126,9 +126,9 @@ public:
   ply_index_t state_hist_repetitions = INT16_MAX;
 
   // bitboard representation
-  std::array<piece_bitboard_t, 2> bits = {0x00, 0x00};
+  std::array<piece_bitboard_t, NO_COLORS> bits = {0x00, 0x00};
   piece_bitboard_t bits_slid_diag = 0x00, bits_slid_orth = 0x00, bits_pawns = 0x00;
-  std::array<pos_t, 2> pos_king = {board::nopos, board::nopos};
+  std::array<pos_t, NO_COLORS> pos_king = {board::nopos, board::nopos};
 
   // crazyhouse-specific state variables
   piece_bitboard_t bits_promoted_pawns = 0ULL;
@@ -143,6 +143,7 @@ public:
     // compressed board state: bijectively restore it when needed
     board_info info;
     board_mailbox_t attacks;
+    bool moves_initialized = false;
     std::array<piece_bitboard_t, NO_COLORS> checkline = {0x00,0x00};
     board_mailbox_t moves;
     std::array<piece_bitboard_t, NO_COLORS> pins;
@@ -153,8 +154,11 @@ public:
   std::vector<board_state> state_hist;
 
   size_t zobrist_size;
+  bool b_finalize = false;
   explicit inline Board(const fen::FEN &f=fen::starting_pos, size_t zbsize=ZOBRIST_SIZE):
     #ifndef CONST_IS_EMPTY
+    activePlayer_(f.active_player),
+    current_ply_(f.fullmove * 2 - (f.active_player == WHITE ? 1 : 0)),
     chess960(f.chess960), crazyhouse(f.crazyhouse),
     #endif
     zobrist_size(bitmask::highest_bit(zbsize))
@@ -264,6 +268,8 @@ public:
     // initialize regular state variables
     state_hist.reserve(100);
     init_state_attacks();
+    clear_state_unfinalize();
+    init_state_checkline(activePlayer());
     init_state_moves();
     update_state_info();
     state.null_move_state = false;
@@ -625,7 +631,13 @@ public:
           );
   }
 
-  INLINE bool check_valid_move(pos_t i, pos_t j, bool strict=true) const {
+  INLINE bool check_valid_move(pos_t i, pos_t j, bool strict=true) {
+#ifndef NDEBUG
+    const bool tmp = !state.moves_initialized;
+    if(tmp) {
+      return true;
+    }
+#endif
     return (crazyhouse && check_valid_drop_move(i, j))
       || (!strict && bitmask::_pos_pair(i, j) == board::nullmove)
       || (i == (i & board::MOVEMASK)
@@ -633,7 +645,7 @@ public:
            && (state.moves[i] & piece::pos_mask(j & board::MOVEMASK)));
   }
 
-  INLINE bool check_valid_move(const move_t m, bool strict=true) const {
+  INLINE bool check_valid_move(const move_t m, bool strict=true) {
     return check_valid_move(bitmask::first(m), bitmask::second(m), strict);
   }
 
@@ -641,27 +653,26 @@ public:
   virtual void _restore_on_event() {}
   virtual void _update_pos_change(pos_t i, pos_t j) {};
 
-  // forward-pass, complete code
-  void make_move(pos_t i, pos_t j) {
+  void make_move_unfinalized(pos_t i, pos_t j) {
     const move_t m = bitmask::_pos_pair(i, j);
     // split promotion and destination information
     const pos_t promote_as = j & ~board::MOVEMASK;
     j &= board::MOVEMASK;
     // some move properties, which depend on increasing ply counter
-    const bool is_drop = crazyhouse && is_drop_move(i, j);
-    const bool known_move_type = (m == board::nullmove || is_drop);
-    const bool is_castling = !known_move_type && is_castling_move(i, j);
+    const bool isdrop = crazyhouse && is_drop_move(i, j);
+    const bool known_move_type = (m == board::nullmove || isdrop);
+    const bool iscastling = !known_move_type && is_castling_move(i, j);
     const bool is_enpassant_take =  !known_move_type && is_enpassant_take_move(i, j);
     const pos_t epawn = enpassant_pawn();
 
     // back-up current state
     state_hist.emplace_back(state);
-    assert(m == board::nullmove || check_valid_move(m));
+    assert(check_valid_move(m, false));
     state.null_move_state = (m == board::nullmove);
     ++current_ply_;
     if(m == board::nullmove) {
       // do nothing
-    } else if(is_drop) {
+    } else if(isdrop) {
       // crazyhouse-specific move
       assert(check_valid_drop_move(i, j));
       const COLOR c = activePlayer();
@@ -670,7 +681,7 @@ public:
       update_state_attacks_pos(j);
       --n_subs[Piece::get_piece_index(p, c)];
       state_hist_halfmoves.emplace_back(get_current_ply());
-    } else if(is_castling) {
+    } else if(iscastling) {
       // back up knights for later checksum, as none of the knights should move
       const piece_bitboard_t knights = get_knight_bits();
       const COLOR c = activePlayer();
@@ -799,13 +810,32 @@ public:
     }
     // update active player (current ply was updated earler)
     activePlayer_ = enemy_of(activePlayer());
-    // post-processing: moves, current state info
-    init_state_moves();
+    // init_state_moves
     update_state_info();
     // repetition detection can now be updated too
     if(state_hist_repetitions > self.get_current_ply()) {
       update_state_repetitions();
     }
+    clear_state_unfinalize();
+    init_state_checkline(activePlayer());
+    if(b_finalize)make_move_finalize();
+  }
+
+  INLINE void make_move_unfinalized(move_t m) {
+    make_move_unfinalized(bitmask::first(m), bitmask::second(m));
+  }
+
+  INLINE void make_move_finalize() {
+    if(!state.moves_initialized) {
+      init_state_moves();
+    }
+  }
+
+  // forward-pass, complete code
+  INLINE void make_move(pos_t i, pos_t j) {
+    make_move_unfinalized(i, j);
+    // post-processing: moves, current state info
+    make_move_finalize();
     // notify the visitor that they can post-process now
   }
 
@@ -862,12 +892,24 @@ public:
     return make_move_scope(self, m);
   }
 
+  INLINE decltype(auto) move_unfinalized_scope(move_t m) {
+    return make_move_unfinalized_scope(self, m);
+  }
+
   INLINE decltype(auto) mline_scope(move_t m, MoveLine &mline) {
     return make_mline_scope(self, m, mline);
   }
 
+  INLINE decltype(auto) mline_unfinalized_scope(move_t m, MoveLine &mline) {
+    return make_mline_unfinalized_scope(self, m, mline);
+  }
+
   INLINE decltype(auto) recursive_move_scope() {
     return make_recursive_move_scope(self);
+  }
+
+  INLINE decltype(auto) recursive_move_unfinalized_scope() {
+    return make_recursive_move_unfinalized_scope(self);
   }
 
   INLINE decltype(auto) recursive_mline_scope(MoveLine &mline) {
@@ -882,9 +924,26 @@ public:
   }
 
   template <typename LineT, typename F>
+  INLINE void walk_unfinalized_early_stop(const LineT &mline, F &&func) {
+    walk_unfinalized_early_stop(mline, std::forward<F>(func), [](ply_index_t){});
+  }
+
+  template <typename LineT, typename F, typename FF>
+  INLINE void walk_unfinalized_early_stop(const LineT &mline, F &&func, FF &&endfunc) {
+    auto &&rec_mscope = self.recursive_move_unfinalized_scope();
+    foreach_early_stop(mline, [&](const move_t m) mutable -> bool {
+      return func(m, [&]() mutable -> void {
+        rec_mscope.scope(m);
+      });
+    });
+    endfunc((ply_index_t)rec_mscope.counter);
+  }
+
+  template <typename LineT, typename F>
   INLINE void walk_early_stop(const LineT &mline, F &&func) {
     walk_early_stop(mline, std::forward<F>(func), [](ply_index_t){});
   }
+
 
   template <typename LineT, typename F, typename FF>
   INLINE void walk_early_stop(const LineT &mline, F &&func, FF &&endfunc) {
@@ -905,6 +964,22 @@ public:
   }
 
   template <typename LineT, typename F>
+  INLINE void walk_unfinalized(const LineT &mline, F &&func) {
+    walk_unfinalized(mline, std::forward<F>(func), [](ply_index_t){});
+  }
+
+  template <typename LineT, typename F, typename FF>
+  INLINE void walk_unfinalized(const LineT &mline, F &&func, FF &&endfunc) {
+    auto &&rec_mscope = self.recursive_move_unfinalized_scope();
+    foreach(mline, [&](const move_t m) mutable -> void {
+      func(m, [&]() mutable -> void {
+        rec_mscope.scope(m);
+      });
+    });
+    endfunc((ply_index_t)rec_mscope.counter);
+  }
+
+  template <typename LineT, typename F>
   INLINE void walk(const LineT &mline, F &&func) {
     walk(mline, std::forward<F>(func), [](ply_index_t){});
   }
@@ -921,8 +996,17 @@ public:
   }
 
   template <typename LineT, typename FF>
-  INLINE void walk_end(const LineT &mline, FF &&endfunc) {
+  INLINE void walk_unfinalized_end(const LineT &mline, FF &&endfunc) {
     auto &&rec_mscope = self.recursive_move_scope();
+    foreach(mline, [&](const move_t m) mutable -> void {
+      rec_mscope.scope(m);
+    });
+    endfunc((ply_index_t)rec_mscope.counter);
+  }
+
+  template <typename LineT, typename FF>
+  INLINE void walk_end(const LineT &mline, FF &&endfunc) {
+    auto &&rec_mscope = self.recursive_move_unfinalized_scope();
     foreach(mline, [&](const move_t m) mutable -> void {
       rec_mscope.scope(m);
     });
@@ -931,9 +1015,17 @@ public:
 
   template <typename LineT>
   INLINE bool check_valid_sequence(const LineT &mline, bool strict=false) {
+    //make_move_finalize();
     auto &&rec_mscope = recursive_move_scope();
     for(const move_t m : mline) {
-      if(!check_valid_move(m, strict)) {
+      if(!state.moves_initialized) {
+        make_move_finalize();
+        const bool res = check_valid_move(m, false);
+        clear_state_unfinalize();
+        if(!res) {
+          return false;
+        }
+      } else if(!check_valid_move(m, strict)) {
         str::pdebug("fen ", fen::export_as_string(export_as_fen()));
         str::pdebug("[invalid "s, _line_str_full(mline), "]"s);
         return false;
@@ -945,6 +1037,7 @@ public:
 
   template <typename LineT>
   INLINE bool check_line_terminates(const LineT &mline) {
+    make_move_finalize();
     auto &&rec_mscope = recursive_move_scope();
     for(const move_t m : mline) {
       assert(!is_draw() && can_move());
@@ -1120,6 +1213,7 @@ public:
   }
 
   INLINE bool can_move() const {
+    assert(state.moves_initialized);
     const COLOR c = activePlayer();
     bool canmove = false;
     bitmask::foreach_early_stop(bits[c], [&](pos_t pos) mutable -> bool {
@@ -1150,8 +1244,21 @@ public:
             && piece::size(light_pieces & bits[BLACK]) == 1);
   }
 
-  INLINE bool is_draw() const {
+  INLINE bool is_draw_nogenmoves() const {
+    return is_draw_halfmoves() || is_draw_material() || is_draw_repetition();
+  }
+
+  INLINE bool is_draw_with_genmoves() const {
+    return is_draw_stalemate();
+  }
+
+  INLINE bool is_draw_() const {
     return is_draw_halfmoves() || is_draw_material() || is_draw_stalemate() || is_draw_repetition();
+  }
+
+  INLINE bool is_draw() const {
+    assert(((is_draw_nogenmoves() || is_draw_with_genmoves()) ? 1 : 0) == (is_draw_() ? 1 : 0));
+    return is_draw_();
   }
 
   INLINE void update_state_repetitions() {
@@ -1179,13 +1286,27 @@ public:
     return state_hist_repetitions <= self.get_current_ply();
   }
 
+  INLINE bool can_skip_genmoves() const {
+    const COLOR c = activePlayer();
+    const piece_bitboard_t kingcells = state.attacks[pos_king[c]];
+    // - get_attack_mask ignores enemy king's presence
+    // - occupancy is accounted for in kingcells
+    return (get_attack_mask(enemy_of(c)) & kingcells) != kingcells;
+  }
+
+  INLINE void clear_state_unfinalize() {
+    state.moves_initialized = false;
+    for(auto&m:state.moves)m=0x00;
+    state.pins = {0x00,0x00};
+  }
+
   // move-generation, this is the main reason attack-generation and such exist
   void init_state_moves() {
-    for(auto&m:state.moves)m=0x00;
+    state.moves_initialized = true;
+    assert(std::all_of(state.moves.begin(), state.moves.end(), [](auto m)->bool{return m==0x00;}));
     //if(is_draw_halfmoves()||is_draw_material())return;
 //    for(const COLOR c : {WHITE, BLACK}) {
     const COLOR c = activePlayer(); {
-      init_state_checkline(c);
       const COLOR ec = enemy_of(c);
       const piece_bitboard_t friends = bits[c], foes = bits[ec],
                              attack_mask = get_attack_mask(ec);
@@ -1220,6 +1341,7 @@ public:
         state.moves[pos_king[c]] &= ~state.pins[c];
       }
     }
+    state.moves_initialized = true;
   }
 
   // sometimes, enpassant taking of a nearby pawn opens a line for a rook/queen
@@ -1267,7 +1389,7 @@ public:
     // for efficiency can avoid the loop
     for(COLOR c : {WHITE, BLACK}) {
 //    const COLOR c = activePlayer(); {
-      state.pins[c] = 0x00ULL;
+      //state.pins[c] = 0x00ULL;
       const piece_bitboard_t kingmask = piece::pos_mask(pos_king[c]);
       iter_attacking_xrays(pos_king[c], [&](pos_t attacker, piece_bitboard_t r) mutable -> void {
         // include attacker into the ray
@@ -1352,7 +1474,7 @@ public:
   NEVER_INLINE std::vector<std::string> _line_str(const MoveLine &line, bool thorough=true) {
     std::vector<std::string> s;
     if(thorough)assert(check_valid_sequence(line));
-    decltype(auto) rec_mscope = self.recursive_move_scope();
+    decltype(auto) rec_mscope = self.recursive_move_unfinalized_scope();
     for(const auto m : line) {
       if(m==board::nullmove)break;
       s.emplace_back(_move_str(m));
@@ -1373,7 +1495,7 @@ public:
 
   board_info get_info_from_line(MoveLine &mline) {
     assert(check_valid_sequence(mline));
-    decltype(auto) rec_mscope = self.recursive_move_scope();
+    decltype(auto) rec_mscope = self.recursive_move_unfinalized_scope();
     for(const move_t &m : mline) {
       rec_mscope.scope(m);
     }

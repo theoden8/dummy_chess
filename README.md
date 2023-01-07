@@ -23,7 +23,7 @@ $ make
 ## tools
 
 * c++-20
-* ncurses (tui)
+* [ncurses](https://invisible-island.net/ncurses/announce.html) interface
 * [m42](https://github.com/sinandredemption/M42) library for magic bitboards
 * [syzygy](https://github.com/syzygy1/tb) tool to generate tablebases
 * [fathom](https://github.com/jdart1/Fathom) c++ interface to syzygy tablebases
