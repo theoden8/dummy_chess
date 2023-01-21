@@ -29,7 +29,7 @@ else ifeq ($(FEATURE_SUPPORT_SANITIZE),minimal)
   DBGFLAGS := $(DBGFLAGS) -fsanitize-minimal-runtime -fno-omit-frame-pointer
 endif
 
-PROFFLAGS = -O1 -DNDEBUG -flto -DUSE_INTRIN -pg
+PROFFLAGS = -O1 -DNDEBUG -DFLAG_PROFILING -flto -DUSE_INTRIN -pg
 OPTFLAGS := -Ofast -DNDEBUG -flto -fno-trapping-math -fno-signed-zeros -m64 -march=native -DUSE_INTRIN -fno-exceptions
 
 PKGCONFIG ?= $(shell ./scripts/command_pkgconfig)

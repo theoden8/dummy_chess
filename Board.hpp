@@ -1250,9 +1250,8 @@ public:
 
   INLINE bool can_skip_genmoves() const {
     const COLOR c = activePlayer();
-    const piece_bitboard_t kingcells = state.attacks[pos_king[c]];
+    const piece_bitboard_t kingcells = state.attacks[pos_king[c]] & ~bits[c];
     // - get_attack_mask ignores enemy king's presence
-    // - occupancy is accounted for in kingcells
     return (get_attack_mask(enemy_of(c)) & kingcells) != kingcells;
   }
 
