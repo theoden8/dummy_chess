@@ -40,6 +40,8 @@ struct PGN {
   // coordinate specification when move is ambiguous.
   // Rd1 is ambiguous, so use R[a]d1 or R[f]d1, or R[5]d1, potentially both could be used
   std::string resolve_ambiguity(pos_t i, pos_t j, bool enpassant=false) const {
+    const bool finalized = board.state.moves_initialized;
+    if(!finalized)board.make_move_finalize();
     // drop information about promotions:
     j &= board::MOVEMASK;
     std::string resolve = ""s;
@@ -71,6 +73,7 @@ struct PGN {
       if(!LICHESS_COMPATIBILITY) {
         jmask = board::file_mask(board::_x(j));
       }
+      if(!finalized)board.clear_state_unfinalize();
       return resolve;
     }
 
