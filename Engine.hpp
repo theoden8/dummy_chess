@@ -367,9 +367,9 @@ public:
   }
 
   INLINE mval_t move_heuristic_pv(move_t m, const MoveLine &pline, move_t hashmove=board::nullmove, move_t my_threatmove=board::nullmove) const {
-    if(pline.is_mainline() && m == pline.front()) {
+    if(m == pline.front()) {
       return 2000.;
-    } else if(m == hashmove || m == my_threatmove || pline.front() == m) {
+    } else if(m == hashmove || m == my_threatmove) {
       return 1000.;
     }
     return .0;
