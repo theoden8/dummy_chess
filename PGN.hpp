@@ -314,7 +314,7 @@ struct PGN {
       default:break;
     }
     --j;
-    if(s[j] == 'x') {
+    if(j >= 0 && s[j] == 'x') {
       assert_capture = true;
       --j;
     }
@@ -324,7 +324,7 @@ struct PGN {
     }
     assert((assert_capture && capture_verified) || (!assert_capture && !capture_verified));
     pos_t move_from = board::nopos;
-    if(s[j] == '@') {
+    if(j >= 0 && s[j] == '@') {
       move_from = board::CRAZYHOUSE_DROP | pos_t(p);
     } else {
       piece_bitboard_t from_positions = bitmask::full;
@@ -423,7 +423,7 @@ struct PGN {
         break;
       }
       const std::string ss = s.substr(i, j-i);
-//      str::print("new read:", "<"s + ss + ">"s);
+      //printf("new read: <%s>\n", ss.c_str());
       read_move(ss);
       i = j;
     }
