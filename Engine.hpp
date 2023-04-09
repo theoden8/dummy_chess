@@ -603,7 +603,9 @@ public:
   #endif
 
     INLINE bool can_apply(const board_info &_info, depth_t _depth, ply_index_t _age) const {
-      return !is_inactive(_age) && depth >= _depth && info == _info;
+      return !is_inactive(_age) && depth >= _depth && info == _info
+             // avoid stack overflow by limiting depth difference
+             && !(_depth + (depth_t)m_hint.size() <= depth);
     }
 
     INLINE bool can_use_move(const board_info &_info, depth_t _depth, ply_index_t _age) const {
