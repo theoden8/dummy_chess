@@ -189,7 +189,7 @@ namespace bitmask {
       pos_t x = i % 8, y = i / 8;
       y = 8 - y - 1;
       const pos_t ind = y * 8 + x;
-      if(i == markspot) {
+      if(x == markspot % 8 && y == (8 - (markspot / 8) - 1)) {
         s[j++] = 'x';
       } else {
         s[j++] = (mask & (1LLU << ind)) ? '*' : '.';

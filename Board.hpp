@@ -446,6 +446,10 @@ public:
     return bits[enemy_of(c)] & piece::pos_mask(j);
   }
 
+  INLINE bool is_naively_capture_move(move_t m) const {
+    return is_naively_capture_move(bitmask::first(m), bitmask::second(m));
+  }
+
   INLINE bool is_naively_checking_move(pos_t i, pos_t j) const {
     j &= board::MOVEMASK;
     const COLOR c = activePlayer();
@@ -1308,6 +1312,7 @@ public:
   // sometimes, enpassant taking of a nearby pawn opens a line for a rook/queen
   // which potentially captures the king. this is the only case in which x-ray checks
   // are insufficient
+  // if so, add pawns that can take checking en-passant to checkline
   void init_state_moves_checkline_enpassant_takes() {
     const COLOR c = activePlayer();
     const pos_t etrace = enpassant_trace();
@@ -1371,7 +1376,7 @@ public:
   }
 
   // non-xray pin generated in the case when en-passant can't be captured
-  // k * * p P * * R
+  // k * * p P * * (R|Q)
   void init_horizontal_enpassant_pin() {
     if(enpassant_trace() == board::nopos)return;
     const COLOR c = activePlayer();
@@ -1379,7 +1384,7 @@ public:
     const pos_t r = (c == WHITE) ? -1+5 : -1+4;
     if(
         state.checkline[c] != bitmask::full
-        || !(piece::rank_mask(r) & bits[ec] & bits_slid_orth & ~bits_slid_diag))
+        || !(piece::rank_mask(r) & bits[ec] & bits_slid_orth))
     {
       return;
     }

@@ -962,7 +962,7 @@ public:
     move_t pvmove = board::nullmove;
     if(!state.moves_initialized && pline.front() != board::nullmove && should_use_pvmove_f(pline.front())) {
       pvmove = pline.front();
-      const mval_t mval = pline.is_mainline() ? 2000. : 1000.;
+      const mval_t mval = 2000.;
       const score_t res = func(i, ret_pv_f(pvmove, mval), (size_t)20);
       if(res == F_BREAK || res != F_CONTINUE) {
         return std::make_pair((size_t)1, res);
