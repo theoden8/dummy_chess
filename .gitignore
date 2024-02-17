@@ -1,11 +1,13 @@
 /gui
 dummy_chess*
 *.o
+*.so
 *.out
 *.dSYM
 *.gcda
-default*.profraw
-default*.profdata
+*.profdata
+*.profraw
+*.profdata
 m42.*
 
 *.swp
