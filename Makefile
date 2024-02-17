@@ -31,6 +31,7 @@ endif
 
 PROFFLAGS = -O1 -DNDEBUG -DFLAG_PROFILING -flto -DUSE_INTRIN -pg
 OPTFLAGS := -Ofast -DNDEBUG -flto -fno-trapping-math -fno-signed-zeros -m64 -march=native -DUSE_INTRIN -fno-exceptions
+SOFLAGS := -O3 -DNDEBUG -flto -fno-trapping-math -fno-signed-zeros -m64 -march=native -DUSE_INTRIN -fno-exceptions
 
 PKGCONFIG ?= $(shell ./scripts/command_pkgconfig)
 CXXFLAGS := -std=c++20 -I. -Wall -Wextra -fno-stack-protector
@@ -76,7 +77,7 @@ SOURCES = m42.cpp
 
 CORES = $(shell getconf _NPROCESSORS_ONLN)
 all :; @$(MAKE) _all -j$(CORES)
-_all : dummy_chess dummy_chess_curses dummy_chess_bench dummy_chess_alphabeta dummy_chess_uci dummy_chess_uci_dbg $(SOURCE_DEPS)
+_all : dummy_chess dummy_chess_curses dummy_chess_bench dummy_chess_alphabeta dummy_chess_uci dummy_chess_uci_dbg libdummychess.so $(SOURCE_DEPS)
 
 external/syzygy:
 	./scripts/syzygy_download
@@ -96,10 +97,13 @@ dummy_chess: simple.cpp $(SOURCES) $(HPPFILES) Makefile $(SOURCE_DEPS)
 dummy_chess_curses: ui.cpp $(SOURCES) $(HPPFILES) Makefile $(SOURCE_DEPS)
 	$(CXX) $(OPTFLAGS) $(CXXFLAGS) $(NC_CFLAGS) ui.cpp $(SOURCES) $(LDFLAGS) $(NC_LDFLAGS) $(LDFLAGS) -o $@
 
-DEPS_BENCH := bench.cpp $(SOURCES) $(HPPFILES) Makefile $(SOURCE_DEPS)
-DEPS_ALPHABETA := alphabeta.cpp $(SOURCES) $(HPPFILES) Makefile $(SOURCE_DEPS)
-DEPS_UCI := uci.cpp $(SOURCES) $(HPPFILES) Makefile $(SOURCE_DEPS)
+DEPS_SHARED := $(SOURCES) $(HPPFILES) Makefile $(SOURCE_DEPS)
+DEPS_BENCH := bench.cpp $(DEPS_SHARED)
+DEPS_ALPHABETA := alphabeta.cpp $(DEPS_SHARED)
+DEPS_UCI := uci.cpp $(DEPS_SHARED)
+
 ifeq ($(FEATURE_SUPPORT_PGO),disabled)
+
 dummy_chess_bench: $(DEPS_BENCH)
 	$(CXX) $(OPTFLAGS) $(CXXFLAGS) bench.cpp $(SOURCES) $(LDFLAGS) -o $@
 
@@ -108,7 +112,12 @@ dummy_chess_alphabeta: $(DEPS_ALPHABETA)
 
 dummy_chess_uci: $(DEPS_UCI)
 	$(CXX) $(OPTFLAGS) $(CXXFLAGS) -DMUTE_ERRORS uci.cpp $(SOURCES) $(LDFLAGS) -o $@
+
+libdummychess.so: $(DEPS_SHARED)
+	$(CXX) $(SOFLAGS) $(CXXFLAGS) -DMUTE_ERRORS $(SOURCES) $(LDFLAGS) -fPIC -shared -o $@
+
 else ifeq ($(FEATURE_SUPPORT_PGO),gcc)
+
 dummy_chess_bench: $(DEPS_BENCH) dummy_chess_uci
 	$(CXX) $(OPTFLAGS) -fprofile-use $(CXXFLAGS) bench.cpp $(SOURCES) $(LDFLAGS) -o $@
 
@@ -120,7 +129,12 @@ dummy_chess_uci: $(DEPS_UCI)
 	$(CXX) $(OPTFLAGS) -fprofile-generate $(CXXFLAGS) -DMUTE_ERRORS uci.cpp $(SOURCES) $(LDFLAGS) -o $@
 	./scripts/pgo_bench.py "./dummy_chess_uci"
 	$(CXX) $(OPTFLAGS) -fprofile-use -fprofile-correction $(CXXFLAGS) -DMUTE_ERRORS uci.cpp $(SOURCES) $(LDFLAGS) -o $@
+
+libdummychess.so: $(DEPS_SHARED)
+	$(CXX) $(SOFLAGS) -fprofile-use -fprofile-correction $(CXXFLAGS) -DMUTE_ERRORS $(SOURCES) $(LDFLAGS) -fPIC -shared -o $@
+
 else ifeq ($(FEATURE_SUPPORT_PGO),clang)
+
 LLVM_PROFDATA = $(shell $(CXX) -print-prog-name=llvm-profdata)
 dummy_chess_bench: $(DEPS_BENCH) dummy_chess_uci
 	$(CXX) $(OPTFLAGS) -fprofile-use=uci.profdata $(CXXFLAGS) bench.cpp $(SOURCES) $(LDFLAGS) -o $@
@@ -135,6 +149,10 @@ dummy_chess_uci: $(DEPS_UCI)
 	./scripts/pgo_bench.py "./dummy_chess_uci"
 	$(LLVM_PROFDATA) merge -output=uci.profdata uci.d.profdata
 	$(CXX) $(OPTFLAGS) -fprofile-use=uci.profdata $(CXXFLAGS) -DMUTE_ERRORS uci.cpp $(SOURCES) $(LDFLAGS) -o $@
+
+libdummychess.so: $(DEPS_SHARED)
+	$(CXX) $(SOFLAGS) -fprofile-use=uci.profdata $(CXXFLAGS) -DMUTE_ERRORS $(SOURCES) $(LDFLAGS) -fPIC -shared -o $@
+
 endif
 
 dummy_chess_uci_dbg: $(DEPS_UCI)
