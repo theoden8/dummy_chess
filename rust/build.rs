@@ -22,7 +22,7 @@ fn main() {
     .blocklist_type(".*Scope")
     .blocklist_item("type_")
     .allowlist_type("(Piece|FEN|PGN|Board|Perft|MoveLine|Engine)")
-    .allowlist_function("(board|bitmask|FEN|fen|PGN|pgn|MoveLine|Board|Engine)_.*")
+    .allowlist_function("(board|bitmask|FEN|fen|PGN|pgn|MoveLine|Board|Engine)::.*")
     .opaque_type("(std::.*|.*Scope.*|DebugTracer)")
     .generate_inline_functions(true)
     .dynamic_library_name("dummychess")
