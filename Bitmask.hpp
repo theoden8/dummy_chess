@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstdio>
+#include <cinttypes>
 #include <cassert>
 #include <climits>
 
@@ -182,7 +183,7 @@ namespace bitmask {
   }
 
   NEVER_INLINE void print_mask(uint64_t mask, pos_t markspot=0xff) {
-    printf("mask: %lx\n", mask);
+    printf("mask: " PRIx64 "\n", mask);
     char s[256];
     pos_t j = 0;
     for(pos_t i = 0; i < CHAR_BIT*sizeof(mask); ++i) {
