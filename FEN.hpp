@@ -359,6 +359,6 @@ namespace fen {
   }
 
   std::string FEN::export_as_string() const {
-    fen::export_as_string(*this);
+    return fen::export_as_string(*this);
   }
 } // namespace fen
