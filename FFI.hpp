@@ -15,4 +15,8 @@ struct FFIString {
     printf("%s\n", s.c_str());
     fflush(stdout);
   }
+
+  __attribute__((used)) static std::string make_string(const char *s) {
+    return std::string(s);
+  }
 };

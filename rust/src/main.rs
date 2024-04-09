@@ -27,18 +27,20 @@ fn main() {
   unsafe {
 //    let dummychess = dummychess::new(env!("OUT_DIR"));
 //    println!("{}", dummychess.fen);
-    println!("starting pos");
-    let starting_pos = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1".as_ptr() as *const _;
+    println!("starting pos cstr1");
+    let starting_pos_cstr1 = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1".as_ptr() as *const _;
+    println!("starting pos str1");
+    let starting_pos_str1 = FFIString::make_string(starting_pos_cstr1);
     println!("starting pos fen");
-    let starting_pos_fen = fen::FEN_load_from_string(starting_pos);
-    println!("starting pos str");
-    let starting_pos_str = starting_pos_fen.export_as_string();
+    let starting_pos_fen = fen::FEN_load_from_string(&starting_pos_str1);
+    println!("starting pos str2");
+    let starting_pos_str2 = starting_pos_fen.export_as_string();
     println!("starting pos str show");
-    FFIString::show_cstring(&starting_pos_str);
-    println!("starting pos cstr");
-    let starting_pos_cstr = FFIString::to_cstring(&starting_pos_str);
+    FFIString::show_cstring(&starting_pos_str2);
+    println!("starting pos cstr2");
+    let starting_pos_cstr2 = FFIString::to_cstring(&starting_pos_str2);
     println!("to str");
-    s = to_str(starting_pos_cstr);
+    s = to_str(starting_pos_cstr2);
     //let board: root::Board = Board::new(&starting_pos_fen as *const _, 1 << 19);
   }
   println!("fen: {}", s);
