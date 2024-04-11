@@ -388,7 +388,7 @@ public:
       return NO_INDEX;
     }
     assert(p_index < pline.start);
-    const size_t p_ply = self.get_current_ply() - (pline.start - p_index) + (ahead ? 0 : 1);
+    const ply_index_t p_ply = self.get_current_ply() - (pline.start - p_index) + (ahead ? 0 : 1);
     assert(!ahead || p_ply < self.get_current_ply() || check_valid_move(p_m, false));
     if(m != board::nullmove && p_m != board::nullmove && !(crazyhouse && is_drop_move(bitmask::first(m), bitmask::second(m)))) {
       const pos_t i = bitmask::first(m), _j = bitmask::second(m);
