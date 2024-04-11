@@ -1524,7 +1524,6 @@ public:
             const bool interesting_move = (is_drop_move(i, j) || is_castling_move(i, j) || is_promotion_move(i, j) || (is_naively_capture_move(i, j) && m_val > -3.5) || (is_naively_checking_move(i, j) && m_val > -9.));
             decltype(auto) mscope = self.mline_unfinalized_scope(m, pline_alt);
             new_ispathdep = is_path_dependent(pline_alt);
-            str::print("interesting move?", board::_move_str(m));
             const bool lmr_allowed = ENABLE_SEL_LMR && move_index >= (pline.is_mainline() ? 15 : 4)
                                      && depth >= 3 && state.checkline[c] == bitmask::full && m_val < .1 && !interesting_move;
             MoveLine pline_alt2 = pline_alt;
