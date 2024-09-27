@@ -2,17 +2,17 @@
 
 
 #include <cfloat>
-#include <atomic>
-
 #include <string>
 #include <vector>
 #include <map>
 #include <chrono>
-#include <thread>
 #include <optional>
 #include <memory>
 #include <mutex>
 #include <filesystem>
+
+#include <unistd.h>
+#include <fcntl.h>
 
 #include <FEN.hpp>
 #include <Engine.hpp>
@@ -34,10 +34,10 @@ struct UCI {
   using depth_t = typename Engine::depth_t;
 
   // state-changing message passing
-  atomic_bool debug_mode = false;
-  atomic_bool should_quit = false;
-  atomic_bool should_stop = false;
-  atomic_bool should_ponderhit = false;
+  bool debug_mode = false;
+  bool should_quit = false;
+  bool should_stop = false;
+  bool should_ponderhit = false;
 
   // these are used to initialize engine for a new game
   struct Options {
@@ -49,17 +49,11 @@ struct UCI {
   };
   Options engine_options;
 
-  // cannot use engine in two threads at the same time
-  std::recursive_mutex engine_mtx;
-  using lock_guard = std::lock_guard<std::recursive_mutex>;
-  std::thread engine_thread;
-
   UCI()
   {}
 
   // nice lock-safe initialization according to the currently set options
   void init(const fen::FEN &f) {
-    lock_guard guard(engine_mtx);
     _printf("init\n");
     const size_t zobrist_size = (engine_options.hash_mb << (20 - 7));
     engine_ptr.reset(new Engine(f, zobrist_size));
@@ -76,7 +70,6 @@ struct UCI {
 
   // remove engine: no memory leaks, no nothing, ready to start again
   void destroy() {
-    lock_guard guard(engine_mtx);
     if(!engine_ptr) {
       _printf("destroy\n");
       engine_ab_storage_ptr.reset(nullptr);
@@ -144,31 +137,78 @@ struct UCI {
     {RESP_OPTION,         "option"s},
   };
 
-  // accept and interpret commands line by line, for all eternity
-  void run() {
-    std::vector<std::string> cmd = {""s};
-    char c = 0;
-    while((c = fgetc(stdin)) != EOF) {
-      if(c == '\n') {
-        if(cmd.size() > 1 || !cmd.back().empty()) {
-          process_cmd(cmd);
-        }
-        cmd = {""s};
-        if(should_quit)break;
+  using cmd_t = std::vector<std::string>;
+  cmd_t io_cmdbuf = {""s};
+  std::queue<cmd_t> q_cmd;
+
+  bool is_nonblocking_io() {
+    int flags = fcntl(STDIN_FILENO, F_GETFL, 0);
+    return (flags & O_NONBLOCK);
+  }
+
+  void set_nonblocking_io() {
+    int flags = fcntl(STDIN_FILENO, F_GETFL, 0);
+    fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK);
+  }
+
+  bool continue_read_cmd(bool main_loop) {
+    assert(is_nonblocking_io());
+    if(should_quit) {
+      return false;
+    }
+    char c = '\0';
+    while(1) {
+      int ret = read(STDIN_FILENO, &c, 1);
+      if(ret == -1) {
+        assert(errno == EAGAIN);
+        break;
       }
-      if(isspace(c) && cmd.empty()) {
+      if(c == EOF) {
+        auto cmd = io_cmdbuf;
+        io_cmdbuf.clear();
+        if(cmd.size() > 1 || !cmd.back().empty()) {
+          process_cmd(cmd, main_loop);
+        }
+        should_ponderhit = false;
+        should_stop = true;
+        return false;
+      }
+      if(c == '\n' || c == '\r') {
+        auto cmd = io_cmdbuf;
+        io_cmdbuf = {""s};
+        if(cmd.size() > 1 || !cmd.back().empty()) {
+          process_cmd(cmd, main_loop);
+        }
+        if(should_quit) {
+          return false;
+        }
+      }
+      if(isspace(c) && io_cmdbuf.empty()) {
         continue;
       } else if(!isspace(c)) {
-        cmd.back() += c;
-      } else if(isspace(c) && !cmd.back().empty()) {
-        cmd.emplace_back(""s);
+        io_cmdbuf.back() += c;
+      } else if(isspace(c) && !io_cmdbuf.back().empty()) {
+        io_cmdbuf.emplace_back(""s);
       }
     }
-    if(cmd.size() > 1 || !cmd.back().empty()) {
-      process_cmd(cmd);
+    return true;
+  }
+
+  // accept and interpret commands line by line, for all eternity
+  void run() {
+    set_nonblocking_io();
+    char c = '\0';
+    while(1) {
+      while(!q_cmd.empty()) {
+        auto cmd = q_cmd.front();
+        q_cmd.pop();
+        process_cmd(cmd, true);
+      }
+      if(!continue_read_cmd(true)) {
+        break;
+      }
+      usleep(1000);
     }
-    should_ponderhit = false;
-    should_stop = true;
   }
 
   // read individual algebraic notation move like
@@ -226,16 +266,7 @@ struct UCI {
     depth_t depth;
   } go_perft_command;
 
-  // tell engine to stop; wait until it stops if it's running; clean up
-  void stop_engine_thread() {
-    should_stop = true;
-    if(engine_thread.joinable()) {
-      engine_thread.join();
-      str::pdebug("info string joining engine thread"s);
-    }
-  }
-
-  std::string to_string(const std::vector<std::string> &cmd) {
+  std::string to_string(const cmd_t &cmd) {
     return "{"s + str::join(cmd, ", "s) + "}"s;
   }
 
@@ -249,15 +280,28 @@ struct UCI {
     {"Hash"s, std::make_tuple(4, 4096, (int)engine_options.hash_mb)},
   };
 
-  const std::map<std::string, std::pair<std::vector<std::string>, std::string>> comboOptions = {
-    {"UCI_Variant"s, std::make_pair(std::vector<std::string>{"chess"s, "crazyhouse"s}, "chess"s)},
+  const std::map<std::string, std::pair<cmd_t, std::string>> comboOptions = {
+    {"UCI_Variant"s, std::make_pair(cmd_t{"chess"s, "crazyhouse"s}, "chess"s)},
   };
 
   const std::map<std::string, std::string> stringOptions {
     {"SyzygyPath"s, "<empty>"s},
   };
 
-  void process_cmd(std::vector<std::string> cmd) {
+  // tell engine to stop; wait until it stops if it's running; clean up
+  void sched_stop_engine() {
+    should_stop = true;
+  }
+
+  void sched_cmd(const cmd_t &cmd) {
+    q_cmd.emplace(cmd);
+  }
+
+  void process_cmd(cmd_t &cmd, bool main_loop) {
+    if(!main_loop) {
+      assert(engine_ptr);
+    }
+    assert(engine_ptr || main_loop);
     str::pdebug("info string processing cmd", to_string(cmd));
     while(!cmdmap.contains(cmd.front())) {
       str::perror("error: unknown command", cmd.front());
@@ -297,12 +341,20 @@ struct UCI {
       return;
       case CMD_ISREADY:
       {
-        stop_engine_thread();
+        if(!main_loop) {
+          sched_stop_engine();
+          sched_cmd(cmd);
+          return;
+        }
         respond(RESP_READYOK);
       }
       return;
       case CMD_SETOPTION:
       {
+        if(!main_loop) {
+          sched_cmd(cmd);
+          return;
+        }
         std::optional<std::string> optname;
         std::optional<std::string> optvalue;
         for(size_t i = 1; i < cmd.size(); ++i) {
@@ -310,7 +362,7 @@ struct UCI {
             optname.emplace(cmd[++i]);
             str::pdebug("info string name:", optname.value());
           } else if(cmd[i] == "value"s && cmd.size() > i + 1) {
-            std::vector<std::string> cmd_value = std::vector<std::string>(cmd.begin() + i + 1, cmd.end());
+            cmd_t cmd_value = cmd_t(cmd.begin() + i + 1, cmd.end());
             optvalue.emplace(str::join(cmd_value, " "s));
             str::pdebug("info string value:", optvalue.value());
             break;
@@ -329,7 +381,6 @@ struct UCI {
               abort();
             }
             if(optname.value() == "UCI_Chess960"s) {
-              lock_guard guard(engine_mtx);
               engine_options.chess960 = val;
               str::pdebug("info string setoption UCI_Chess960 =", optvalue.value());
             } else {
@@ -340,7 +391,6 @@ struct UCI {
             int v = atoi(optvalue.value().c_str());
             int val = std::min(_hi, std::max(_lo, v));
             if(optname.value() == "Hash"s) {
-              lock_guard guard(engine_mtx);
               engine_options.hash_mb = val;
               str::pdebug("info string setoption Hash =", optname.value(), val);
             } else {
@@ -352,7 +402,6 @@ struct UCI {
               str::perror("error: unknown optvalue", optvalue.value(), "for option", optname.value());
             }
             if(optname.value() == "UCI_Variant"s) {
-              lock_guard guard(engine_mtx);
               if(optvalue.value() == "chess"s) {
                 engine_options.crazyhouse = false;
               } else if(optvalue.value() == "crazyhouse"s) {
@@ -365,7 +414,6 @@ struct UCI {
           } else if(stringOptions.contains(optname.value())) {
             const auto &_dflt = stringOptions.at(optname.value());
             if(optname.value() == "SyzygyPath"s) {
-              lock_guard guard(engine_mtx);
               if(optvalue.value() != _dflt) {
                 std::filesystem::path syzygy_path(optvalue.value());
                 if(!std::filesystem::exists(syzygy_path)) {
@@ -390,15 +438,24 @@ struct UCI {
       case CMD_REGISTER:return;
       case CMD_UCINEWGAME:
         {
-          stop_engine_thread();
+          if(!main_loop) {
+            sched_stop_engine();
+            sched_cmd(cmd);
+            return;
+          }
           destroy();
         }
       return;
       case CMD_POSITION:
       {
-        stop_engine_thread();
+        if(!main_loop) {
+          sched_stop_engine();
+          sched_cmd(cmd);
+          return;
+        }
         fen::FEN f;
         size_t ind = 1;
+        assert(ind < cmd.size());
         if(cmd[ind] == "startpos"s) {
           ++ind;
           if(engine_options.crazyhouse) {
@@ -412,7 +469,7 @@ struct UCI {
           for(; ind < cmd.size() && cmd[ind] != "moves"s; ++ind) {
             ;
           }
-          std::string s = str::join(std::vector<std::string>(cmd.begin() + begin_ind, cmd.begin() + ind), " "s);
+          std::string s = str::join(cmd_t(cmd.begin() + begin_ind, cmd.begin() + ind), " "s);
           f = fen::load_from_string(s);
           str::pdebug("info string loaded fen", fen::export_as_string(f));
         }
@@ -434,9 +491,13 @@ struct UCI {
       return;
       case CMD_DISPLAY:
       {
-        lock_guard guard(engine_mtx);
-        if(engine_ptr == nullptr) {
-          process_cmd({"position"s, "startpos"s});
+        if(!main_loop) {
+          sched_cmd(cmd);
+          return;
+        }
+        if(!engine_ptr) {
+          cmd_t forwarded_cmd{"position"s, "startpos"s};
+          process_cmd(forwarded_cmd, main_loop);
         }
         const fen::FEN f = engine_ptr->export_as_fen();
         respond(RESP_DISPLAY, "fen:"s, fen::export_as_string(f));
@@ -450,8 +511,12 @@ struct UCI {
       return;
       case CMD_GO:
       {
-        stop_engine_thread();
-        should_stop = false;
+        if(!main_loop) {
+          sched_stop_engine();
+          sched_cmd(cmd);
+          return;
+        }
+        assert(engine_ptr);
         // perft command
         size_t ind = 1;
         if(cmd.size() > ind && cmd[ind] == "perft"s) {
@@ -463,9 +528,7 @@ struct UCI {
           go_perft_command g = (go_perft_command){
             .depth = depth_t(atoi(cmd[ind].c_str()))
           };
-          engine_thread = std::thread([&](auto g) mutable -> void {
-            perform_go_perft(g);
-          }, g);
+          perform_go_perft(g);
           return;
         } else {
           go_command g;
@@ -503,25 +566,31 @@ struct UCI {
             }
             ++ind;
           }
-          engine_thread = std::thread([&](auto g) mutable -> void {
-            perform_go(g);
-          }, g);
+          perform_go(g);
         }
       }
       return;
       case CMD_STOP:
       {
-        should_stop = true;
-        stop_engine_thread();
+        sched_stop_engine();
       }
       return;
       case CMD_PONDERHIT:
       {
+        if(!main_loop) {
+          sched_cmd(cmd);
+          return;
+        }
         should_ponderhit = true;
       }
       return;
       case CMD_QUIT:
       {
+        if(!main_loop) {
+          sched_stop_engine();
+          sched_cmd(cmd);
+          return;
+        }
         perform_quit();
       }
       return;
@@ -611,7 +680,6 @@ struct UCI {
   }
 
   void perform_go(go_command args) {
-    lock_guard guard(engine_mtx);
     _printf("GO COMMAND\n");
     _printf("ponder: %d\n", args.ponder ? 1 : 0);
     _printf("wtime: %.6f, btime: %.6f\n", args.wtime, args.btime);
@@ -641,6 +709,7 @@ struct UCI {
     bool pondering = args.ponder;
     bool return_from_search = false;
     const move_t bestmove = engine_ptr->start_thinking(args.depth, engine_idstate, [&](bool verbose) mutable -> bool {
+      continue_read_cmd( false);
       if(engine_idstate.pline.empty()) {
         return true;
       } else if(return_from_search) {
@@ -664,7 +733,6 @@ struct UCI {
       if(should_ponderhit) {
         pondering = false;
       }
-      std::this_thread::yield();
     }
     if(!pondering && !should_stop) {
       respond_final_iddfs(engine_idstate, bestmove, time_spent);
@@ -680,12 +748,12 @@ struct UCI {
   }
 
   void perform_go_perft(go_perft_command args) {
-    lock_guard guard(engine_mtx);
     const depth_t depth = args.depth;
     size_t total = 0;
     {
       decltype(auto) store_scope = engine_ptr->get_zobrist_perft_scope();
       engine_ptr->iter_moves([&](pos_t i, pos_t j) mutable -> void {
+        continue_read_cmd(false);
         const move_t m = bitmask::_pos_pair(i, j);
         std::string sm = engine_ptr->_move_str(m);
         engine_ptr->make_move(m);
@@ -708,10 +776,9 @@ struct UCI {
   }
 
   void perform_quit() {
-    should_stop = true;
-    stop_engine_thread();
+    sched_stop_engine();
     should_quit = true;
-    str::pdebug("info string job state", engine_thread.joinable() ? 1 : 0);
+    str::pdebug("info string should quit");
   }
 
   template <typename... Str>
