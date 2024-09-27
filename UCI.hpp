@@ -577,10 +577,6 @@ struct UCI {
       return;
       case CMD_PONDERHIT:
       {
-        if(!main_loop) {
-          sched_cmd(cmd);
-          return;
-        }
         should_ponderhit = true;
       }
       return;
@@ -732,6 +728,14 @@ struct UCI {
       }
       return !return_from_search;
     }, searchmoves);
+    // if we ended search early in pondering mode, we should wait for an explicit stop or ponderhit
+    while(pondering && !should_stop) {
+      continue_read_cmd(false);
+      if(should_ponderhit) {
+        pondering = false;
+      }
+    }
+    // this is what we do when we timed out
     if(!pondering && !should_stop) {
       respond_final_iddfs(engine_idstate, bestmove, time_spent);
     }
