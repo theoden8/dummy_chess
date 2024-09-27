@@ -35,7 +35,7 @@ SOFLAGS := -O3 -DNDEBUG -flto -fno-trapping-math -fno-signed-zeros -m64 -march=n
 
 PKGCONFIG ?= $(shell ./scripts/command_pkgconfig)
 CXXFLAGS := -std=c++20 -I. -Wall -Wextra -fno-stack-protector
-LDFLAGS := -pthread
+LDFLAGS :=
 # compiler-specific
 ifeq ($(FEATURE_SUPPORT_GCC),gcc)
   OPTFLAGS := -fwhole-program $(OPTFLAGS)
