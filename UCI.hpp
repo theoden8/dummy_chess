@@ -51,7 +51,7 @@ struct UCI {
   UCI()
   {}
 
-  // nice lock-safe initialization according to the currently set options
+  // initialize engine according to the currently set options
   void init(const fen::FEN &f) {
     _printf("init\n");
     const size_t zobrist_size = (engine_options.hash_mb << (20 - 7));
@@ -65,6 +65,7 @@ struct UCI {
       engine_options.tb_initialized = true;
     }
     engine_ab_storage_ptr.reset(new Engine::ab_storage_t(engine_ptr->get_zobrist_alphabeta_scope()));
+    should_stop = false;
   }
 
   // remove engine: no memory leaks, no nothing, ready to start again
@@ -161,15 +162,14 @@ struct UCI {
       if(ret == -1) {
         assert(errno == EAGAIN);
         break;
-      }
-      if(c == EOF) {
+      } else if(ret == 0) {
+        // EOF
         auto cmd = io_cmdbuf;
         io_cmdbuf.clear();
         if(cmd.size() > 1 || !cmd.back().empty()) {
           process_cmd(cmd, main_loop);
         }
-        should_ponderhit = false;
-        should_stop = true;
+        perform_quit();
         return false;
       }
       if(c == '\n' || c == '\r') {
@@ -289,6 +289,7 @@ struct UCI {
 
   // tell engine to stop; wait until it stops if it's running; clean up
   void sched_stop_engine() {
+    str::pdebug("info string stopping engine");
     should_stop = true;
   }
 
@@ -708,13 +709,15 @@ struct UCI {
     bool pondering = args.ponder;
     bool return_from_search = false;
     const move_t bestmove = engine_ptr->start_thinking(args.depth, engine_idstate, [&](bool verbose) mutable -> bool {
-      continue_read_cmd( false);
+      continue_read_cmd(false);
       if(engine_idstate.pline.empty()) {
         return true;
       } else if(return_from_search) {
         return false;
       }
+      // update stats
       const size_t nps = update_nodes_per_second(start, time_spent, nodes_searched);
+      // switch from infinite pondering to thinking
       if(pondering && movetime > 1e9 && should_ponderhit) {
         pondering = false;
         const double new_movetime = time_control_movetime(args, false);
@@ -722,17 +725,13 @@ struct UCI {
         time_spent = .0;
         str::pdebug("info string changed time", movetime);
       }
+      // check exit condition
       return_from_search = return_from_search || check_if_should_stop(args, time_spent, movetime);
       if(verbose && !pondering && !should_stop) {
         respond_full_iddfs(engine_idstate, nps, time_spent);
       }
       return !return_from_search;
     }, searchmoves);
-    while(pondering && !should_stop) {
-      if(should_ponderhit) {
-        pondering = false;
-      }
-    }
     if(!pondering && !should_stop) {
       respond_final_iddfs(engine_idstate, bestmove, time_spent);
     }
@@ -742,7 +741,6 @@ struct UCI {
       respond(RESP_BESTMOVE, engine_ptr->_move_str(bestmove));
     }
     str::pdebug("info string NOTE: search is over");
-    should_stop = true;
     should_ponderhit = false;
   }
 
@@ -775,6 +773,7 @@ struct UCI {
   }
 
   void perform_quit() {
+    should_ponderhit = false;
     sched_stop_engine();
     should_quit = true;
     str::pdebug("info string should quit");
