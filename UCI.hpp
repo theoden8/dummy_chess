@@ -8,7 +8,6 @@
 #include <chrono>
 #include <optional>
 #include <memory>
-#include <mutex>
 #include <filesystem>
 
 #include <unistd.h>
