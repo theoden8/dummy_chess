@@ -9,6 +9,7 @@ FEATURE_SUPPORT_CLANG ?= $(shell ./scripts/compiler_support_clangflags $(CXX))
 FEATURE_SUPPORT_LIBBSD ?= $(shell ./scripts/compiler_support_libbsd $(CXX))
 FEATURE_SUPPORT_JEMALLOC ?= $(shell ./scripts/compiler_support_jemalloc $(CXX))
 FEATURE_SUPPORT_STDRANGES ?= $(shell ./scripts/compiler_support_stdranges $(CXX))
+FLAG_THREADS ?= $(shell ./scripts/compiler_flag_threads $(CXX))
 
 $(info CXX is $(CXX))
 $(info FEATURE_SUPPORT_SANITIZE is $(FEATURE_SUPPORT_SANITIZE))
@@ -18,6 +19,7 @@ $(info FEATURE_SUPPORT_CLANG is $(FEATURE_SUPPORT_CLANG))
 $(info FEATURE_SUPPORT_LIBBSD is $(FEATURE_SUPPORT_LIBBSD))
 $(info FEATURE_SUPPORT_JEMALLOC is $(FEATURE_SUPPORT_JEMALLOC))
 $(info FEATURE_SUPPORT_STDRANGES is $(FEATURE_SUPPORT_STDRANGES))
+$(info FLAG_THREADS is "$(FLAG_THREADS)")
 
 # sanitization
 ifeq ($(FEATURE_SUPPORT_SANITIZE),enabled)
@@ -35,7 +37,7 @@ SOFLAGS := -O3 -DNDEBUG -flto -fno-trapping-math -fno-signed-zeros -m64 -march=n
 
 PKGCONFIG ?= $(shell ./scripts/command_pkgconfig)
 CXXFLAGS := -std=c++20 -I. -Wall -Wextra -fno-stack-protector
-LDFLAGS := -pthread
+LDFLAGS := $(FLAG_THREADS)
 # compiler-specific
 ifeq ($(FEATURE_SUPPORT_GCC),gcc)
   OPTFLAGS := -fwhole-program $(OPTFLAGS)
@@ -43,7 +45,6 @@ ifeq ($(FEATURE_SUPPORT_GCC),gcc)
 else ifeq ($(FEATURE_SUPPORT_CLANG),clang)
   CXXFLAGS := $(CXXFLAGS) -Wno-unused-parameter -Wno-unused-variable -Wno-unused-but-set-variable \
                           -Wno-range-loop-construct -Wno-unknown-attributes -Wno-parentheses
-  LDFLAGS := $(LDFLAGS)
 endif
 
 # bsd
