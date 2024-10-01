@@ -7,7 +7,6 @@ CXX=$1; shift
 }
 
 program=$(printf "#include <pthread.h>\nint main(){return (void *)pthread_create != nullptr;}")
-echo "$program"
 if echo "$program" | ${CXX} -x c++ -std=c++11 - -o /dev/null 2>/dev/null; then
   echo ""
 elif echo "$program" | ${CXX} -x c++ -std=c++11 -pthread - -o /dev/null 2>/dev/null; then
