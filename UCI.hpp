@@ -12,6 +12,7 @@
 
 #include <unistd.h>
 #include <fcntl.h>
+#include <sys/select.h>
 
 #include <FEN.hpp>
 #include <Engine.hpp>
@@ -193,6 +194,24 @@ struct UCI {
     return true;
   }
 
+  void wait_for_stdin() {
+    fd_set readfds;
+
+    // clear the set
+    FD_ZERO(&readfds);
+
+    // add STDIN_FILENO to the set
+    FD_SET(STDIN_FILENO, &readfds);
+
+    // wait indefinitely for input on STDIN_FILENO
+    int ret = select(STDIN_FILENO + 1, &readfds, NULL, NULL, NULL);
+    if(ret == -1) {
+      perror("select(2)");
+      abort();
+    }
+    str::pdebug("stdin ready");
+  }
+
   // accept and interpret commands line by line, for all eternity
   void run() {
     set_nonblocking_io();
@@ -206,7 +225,7 @@ struct UCI {
       if(!continue_read_cmd(true)) {
         break;
       }
-      usleep(1000);
+      wait_for_stdin();
     }
   }
 
