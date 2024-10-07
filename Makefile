@@ -98,7 +98,8 @@ dummy_chess: simple.cpp $(SOURCES) $(HPPFILES) Makefile $(SOURCE_DEPS)
 dummy_chess_curses: ui.cpp $(SOURCES) $(HPPFILES) Makefile $(SOURCE_DEPS)
 	$(CXX) $(OPTFLAGS) $(CXXFLAGS) $(NC_CFLAGS) ui.cpp $(SOURCES) $(LDFLAGS) $(NC_LDFLAGS) $(LDFLAGS) -o $@
 
-DEPS_SHARED := $(SOURCES) $(HPPFILES) Makefile $(SOURCE_DEPS)
+DEPS_SHARED := shared_object.cpp $(SOURCES) $(HPPFILES) Makefile $(SOURCE_DEPS)
+DEPS_STATIC := $(SOURCES) $(HPPFILES) Makefile $(SOURCE_DEPS)
 DEPS_BENCH := bench.cpp $(DEPS_SHARED)
 DEPS_ALPHABETA := alphabeta.cpp $(DEPS_SHARED)
 DEPS_UCI := uci.cpp $(DEPS_SHARED)
