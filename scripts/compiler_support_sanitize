@@ -1,9 +1,19 @@
 #!/usr/bin/env bash
 
+CC="$1"; shift
+[ -z "${CC}" ] && {
+  CC=cc
+}
 
+# https://wiki.musl-libc.org/open-issues
+if ! echo -e "
+#if !defined(__GLIBC__) && !defined(__APPLE__)
+#error no glibc
+#endif
+int main(){}" | "${CC}" -x c - -o /dev/null 2>/dev/null; then
+  echo "disabled"
 # https://man.openbsd.org/clang-local.1
-
-if test $(uname -m) = 'OpenBSD'; then
+elif test "$(uname -m)" = 'OpenBSD'; then
   echo "minimal"
 else
   echo "enabled"

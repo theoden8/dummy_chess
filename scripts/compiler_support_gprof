@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+
+
+CC=$1; shift
+[ -z "${CC}" ] && {
+  CC=cc
+}
+
+# musl doesn't support -p flag (gcrt1.o not found)
+if printf "int main(){}" | ${CC} -x c -p - -o /dev/null 2>/dev/null; then
+  echo "enabled"
+else
+  echo "disabled"
+fi

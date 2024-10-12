@@ -1,0 +1,64 @@
+when:
+  - event: tag
+  - event: pull_request
+  - event: push
+    branch: master
+
+matrix:
+  PLATFORM:
+    - linux/amd64
+    #- linux/arm64
+  IMAGE:
+    - debian:stable-slim
+    - ghcr.io/void-linux/void-musl
+  COMPILER:
+    - clang
+    - gcc
+
+labels:
+  platform: ${PLATFORM}
+
+steps:
+  full:
+    image: ${IMAGE}
+    pull: true
+    commands: |
+      echo "shell $SHELL"
+
+      set -ex
+
+      # set up linux
+      if test "${IMAGE}" = "debian:stable-slim"; then
+        apt-get update -y
+        apt-get install -y wget make pkgconf clang gcc g++ build-essential valgrind libbsd-dev libjemalloc-dev python3 git libzstd-dev libncurses-dev libncursesw5-dev perl stockfish fairy-stockfish
+        rm -rf /var/lib/apt/lists/*
+        export MAKE=make
+        export PATH="$PATH:/usr/games"
+      elif test "${IMAGE}" = "ghcr.io/void-linux/void-musl"; then
+        xbps-install -Syu
+        xbps-install -Sy wget bash make pkg-config clang gcc base-devel llvm libbsd-devel jemalloc-devel python3 git libzstd-devel ncurses-devel perl stockfish fairy-stockfish
+        export MAKE=make
+        export PATH="$PATH:/usr/games"
+      else
+        echo "image ${IMAGE}"
+        exit 1
+      fi
+
+      # set compiler
+      if test "${COMPILER}" = gcc; then
+        export CC=gcc CXX=g++
+      elif test "${COMPILER}" = clang; then
+        export CC=clang CXX=clang++
+      fi
+      echo "compilers: CC=$CC CXX=$CXX"
+
+      # build without PGO
+      "$MAKE" clean
+      "$MAKE" FEATURE_SUPPORT_PGO=disabled _all
+
+      # perft test
+      python3 scripts/perft_test.py
+
+      # build with PGO
+      "$MAKE" clean
+      "$MAKE" _all

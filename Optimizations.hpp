@@ -4,11 +4,7 @@
 #define NEVER_INLINE __attribute__ ((noinline))
 #ifndef NDEBUG
   #define INLINE NEVER_INLINE
-  #if __APPLE__
-    #define ALWAYS_INLINE __attribute__((always_inline))
-  #else
-    #define ALWAYS_INLINE __always_inline
-  #endif
+  #define ALWAYS_INLINE __attribute__((always_inline))
 #else
   #define INLINE inline
   #define ALWAYS_INLINE INLINE
@@ -18,6 +14,12 @@
   #define ALWAYS_UNROLL
 #else
   #define ALWAYS_UNROLL __attribute__((optimize("unroll-loops")))
+#endif
+
+#ifndef NDEBUG
+  #define FLATTEN
+#else
+  #define FLATTEN __attribute__((flatten))
 #endif
 
 #ifdef FLAG_EXPORT

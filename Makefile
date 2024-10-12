@@ -2,13 +2,14 @@
 
 DBGFLAGS := -g3
 
-FEATURE_SUPPORT_SANITIZE ?= $(shell ./scripts/compiler_support_sanitize $(CXX))
+FEATURE_SUPPORT_SANITIZE ?= $(shell ./scripts/compiler_support_sanitize $(CC))
 FEATURE_SUPPORT_PGO ?= $(shell ./scripts/compiler_support_pgo $(CXX))
 FEATURE_SUPPORT_GCC ?= $(shell ./scripts/compiler_support_gccflags $(CXX))
 FEATURE_SUPPORT_CLANG ?= $(shell ./scripts/compiler_support_clangflags $(CXX))
 FEATURE_SUPPORT_LIBBSD ?= $(shell ./scripts/compiler_support_libbsd $(CXX))
 FEATURE_SUPPORT_JEMALLOC ?= $(shell ./scripts/compiler_support_jemalloc $(CXX))
 FEATURE_SUPPORT_STDRANGES ?= $(shell ./scripts/compiler_support_stdranges $(CXX))
+FEATURE_SUPPORT_GPROF ?= $(shell ./scripts/compiler_support_gprof $(CC))
 FLAG_THREADS ?= $(shell ./scripts/compiler_flag_threads $(CXX))
 
 $(info CXX is $(CXX))
@@ -76,9 +77,21 @@ HPPFILES = $(wildcard *.hpp) m42.h tbconfig.h
 SOURCE_DEPS = external/syzygy external/fathom
 SOURCES = m42.cpp
 
+SHARED_LIB_EXT := so
+ifeq ($(shell uname),Darwin)
+	SHARED_LIB_EXT := dylib
+endif
+
+TARGETS := dummy_chess dummy_chess_curses dummy_chess_bench
+ifeq ($(FEATURE_SUPPORT_GPROF),enabled)
+	TARGETS := $(TARGETS) dummy_chess_alphabeta
+endif
+LIBDUMMYCHESS := libdummychess.$(SHARED_LIB_EXT)
+TARGETS += dummy_chess_uci dummy_chess_uci_dbg $(LIBDUMMYCHESS) libdummychess.a
+
 CORES = $(shell getconf _NPROCESSORS_ONLN)
 all :; @$(MAKE) _all -j$(CORES)
-_all : dummy_chess dummy_chess_curses dummy_chess_bench dummy_chess_alphabeta dummy_chess_uci dummy_chess_uci_dbg libdummychess.so $(SOURCE_DEPS)
+_all : $(TARGETS) $(SOURCE_DEPS)
 
 external/syzygy:
 	./scripts/syzygy_download
@@ -115,7 +128,7 @@ dummy_chess_alphabeta: $(DEPS_ALPHABETA)
 dummy_chess_uci: $(DEPS_UCI)
 	$(CXX) $(OPTFLAGS) $(CXXFLAGS) -DMUTE_ERRORS uci.cpp $(SOURCES) $(LDFLAGS) -o $@
 
-libdummychess.so: $(DEPS_SHARED)
+$(LIBDUMMYCHESS): $(DEPS_SHARED)
 	$(CXX) $(SOFLAGS) $(CXXFLAGS) -DMUTE_ERRORS $(SOURCES) $(LDFLAGS) -fPIC -shared -o $@
 
 else ifeq ($(FEATURE_SUPPORT_PGO),gcc)
@@ -132,7 +145,7 @@ dummy_chess_uci: $(DEPS_UCI)
 	./scripts/pgo_bench.py "./dummy_chess_uci"
 	$(CXX) $(OPTFLAGS) -fprofile-use -fprofile-correction $(CXXFLAGS) -DMUTE_ERRORS uci.cpp $(SOURCES) $(LDFLAGS) -o $@
 
-libdummychess.so: $(DEPS_SHARED)
+$(LIBDUMMYCHESS): $(DEPS_SHARED)
 	$(CXX) $(SOFLAGS) -fprofile-use -fprofile-correction $(CXXFLAGS) -DMUTE_ERRORS $(SOURCES) $(LDFLAGS) -fPIC -shared -o $@
 
 else ifeq ($(FEATURE_SUPPORT_PGO),clang)
@@ -152,13 +165,19 @@ dummy_chess_uci: $(DEPS_UCI)
 	$(LLVM_PROFDATA) merge -output=uci.profdata uci.d.profdata
 	$(CXX) $(OPTFLAGS) -fprofile-use=uci.profdata $(CXXFLAGS) -DMUTE_ERRORS uci.cpp $(SOURCES) $(LDFLAGS) -o $@
 
-libdummychess.so: $(DEPS_SHARED)
+$(LIBDUMMYCHESS): $(DEPS_SHARED)
 	$(CXX) $(SOFLAGS) -fprofile-use=uci.profdata $(CXXFLAGS) -DMUTE_ERRORS $(SOURCES) $(LDFLAGS) -fPIC -shared -o $@
+
 
 endif
 
 dummy_chess_uci_dbg: $(DEPS_UCI)
 	$(CXX) $(DBGFLAGS) $(CXXFLAGS) uci.cpp $(SOURCES) $(LDFLAGS) -o $@
+
+libdummychess.a: $(DEPS_STATIC)
+	$(CXX) $(OPTFLAGS) $(CXXFLAGS) -c shared_object.cpp $(LDFLAGS) -o shared_object.o
+	$(CXX) $(OPTFLAGS) $(CXXFLAGS) -c m42.cpp $(LDFLAGS) -o m42.o
+	ar rcs "$@" shared_object.o m42.o
 
 test:
 	./scripts/perft_test.py
@@ -166,4 +185,4 @@ test:
 clean:
 	rm -vf *.o *.gcda uci.profdata
 	rm -rvf uci.d.profdata
-	rm -vf dummy_chess dummy_chess_opt dummy_chess_curses dummy_chess_bench dummy_chess_alphabeta dummy_chess_uci dummy_chess_uci_dbg
+	rm -vf dummy_chess dummy_chess_opt dummy_chess_curses dummy_chess_bench dummy_chess_alphabeta dummy_chess_uci dummy_chess_uci_dbg $(LIBDUMMYCHESS) libdummychess.a
