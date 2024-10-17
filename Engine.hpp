@@ -41,7 +41,8 @@ public:
                            MATERIAL_BISHOP = 325*CENTIPAWN,
                            MATERIAL_ROOK = 500*CENTIPAWN,
                            MATERIAL_QUEEN = 1000*CENTIPAWN,
-                           MATERIAL_KING = 1000*MATERIAL_PAWN;
+                           MATERIAL_KING = 1000*MATERIAL_PAWN,
+                           MATERIAL_KING_TB = MATERIAL_KING / 2;
   std::vector<PIECE> MATERIAL_PIECE_ORDERING;
 
   static constexpr score_t MATERIALS[] = {
@@ -79,7 +80,7 @@ public:
     ++tb_hit;
     switch(wdl) {
       case TB_WIN:
-      return MATERIAL_KING/2;
+      return MATERIAL_KING_TB;
       case TB_CURSED_WIN:
       return 0;//MATERIAL_KING/4;
       case TB_DRAW:
@@ -87,7 +88,7 @@ public:
       case TB_BLESSED_LOSS:
       return 0;//-MATERIAL_KING/4;
       case TB_LOSS:
-      return -MATERIAL_KING/2;
+      return -MATERIAL_KING_TB;
     }
     abort();
   }
@@ -418,14 +419,14 @@ public:
   }
 
   static INLINE bool score_is_tb(score_t score) {
-    return std::abs(score) > MATERIAL_KING / 4 - 1000 && !score_is_mate(score);
+    return std::abs(score) > MATERIAL_KING_TB - 1000 && !score_is_mate(score);
   }
 
   static INLINE score_t score_material(score_t score) {
     if(score_is_mate(score)) {
       return score;
     } else if(score_is_tb(score)) {
-      return score > 0 ? score - 500 : score + 500;
+      return score > 0 ? score - MATERIAL_KING_TB : score + MATERIAL_KING_TB;
     }
     return score;
   }
@@ -1133,7 +1134,7 @@ public:
   }
 
   decltype(auto) tb_get_ordered_moves(const MoveLine &pline, move_t hashmove, move_t my_threatmove, const std::vector<float> &cmh_table, bool prune=true) {
-    assert(tb_can_probe());
+    assert(self.tb_can_probe());
     ++tb_probes;
     decltype(auto) moves = tb::get_ranked_moves(self, prune);
     ++tb_hit;
@@ -1234,9 +1235,9 @@ public:
       pline.clear();
       if(!state.moves_initialized)++n_skips;
       return final_score;
-    } else if(tb_can_probe()) {
+    } else if(self.tb_can_probe()) {
       assert(!is_draw_repetition());
-      score_t wdl_score = tb_probe_wdl();
+      score_t wdl_score = self.tb_probe_wdl();
       ++tb_probes;
       // prune if WDL score certainly improves current position
       // WDL_WIN: win or draw  (0 or WDL+eval) real score >= 0
@@ -1372,9 +1373,9 @@ public:
       pline.clear();
       if(!state.moves_initialized)++n_skips;
       return final_score;
-    } else if(tb_can_probe()) {
+    } else if(self.tb_can_probe()) {
       assert(!is_draw_repetition());
-      score_t wdl_score = tb_probe_wdl();
+      score_t wdl_score = self.tb_probe_wdl();
       ++tb_probes;
       // prune if WDL score is too low
       if(wdl_score != NOSCORE) {
@@ -1414,12 +1415,12 @@ public:
     const auto [n_moves, result] = ab_iterate_ranked_moves(pline,
       // should_use_pvmove_f
       [&](move_t pvmove) mutable -> bool {
-        return !tb_can_probe();
+        return !self.tb_can_probe();
       },
       // get_ordered_moves_f
       [&]() mutable -> decltype(auto) {
         std::vector<std::pair<mval_t, move_t>> moves;
-        if(tb_can_probe()) {
+        if(self.tb_can_probe()) {
           // get moves according to their WDL Rank
           // empty if error; prunes moves with worse wdl score
           moves = tb_get_ordered_moves(pline, hashmove, my_threatmove, ab_state.cmh_table, true);
@@ -1440,7 +1441,7 @@ public:
                                && !(mval_is_primary(_max_mval) || mval_is_tb_windraw(_max_mval))
                                && depth >= 9;
         if(iid_allow) {
-          assert(tb_can_probe() || pline.empty());
+          assert(self.tb_can_probe() || pline.empty());
           alpha_beta_pv(alpha, beta, depth / 2, pline, ab_state, true, make_callback_f(), your_threatmove);
           const move_t m = pline.front();
           // find move index

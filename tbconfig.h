@@ -301,9 +301,9 @@ namespace tb {
   INLINE int8_t probe_root_dtz(const Board &b, F &&func) {
     assert(tb::can_probe(b));
     //assert(tb::probe_wdl(b) != -1);
-    TbRootMoves result = {
-      .size = 0,
-    };
+    TbRootMoves result;
+    memset(&result, 0x00, sizeof(result));
+    result.size = 0;
     // TODO?
     const bool has_repeated = true;
     // score will be corrected by the engine, so better not lose hope
