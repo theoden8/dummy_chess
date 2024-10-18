@@ -1,5 +1,14 @@
 # dummy chess
 
+<center>
+<a href="https://ci.codeberg.org/repos/13782">
+    <img src="https://ci.codeberg.org/api/badges/13782/status.svg?branch=master" alt="Codeberg CI"/>
+</a>
+<a href="https://gitlab.com/theoden8/dummy_chess/-/commits/master">
+    <img src="https://gitlab.com/theoden8/dummy_chess/badges/master/pipeline.svg" alt="Gitlab CI"/>
+</a>
+</center>
+
 * [**Source Code**](https://codeberg.org/theoden8/dummy_chess)
 * [**Challenge it**](https://lichess.org/@/theoden8_uci)
 
