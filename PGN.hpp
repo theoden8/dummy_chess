@@ -519,7 +519,7 @@ pgn::PGN load_from_string(const std::string &s, Board &board) {
 pgn::PGN load_from_file(const std::string &fname, Board &board) {
   FILE *fp = fopen(fname.c_str(), "r");
   assert(fp != nullptr);
-  std::string s; char c;
+  std::string s; signed char c;
   while((c=fgetc(fp))!=EOF)s+=c;
   fclose(fp);
   return load_from_string(s, board);

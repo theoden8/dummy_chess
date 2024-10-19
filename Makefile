@@ -33,8 +33,10 @@ else ifeq ($(FEATURE_SUPPORT_SANITIZE),minimal)
 endif
 
 PROFFLAGS = -O1 -DNDEBUG -DFLAG_PROFILING -flto=auto -DUSE_INTRIN -pg
-OPTFLAGS := -Ofast -DNDEBUG -flto=auto -fno-trapping-math -fno-signed-zeros -m64 -march=native -DUSE_INTRIN -fno-exceptions
-SOFLAGS := -O3 -DNDEBUG -flto=auto -fno-trapping-math -fno-signed-zeros -m64 -march=native -DUSE_INTRIN -fno-exceptions
+OPTFLAGS := -O3 -ffast-math -DNDEBUG -flto=auto -fno-trapping-math -fno-signed-zeros -march=native -DUSE_INTRIN -fno-exceptions
+ifeq ($(shell arch),x86_64)
+  OPTFLAGS := $(OPTFLAGS) -m64
+endif
 
 PKGCONFIG ?= $(shell ./scripts/command_pkgconfig)
 CXXFLAGS := -std=c++20 -I. -Wall -Wextra -fno-stack-protector
@@ -129,7 +131,7 @@ dummy_chess_uci: $(DEPS_UCI)
 	$(CXX) $(OPTFLAGS) $(CXXFLAGS) -DMUTE_ERRORS uci.cpp $(SOURCES) $(LDFLAGS) -o $@
 
 $(LIBDUMMYCHESS): $(DEPS_SHARED)
-	$(CXX) $(SOFLAGS) $(CXXFLAGS) -DMUTE_ERRORS $(SOURCES) $(LDFLAGS) -fPIC -shared -o $@
+	$(CXX) $(OPTFLAGS) $(CXXFLAGS) -DMUTE_ERRORS $(SOURCES) $(LDFLAGS) -fPIC -shared -o $@
 
 else ifeq ($(FEATURE_SUPPORT_PGO),gcc)
 
@@ -146,7 +148,7 @@ dummy_chess_uci: $(DEPS_UCI)
 	$(CXX) $(OPTFLAGS) -fprofile-use -fprofile-correction $(CXXFLAGS) -DMUTE_ERRORS uci.cpp $(SOURCES) $(LDFLAGS) -o $@
 
 $(LIBDUMMYCHESS): $(DEPS_SHARED)
-	$(CXX) $(SOFLAGS) -fprofile-use -fprofile-correction $(CXXFLAGS) -DMUTE_ERRORS $(SOURCES) $(LDFLAGS) -fPIC -shared -o $@
+	$(CXX) $(OPTFLAGS) -fprofile-use -fprofile-correction $(CXXFLAGS) -DMUTE_ERRORS $(SOURCES) $(LDFLAGS) -fPIC -shared -o $@
 
 else ifeq ($(FEATURE_SUPPORT_PGO),clang)
 
@@ -166,7 +168,7 @@ dummy_chess_uci: $(DEPS_UCI)
 	$(CXX) $(OPTFLAGS) -fprofile-use=uci.profdata $(CXXFLAGS) -DMUTE_ERRORS uci.cpp $(SOURCES) $(LDFLAGS) -o $@
 
 $(LIBDUMMYCHESS): $(DEPS_SHARED)
-	$(CXX) $(SOFLAGS) -fprofile-use=uci.profdata $(CXXFLAGS) -DMUTE_ERRORS $(SOURCES) $(LDFLAGS) -fPIC -shared -o $@
+	$(CXX) $(OPTFLAGS) -fprofile-use=uci.profdata $(CXXFLAGS) -DMUTE_ERRORS $(SOURCES) $(LDFLAGS) -fPIC -shared -o $@
 
 
 endif

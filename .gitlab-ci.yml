@@ -1,8 +1,12 @@
 stages:
-  - run
+  - run_amd64
+  - run_arm64
 
 .run:
-  stage: run
+  timeout: 3h
+  variables:
+    RUNNER_BEFORE_SCRIPT_TIMEOUT: 3h
+    RUNNER_SCRIPT_TIMEOUT: 3h
   script: |
     set -ex
     "$MAKE" clean
@@ -50,15 +54,23 @@ stages:
     "$MAKE" _all
 
 run_linux_amd64:
+  stage: run_amd64
   extends: .run_linux
   image:
     name: "$IMAGE"
     docker:
       platform: "amd64"
+  artifacts:
+    paths:
+      - "external/syzygy"
 
 
 run_linux_arm64:
+  stage: run_arm64
   extends: .run_linux
+  needs:
+    - job: run_linux_amd64
+      artifacts: true
   image:
     name: "$IMAGE"
     docker:
