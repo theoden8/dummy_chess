@@ -238,7 +238,7 @@ namespace fen {
   fen::FEN load_from_file(const std::string &fname) {
     FILE *fp = fopen(fname.c_str(), "r");
     assert(fp != nullptr);
-    std::string s; signed char c;
+    std::string s; int c;
     while((c=fgetc(fp))!=EOF)s+=c;
     fclose(fp);
     return load_from_string(s);

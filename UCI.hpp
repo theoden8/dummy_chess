@@ -159,7 +159,7 @@ struct UCI {
     if(should_quit) {
       return false;
     }
-    signed char c = '\0';
+    char c = '\0';
     while(1) {
       int ret = read(STDIN_FILENO, &c, 1);
       if(ret == -1) {
