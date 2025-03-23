@@ -9,6 +9,9 @@ dummy_chess*
 *.profraw
 *.profdata
 m42.*
+_skbuild/
+uv.lock
+MANIFEST.in
 
 *.swp
 *.swo

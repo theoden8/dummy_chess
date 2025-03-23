@@ -1,22 +1,18 @@
 #include <chrono>
 
-#include <boost/python.hpp>
-#include <boost/python/call.hpp>
-#include <boost/python/numpy.hpp>
+#include <pybind11/pybind11.h>
+#include <pybind11/numpy.h>
+#include <pybind11/stl.h>
 
 #include <Engine.hpp>
 
-
+namespace py = pybind11;
 using namespace std::chrono;
 
-namespace python = boost::python;
-namespace np = python::numpy;
-
-
 struct MoveBindings {
-  const python::long_ m_code;
-  const python::str m_algebraic;
-  const python::str m_pgn;
+  const int64_t m_code;
+  const std::string m_algebraic;
+  const std::string m_pgn;
 
   MoveBindings() = delete;
 
@@ -24,23 +20,19 @@ struct MoveBindings {
     m_code(m), m_algebraic(board._move_str(m)), m_pgn(pgn::_move_str(board, m))
   {}
 
-  bool operator==(const MoveBindings &other) {
+  bool operator==(const MoveBindings &other) const {
     return m_code == other.m_code;
   }
 
   operator move_t() const {
-    return python::extract<move_t>(m_code);
+    return move_t(m_code);
   }
 
   operator std::string() const {
-    return python::extract<std::string>(m_pgn);
+    return m_pgn;
   }
 
-  operator python::long_() const {
-    return m_code;
-  }
-
-  operator python::str() const {
+  std::string repr() const {
     return m_pgn;
   }
 };
@@ -54,37 +46,31 @@ struct MoveScopeBindings {
     engine(engine), m(m)
   {}
 
-  void open() {
+  void enter() {
     engine.make_move(m);
   }
 
-  void close(const python::object &type, const python::object &value, const python::object &traceback) {
+  void exit(py::object type, py::object value, py::object traceback) {
     engine.retract_move();
   }
 };
 
 
-struct BoardBindings {
-  Engine engine;
-  std::shared_ptr<typename Engine::ab_storage_t> engine_ab_storage;
-
+class BoardBindings {
+public:
   enum Status { ONGOING, DRAW, CHECKMATE };
 
   BoardBindings():
     engine()
-  {
-    np::initialize();
-  }
+  {}
 
-  explicit BoardBindings(const python::str &fenstring):
-    engine(fen::load_from_string(python::extract<std::string>(fenstring)))
-  {
-    np::initialize();
-  }
+  explicit BoardBindings(const std::string &fenstring):
+    engine(fen::load_from_string(fenstring))
+  {}
 
   void make_move(const MoveBindings &py_m) {
-    if(!list_legal_moves().contains(py_m)) {
-      throw std::runtime_error("invalid move <"s + std::string(py_m) + ">"s);
+    if (!contains_move(list_legal_moves(), py_m)) {
+      throw std::runtime_error("invalid move <" + std::string(py_m.m_pgn) + ">");
     }
     engine.make_move(move_t(py_m));
   }
@@ -94,23 +80,23 @@ struct BoardBindings {
   }
 
   MoveScopeBindings mscope(const MoveBindings &py_m) {
-    if(!list_legal_moves().contains(py_m)) {
-      throw std::runtime_error("invalid move <"s + std::string(py_m) + ">"s);
+    if(!contains_move(list_legal_moves(), py_m)) {
+      throw std::runtime_error("invalid move <" + std::string(py_m.m_pgn) + ">");
     }
     return MoveScopeBindings(engine, py_m);
   }
 
-  python::list list_legal_moves() const {
-    python::list legalmoves;
+  std::vector<MoveBindings> list_legal_moves() {
+    std::vector<MoveBindings> legalmoves;
     engine.iter_moves([&](pos_t i, pos_t j) mutable noexcept -> void {
       const move_t m = bitmask::_pos_pair(i, j);
-      legalmoves.append(MoveBindings(engine.self, m));
+      legalmoves.emplace_back(engine.as_board(), m);
     });
     return legalmoves;
   }
 
-  decltype(auto) sample() const {
-    return MoveBindings(engine.self, engine.get_random_move());
+  decltype(auto) sample() {
+    return MoveBindings(engine.as_board(), engine.get_random_move());
   }
 
   Status status() const {
@@ -122,152 +108,170 @@ struct BoardBindings {
     return Status::ONGOING;
   }
 
-  decltype(auto) fen() const {
+  std::string fen() const {
     return fen::export_as_string(engine.export_as_fen());
   }
 
-  python::list get_mailbox_repr() const {
-    python::list repr;
+  std::vector<std::vector<std::string>> get_mailbox_repr() const {
+    std::vector<std::vector<std::string>> repr;
+    repr.reserve(board::LEN);
     for(pos_t i = 0; i < board::LEN; ++i) {
-      python::list row;
+      std::vector<std::string> row;
+      row.reserve(board::LEN);
       for(pos_t j = 0; j < board::LEN; ++j) {
         const pos_t ind = board::_pos(A+j, 1+i);
-        row.append(engine[ind].str());
+        row.emplace_back(1, engine[ind].str());
       }
-      repr.append(row);
+      repr.emplace_back(std::move(row));
     }
     return repr;
   }
 
-  python::long_ size() const {
-    return python::long_(engine.state_hist.size());
+  size_t size() const {
+    return engine.state_hist.size();
   }
 
-  python::str operator[](const python::long_ &ind) const {
-    return python::str(engine[python::extract<pos_t>(ind)].str());
+  // NOTE operator[]
+  std::string get_piece(pos_t ind) const {
+    return std::string(1, engine[ind].str());
   }
 
-  np::ndarray get_simple_feature_set() const {
-    size_t n_features = size_t(NO_COLORS) * size_t(NO_PIECES) * board::SIZE;
-    python::tuple shape = python::make_tuple(3, 3);
-    np::dtype dtype = np::dtype::get_builtin<float>();
-    np::ndarray phi = np::zeros(python::make_tuple(n_features), np::dtype::get_builtin<float>());
+  py::array_t<float> get_simple_feature_set() const {
+    const size_t n_features = size_t(NO_COLORS) * size_t(NO_PIECES) * board::SIZE;
+    auto result = py::array_t<float>(n_features);
+    auto buf = result.mutable_data();
+    std::fill(buf, buf + n_features, 0.0f);
+    
     size_t start = 0;
     for(COLOR c : {WHITE, BLACK}) {
       for(PIECE p : {PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING}) {
-        bitmask::foreach(engine.self.get_mask(Piece(p, c)), [&](pos_t i) mutable noexcept -> void {
-          phi[start + i] = 1;
+        bitmask::foreach(engine.as_board().get_mask(Piece(p, c)), [&](pos_t i) mutable noexcept -> void {
+          buf[start + i] = 1.0f;
         });
         start += board::SIZE;
       }
     }
-    return phi;
+    return result;
   }
 
-  MoveBindings get_move_from_move_t(const python::long_ &action) {
-    return MoveBindings(engine, python::extract<move_t>(action));
+  MoveBindings get_move_from_move_t(int64_t action) {
+    return MoveBindings(engine.as_board(), move_t(action));
   }
 
-  // perft stuff
-  python::long_ perft(const python::long_ &depth) {
-    Engine::depth_t d = python::extract<Engine::depth_t>(depth);
-    return python::long_(engine.perft(d));
+  int64_t perft(int depth) {
+    return engine.perft(Engine::depth_t(depth));
   }
 
-  // engine stuff
-  void init_abstorage_scope() {
-    if(!engine_ab_storage) {
-      engine_ab_storage.reset(new typename Engine::ab_storage_t(engine.get_zobrist_alphabeta_scope()));
-    }
-  }
-
-  python::tuple _return_move_score(move_t m, Engine::score_t score) {
-    double py_score = float(score) / Engine::MATERIAL_PAWN;
-    return python::make_tuple(MoveBindings(engine.self, m), py_score);
-  }
-
-  python::tuple get_fixed_depth_move(const python::long_ depth) {
+  std::tuple<MoveBindings, double> get_fixed_depth_move(int depth) {
     init_abstorage_scope();
     Engine::iddfs_state idstate;
-    const Engine::depth_t d = python::extract<Engine::depth_t>(depth);
+    const Engine::depth_t d = Engine::depth_t(depth);
     move_t bestmove = engine.start_thinking(d, idstate);
-    return _return_move_score(bestmove, float(idstate.eval) / Engine::MATERIAL_PAWN);
+    return std::make_tuple(
+        MoveBindings(engine.as_board(), bestmove),
+        float(idstate.eval) / Engine::MATERIAL_PAWN
+    );
   }
 
-  python::dict _make_callback_info(double time_spent, const Engine::iddfs_state &idstate, bool verbose=true) {
-      python::dict info;
-      info[python::str("depth")] = python::long_(idstate.curdepth);
-      info[python::str("pline")] = python::str(pgn::_line_str(engine.self, idstate.pline)).split();
-      info[python::str("score")] = double(float(idstate.eval) / Engine::MATERIAL_PAWN);
-      info[python::str("time_elapsed")] = time_spent;
-      info[python::str("stat_nodes")] = python::long_(engine.nodes_searched);
-      info[python::str("stat_nps")] = double(engine.nodes_searched) / (1e-9+time_spent);
-      info[python::str("stat_tt_hit_rate")] = double(engine.zb_hit) / double(1e-9+engine.zb_hit + engine.zb_miss);
-      info[python::str("stat_tt_hash_full")] = double(engine.zb_occupied) / engine.zobrist_size;
-      info[python::str("important")] = bool(verbose);
-      return info;
+  py::dict _make_callback_info(double time_spent, const Engine::iddfs_state &idstate, bool verbose=true) {
+    py::dict info;
+    info["depth"] = idstate.curdepth;
+    info["pline"] = py::cast(pgn::_line_str(engine.as_board(), idstate.pline));
+    info["score"] = double(float(idstate.eval) / Engine::MATERIAL_PAWN);
+    info["time_elapsed"] = time_spent;
+    info["stat_nodes"] = engine.nodes_searched;
+    info["stat_nps"] = double(engine.nodes_searched) / (1e-9+time_spent);
+    info["stat_tt_hit_rate"] = double(engine.zb_hit) / double(1e-9+engine.zb_hit + engine.zb_miss);
+    info["stat_tt_hash_full"] = double(engine.zb_occupied) / engine.zobrist_size;
+    info["important"] = bool(verbose);
+    return info;
   }
 
-  python::tuple start_thinking(python::object &visitor) {
+  std::tuple<MoveBindings, double> start_thinking(py::function visitor_func) {
     init_abstorage_scope();
     Engine::iddfs_state idstate;
     const auto start = system_clock::now();
     const move_t bestmove = engine.start_thinking(1000, idstate, [&](bool verbose) mutable -> bool {
       const double time_spent = 1e-9*duration_cast<nanoseconds>(system_clock::now()-start).count();
-      return visitor(_make_callback_info(time_spent, idstate, verbose));
+      return visitor_func(_make_callback_info(time_spent, idstate, verbose)).cast<bool>();
     }, {});
-    return _return_move_score(bestmove, idstate.eval);
+    return std::make_tuple(
+        MoveBindings(engine.as_board(), bestmove),
+        float(idstate.eval) / Engine::MATERIAL_PAWN
+    );
   }
 
-  python::tuple iterate_depths(python::long_ maxdepth, python::object &visitor) {
+  std::tuple<MoveBindings, double> iterate_depths(int maxdepth, py::function visitor_func) {
     init_abstorage_scope();
-    Engine::depth_t dmax = python::extract<Engine::depth_t>(maxdepth);
+    Engine::depth_t dmax = Engine::depth_t(maxdepth);
     Engine::iddfs_state idstate;
     const auto start = system_clock::now();
     const move_t bestmove = engine.start_thinking(1000, idstate, [&](bool verbose) mutable -> bool {
       const double time_spent = 1e-9*duration_cast<nanoseconds>(system_clock::now()-start).count();
       if(verbose) {
-        visitor(_make_callback_info(time_spent, idstate));
+        visitor_func(_make_callback_info(time_spent, idstate));
         if(idstate.curdepth == dmax) {
           return false;
         }
       }
       return idstate.curdepth < dmax;
     }, {});
-    return _return_move_score(bestmove, idstate.eval);
+    return std::make_tuple(
+        MoveBindings(engine.as_board(), bestmove),
+        float(idstate.eval) / Engine::MATERIAL_PAWN
+    );
   }
 
-  double evaluate() const {
-    return float(engine.evaluate()) / Engine::MATERIAL_PAWN;
+    double evaluate() {
+        return float(engine.evaluate()) / Engine::MATERIAL_PAWN;
+    }
+
+private:
+  Engine engine;
+  std::shared_ptr<typename Engine::ab_storage_t> engine_ab_storage;
+
+  void init_abstorage_scope() {
+    if (!engine_ab_storage) {
+      engine_ab_storage.reset(new typename Engine::ab_storage_t(engine.get_zobrist_alphabeta_scope()));
+    }
+  }
+
+  static bool contains_move(const std::vector<MoveBindings>& moves, const MoveBindings& move) {
+    return std::find_if(moves.begin(), moves.end(),
+        [&move](const MoveBindings& m) { return m == move; }) != moves.end();
   }
 };
 
-BOOST_PYTHON_MODULE(dummy_chess) {
-  python::enum_<BoardBindings::Status>("Status")
+PYBIND11_MODULE(_dummychess, m) {
+  py::enum_<BoardBindings::Status>(m, "Status")
     .value("ONGOING", BoardBindings::Status::ONGOING)
     .value("DRAW", BoardBindings::Status::DRAW)
-    .value("CHECKMATE", BoardBindings::Status::CHECKMATE)
-  ;
-  python::class_<MoveBindings>("Move", python::init<Board &, move_t>())
+    .value("CHECKMATE", BoardBindings::Status::CHECKMATE);
+
+  py::class_<MoveBindings>(m, "Move")
+    .def(py::init<Board &, move_t>())
     .def_readonly("m_code", &MoveBindings::m_code)
     .def_readonly("m_algebraic", &MoveBindings::m_algebraic)
     .def_readonly("m_pgn", &MoveBindings::m_pgn)
-    .def("__repr__", &MoveBindings::operator python::str)
-    .def("__int__", &MoveBindings::operator python::long_)
-    .def("__eq__", &MoveBindings::operator==)
-  ;
-  python::class_<MoveScopeBindings>("MoveScope", python::init<Engine &, const MoveBindings &>())
-    .def("__enter__", &MoveScopeBindings::open)
-    .def("__exit__", &MoveScopeBindings::close)
-  ;
-  python::class_<BoardBindings>("ChessDummy")
-    .def(python::init<const python::str &>())
-    .add_property("status", &BoardBindings::status)
-    .add_property("legal_moves", &BoardBindings::list_legal_moves)
-    .add_property("fen", &BoardBindings::fen)
+    .def("__repr__", &MoveBindings::repr)
+    .def("__int__", [](const MoveBindings &m)
+      { return m.m_code; })
+    .def("__eq__", &MoveBindings::operator==);
+
+  py::class_<MoveScopeBindings>(m, "MoveScope")
+    .def(py::init<Engine &, const MoveBindings &>())
+    .def("__enter__", &MoveScopeBindings::enter)
+    .def("__exit__", &MoveScopeBindings::exit);
+
+  py::class_<BoardBindings>(m, "ChessDummy")
+    .def(py::init<>())
+    .def(py::init<const std::string &>())
+    .def_property_readonly("status", &BoardBindings::status)
+    .def_property_readonly("legal_moves", &BoardBindings::list_legal_moves)
+    .def_property_readonly("fen", &BoardBindings::fen)
     .def("__len__", &BoardBindings::size)
     .def("as_list", &BoardBindings::get_mailbox_repr)
-    .def("__getitem__", &BoardBindings::operator[])
+    .def("__getitem__", &BoardBindings::get_piece)
     .def("sample", &BoardBindings::sample)
     .def("step", &BoardBindings::make_move)
     .def("undo", &BoardBindings::retract_move)
@@ -278,6 +282,5 @@ BOOST_PYTHON_MODULE(dummy_chess) {
     .def("iterate_depths", &BoardBindings::iterate_depths)
     .def("evaluate", &BoardBindings::evaluate)
     .def("get_simple_features", &BoardBindings::get_simple_feature_set)
-    .def("get_move_from_move_t", &BoardBindings::get_move_from_move_t)
-  ;
+    .def("get_move_from_move_t", &BoardBindings::get_move_from_move_t);
 }
