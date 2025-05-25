@@ -1,12 +1,12 @@
 #pragma once
 
 
-#include "Piece.hpp"
 #include <memory>
 #include <algorithm>
 #include <valarray>
 #include <unordered_set>
 
+#include <Piece.hpp>
 #include <FEN.hpp>
 #include <PGN.hpp>
 #include <Board.hpp>
@@ -1543,7 +1543,7 @@ public:
             return score;
           }
         }
-        if(ab_state.initdepth <= depth + 1 + (depth_t(pline.line.size()) / 7) && move_index + 1 != moves_size) {
+        if(ab_state.initdepth <= depth + 2 + (depth_t(pline.line.size()) / 7) && move_index + 1 != moves_size) {
           if(!callback_f(depth, bestscore)) {
             return bestscore;
           }
