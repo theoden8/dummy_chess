@@ -23,7 +23,7 @@ struct DebugTracer {
   static constexpr bool exact_line = true;
   MoveLine debug_moveline = MoveLine(std::vector<move_t>{
   });
-  static constexpr depth_t show_maxdepth = 10;
+  static constexpr depth_t show_maxdepth = 0;
   board_info debug_board_info;
   depth_t debug_depth = 0;
 

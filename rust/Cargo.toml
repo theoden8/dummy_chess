@@ -8,8 +8,7 @@ readme = "../README.md"
 publish = false
 
 [build-dependencies]
-bindgen = "0.69.4"
-cc = "1.0"
+bindgen = "0.72"
 
 [dependencies]
 libloading = "0.8"

@@ -1,0 +1,7 @@
+[env]
+# C++ chess engine has global state that isn't thread-safe
+# Force single-threaded tests
+RUST_TEST_THREADS = "1"
+# Feature flags for C++ build (can be overridden)
+FEATURE_SUPPORT_JEMALLOC = { value = "disabled", force = false }
+FEATURE_SUPPORT_SANITIZE = { value = "disabled", force = false }

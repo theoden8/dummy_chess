@@ -33,10 +33,11 @@ else ifeq ($(FEATURE_SUPPORT_SANITIZE),minimal)
 endif
 
 PROFFLAGS = -O1 -DNDEBUG -DFLAG_PROFILING -flto=auto -DUSE_INTRIN -pg
-OPTFLAGS := -Ofast -ffast-math -DNDEBUG -flto=auto -fno-trapping-math -fno-signed-zeros -march=native -DUSE_INTRIN -fno-exceptions
+OPTLIBFLAGS := -Ofast -ffast-math -DNDEBUG -fno-trapping-math -fno-signed-zeros -march=native -DUSE_INTRIN -fno-exceptions
 ifeq ($(shell arch),x86_64)
-  OPTFLAGS := $(OPTFLAGS) -m64
+  OPTLIBFLAGS := $(OPTLIBFLAGS) -m64
 endif
+OPTFLAGS := $(OPTLIBFLAGS) -flto=auto
 
 PKGCONFIG ?= $(shell ./scripts/command_pkgconfig)
 CXXFLAGS := -std=c++20 -I. -Wall -Wextra -fno-stack-protector
@@ -90,7 +91,6 @@ TARGETS := dummy_chess dummy_chess_curses dummy_chess_bench
 ifeq ($(FEATURE_SUPPORT_GPROF),enabled)
 	TARGETS := $(TARGETS) dummy_chess_alphabeta
 endif
-LIBDUMMYCHESS := libdummychess.$(SHARED_LIB_EXT)
 TARGETS += dummy_chess_uci dummy_chess_uci_dbg $(LIBDUMMYCHESS) libdummychess.a
 
 CORES = $(shell getconf _NPROCESSORS_ONLN)
