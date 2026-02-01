@@ -37,7 +37,6 @@ OPTFLAGS := -Ofast -ffast-math -DNDEBUG -flto=auto -fno-trapping-math -fno-signe
 ifeq ($(shell arch),x86_64)
   OPTFLAGS := $(OPTFLAGS) -m64
 endif
-OPTLIBFLAGS := $(OPTFLAGS) -DINLINE=
 
 PKGCONFIG ?= $(shell ./scripts/command_pkgconfig)
 CXXFLAGS := -std=c++20 -I. -Wall -Wextra -fno-stack-protector
@@ -84,6 +83,8 @@ SHARED_LIB_EXT := so
 ifeq ($(shell uname),Darwin)
 	SHARED_LIB_EXT := dylib
 endif
+LIBDUMMYCHESS := libdummychess.$(SHARED_LIB_EXT)
+CXXLIBFLAGS := $(CXXFLAGS) -DINLINE= -DFLAG_EXPORT
 
 TARGETS := dummy_chess dummy_chess_curses dummy_chess_bench
 ifeq ($(FEATURE_SUPPORT_GPROF),enabled)
@@ -132,7 +133,7 @@ dummy_chess_uci: $(DEPS_UCI)
 	$(CXX) $(OPTFLAGS) $(CXXFLAGS) -DMUTE_ERRORS uci.cpp $(SOURCES) $(LDFLAGS) -o $@
 
 $(LIBDUMMYCHESS): $(DEPS_SHARED)
-	$(CXX) $(OPTLIBFLAGS) $(CXXFLAGS) -DMUTE_ERRORS shared_object.cpp $(SOURCES) $(LDFLAGS) -fPIC -shared -o $@
+	$(CXX) $(OPTFLAGS) $(CXXLIBFLAGS) -DMUTE_ERRORS shared_object.cpp $(SOURCES) $(LDFLAGS) -fPIC -shared -o $@
 
 else ifeq ($(FEATURE_SUPPORT_PGO),gcc)
 
@@ -149,7 +150,7 @@ dummy_chess_uci: $(DEPS_UCI)
 	$(CXX) $(OPTFLAGS) -fprofile-use -fprofile-correction $(CXXFLAGS) -DMUTE_ERRORS uci.cpp $(SOURCES) $(LDFLAGS) -o $@
 
 $(LIBDUMMYCHESS): $(DEPS_SHARED) dummy_chess_uci
-	$(CXX) $(OPTLIBFLAGS) -fprofile-use -fprofile-correction $(CXXFLAGS) -DMUTE_ERRORS shared_object.cpp $(SOURCES) $(LDFLAGS) -fPIC -shared -o $@
+	$(CXX) $(OPTFLAGS) -fprofile-use -fprofile-correction $(CXXLIBFLAGS) -DMUTE_ERRORS shared_object.cpp $(SOURCES) $(LDFLAGS) -fPIC -shared -o $@
 
 else ifeq ($(FEATURE_SUPPORT_PGO),clang)
 
@@ -169,7 +170,7 @@ dummy_chess_uci: $(DEPS_UCI)
 	$(CXX) $(OPTFLAGS) -fprofile-use=uci.profdata $(CXXFLAGS) -DMUTE_ERRORS uci.cpp $(SOURCES) $(LDFLAGS) -o $@
 
 $(LIBDUMMYCHESS): $(DEPS_SHARED) dummy_chess_uci
-	$(CXX) $(OPTLIBFLAGS) -fprofile-use=uci.profdata $(CXXFLAGS) -DMUTE_ERRORS shared_object.cpp $(SOURCES) $(LDFLAGS) -fPIC -shared -o $@
+	$(CXX) $(OPTFLAGS) -fprofile-use=uci.profdata $(CXXLIBFLAGS) -DMUTE_ERRORS shared_object.cpp $(SOURCES) $(LDFLAGS) -fPIC -shared -o $@
 
 endif
 
@@ -177,8 +178,8 @@ dummy_chess_uci_dbg: $(DEPS_UCI)
 	$(CXX) $(DBGFLAGS) $(CXXFLAGS) uci.cpp $(SOURCES) $(LDFLAGS) -o $@
 
 libdummychess.a: $(DEPS_STATIC)
-	$(CXX) $(OPTLIBFLAGS) $(CXXFLAGS) -c shared_object.cpp $(LDFLAGS) -o shared_object.o
-	$(CXX) $(OPTLIBFLAGS) $(CXXFLAGS) -c m42.cpp $(LDFLAGS) -o m42.o
+	$(CXX) $(OPTFLAGS) $(CXXLIBFLAGS) -c shared_object.cpp $(LDFLAGS) -o shared_object.o
+	$(CXX) $(OPTFLAGS) $(CXXLIBFLAGS) -c m42.cpp $(LDFLAGS) -o m42.o
 	ar rcs "$@" shared_object.o m42.o
 
 test:

@@ -4,19 +4,21 @@
 
 #include <string>
 
+#include "Optimizations.hpp"
+
 struct FFIString {
-  __attribute__((used)) static const char *to_cstring(const std::string &s) {
+  EXPORT static const char *to_cstring(const std::string &s) {
     static char buf[255];
     snprintf(buf, 255, "%s", s.c_str());
     return buf;
   }
 
-  __attribute__((used)) static void show_cstring(const std::string &s) {
+  EXPORT static void show_cstring(const std::string &s) {
     printf("%s\n", s.c_str());
     fflush(stdout);
   }
 
-  __attribute__((used)) static std::string make_string(const char *s) {
+  EXPORT static std::string make_string(const char *s) {
     return std::string(s);
   }
 };

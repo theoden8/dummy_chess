@@ -37,9 +37,9 @@ namespace fen {
              && fullmove == other.fullmove;
     }
 
-    static fen::FEN load_from_string(const std::string &s);
-    static fen::FEN load_from_file(const std::string &fname);
-    std::string export_as_string() const;
+    EXPORT static fen::FEN load_from_string(const std::string &s);
+    EXPORT static fen::FEN load_from_file(const std::string &fname);
+    EXPORT std::string export_as_string() const;
   };
 
   fen::FEN load_from_string(const std::string &s) {

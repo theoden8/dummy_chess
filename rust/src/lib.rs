@@ -6,7 +6,7 @@ extern crate libc;
 
 include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 
-use root::{fen,FFIString};
+use root::*;
 
 #[no_mangle] // Ensure the Rust compiler does not mangle the name of this function
 pub fn to_str(c_str_ptr: *const std::os::raw::c_char) -> String {
@@ -35,6 +35,10 @@ impl FEN {
     }
   }
 
+  pub fn raw(&self) -> fen::FEN {
+    self.fen
+  }
+
   pub fn str(&self) -> String {
     unsafe {
       let cpp_str = self.fen.export_as_string();
@@ -43,4 +47,3 @@ impl FEN {
     }
   }
 }
-

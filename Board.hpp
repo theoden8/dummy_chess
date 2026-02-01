@@ -148,7 +148,7 @@ public:
 
   size_t zobrist_size;
   bool b_finalize = false;
-  explicit Board(const fen::FEN &f=fen::starting_pos, size_t zbsize=ZOBRIST_SIZE):
+  EXPORT explicit Board(const fen::FEN &f=fen::starting_pos, size_t zbsize=ZOBRIST_SIZE):
     activePlayer_(f.active_player),
     current_ply_(f.fullmove * 2 - (f.active_player == WHITE ? 1 : 0)),
     chess960(f.chess960), crazyhouse(f.crazyhouse),
@@ -800,19 +800,19 @@ public:
   }
 
   // forward-pass, complete code
-  INLINE void make_move(pos_t i, pos_t j) {
+  EXPORT INLINE void make_move(pos_t i, pos_t j) {
     make_move_unfinalized(i, j);
     // post-processing: moves, current state info
     make_move_finalize();
     // notify the visitor that they can post-process now
   }
 
-  INLINE void make_move(move_t m) {
+  EXPORT INLINE void make_move(move_t m) {
     make_move(bitmask::first(m), bitmask::second(m));
   }
 
   // backtrack, complete method
-  void retract_move() {
+  EXPORT void retract_move() {
     // this is more efficient than make_move-like code
     // just fetch previous state and overwrite
     if(state_hist.empty())return;
@@ -1404,7 +1404,7 @@ public:
   }
 
   // methods to print and debug stuff
-  NEVER_INLINE void print() const {
+  EXPORT NEVER_INLINE void print() const {
     std::cout << "Active player: " << (activePlayer() == WHITE ? "WHITE" : "BLACK") << std::endl;
     for(pos_t i = board::LEN; i > 0; --i) {
       for(pos_t j = 0; j < board::LEN; ++j) {
@@ -1468,7 +1468,7 @@ public:
     return state.info;
   }
 
-  fen::FEN export_as_fen() const {
+  EXPORT fen::FEN export_as_fen() const {
     fen::FEN f = {
       .active_player=activePlayer(),
       .board=""s,
