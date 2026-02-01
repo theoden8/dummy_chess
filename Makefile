@@ -33,7 +33,7 @@ else ifeq ($(FEATURE_SUPPORT_SANITIZE),minimal)
 endif
 
 PROFFLAGS = -O1 -DNDEBUG -DFLAG_PROFILING -flto=auto -DUSE_INTRIN -pg
-OPTLIBFLAGS := -Ofast -ffast-math -DNDEBUG -fno-trapping-math -fno-signed-zeros -march=native -DUSE_INTRIN -fno-exceptions
+OPTLIBFLAGS := -O3 -ffast-math -DNDEBUG -fno-trapping-math -fno-signed-zeros -march=native -DUSE_INTRIN -fno-exceptions
 ifeq ($(shell arch),x86_64)
   OPTLIBFLAGS := $(OPTLIBFLAGS) -m64
 endif
