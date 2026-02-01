@@ -6,11 +6,7 @@
   #ifndef INLINE
     #define INLINE NEVER_INLINE
   #endif
-  #if __APPLE__
-    #define ALWAYS_INLINE __attribute__((always_inline))
-  #else
-    #define ALWAYS_INLINE __always_inline
-  #endif
+  #define ALWAYS_INLINE __attribute__((always_inline))
 #else
   #ifndef INLINE
     #define INLINE inline
