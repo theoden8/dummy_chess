@@ -302,6 +302,7 @@ jobs:
             else
               export CC=clang CXX=clang++
             fi
+            export MAKE=gmake
             gmake clean
             gmake FEATURE_SUPPORT_PGO=disabled _all
             PYTHONPATH=scripts python3 -c "from perft_test import check_traditional; check_traditional()"

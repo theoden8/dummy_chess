@@ -1,6 +1,28 @@
-extern crate bindgen;
-
+use std::path::Path;
 use std::process::Command;
+
+/// Detect which C++ standard library a shared library links against
+/// by inspecting its dependencies (otool on macOS, ldd on Linux/FreeBSD)
+fn detect_cxx_stdlib(lib_path: &Path) -> &'static str {
+  let output = if cfg!(target_os = "macos") {
+    Command::new("otool")
+      .args(["-L", lib_path.to_str().unwrap()])
+      .output()
+  } else {
+    Command::new("ldd").arg(lib_path).output()
+  };
+
+  if let Ok(output) = output {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if stdout.contains("libc++") {
+      return "c++";
+    } else if stdout.contains("libstdc++") {
+      return "stdc++";
+    }
+  }
+
+  "c++"
+}
 
 fn main() {
   let out_dir = std::env::var("OUT_DIR").unwrap();
@@ -35,11 +57,19 @@ fn main() {
     make_args.push(format!("CXX={}", cxx));
   }
 
+  // Determine shared library extension based on target OS
+  let shared_lib_ext = if cfg!(target_os = "macos") {
+    "dylib"
+  } else {
+    "so"
+  };
+  let shared_lib_name = format!("libdummychess.{}", shared_lib_ext);
+
   // Remove old libraries to force rebuild with correct build type
-  let _ = std::fs::remove_file(lib_path.join("libdummychess.so"));
+  let _ = std::fs::remove_file(lib_path.join(&shared_lib_name));
   let _ = std::fs::remove_file(lib_path.join("libdummychess.a"));
 
-  make_args.push("libdummychess.so".to_string());
+  make_args.push(shared_lib_name.clone());
   make_args.push("libdummychess.a".to_string());
 
   let status = Command::new("make")
@@ -53,14 +83,11 @@ fn main() {
   }
 
   // Copy built libraries to output directory
-  let lib_extension = if cfg!(target_os = "macos") {
-    "dylib"
-  } else {
-    "so"
-  };
-  let lib_file_name = format!("libdummychess.{}", lib_extension);
-  std::fs::copy(lib_path.join(&lib_file_name), out_path.join(&lib_file_name))
-    .expect("Failed to copy shared library");
+  std::fs::copy(
+    lib_path.join(&shared_lib_name),
+    out_path.join(&shared_lib_name),
+  )
+  .expect("Failed to copy shared library");
 
   std::fs::copy(
     lib_path.join("libdummychess.a"),
@@ -83,8 +110,10 @@ fn main() {
   println!("cargo:rerun-if-env-changed=DUMMY_CHESS_CXX");
   println!("cargo:rerun-if-env-changed=PROFILE");
 
-  // Link libraries
-  println!("cargo:rustc-link-lib=stdc++");
+  // Detect which C++ standard library the built shared library links against
+  let shared_lib_path = lib_path.join(&shared_lib_name);
+  let cxx_lib = detect_cxx_stdlib(&shared_lib_path);
+  println!("cargo:rustc-link-lib={}", cxx_lib);
   println!("cargo:rustc-link-search={}", out_dir);
   println!("cargo:rustc-link-lib=dummychess");
 
@@ -118,7 +147,7 @@ fn main() {
   let bindings = bindgen::Builder::default()
     .clang_args(&clang_args)
     .raw_line("#[link(name=\"dummychess\")]")
-    .raw_line("#[link(name=\"stdc++\")]")
+    .raw_line(&format!("#[link(name=\"{}\")]", cxx_lib))
     .raw_line("extern \"C\" {}")
     .header("../Engine.hpp")
     .header("../FFI.hpp")
@@ -128,8 +157,6 @@ fn main() {
     .allowlist_function("(board|bitmask|FEN|fen|PGN|pgn|MoveLine|Board|Engine|FFI)::.*")
     .opaque_type("(std::.*|.*Scope.*|DebugTracer|const_pointer)")
     .generate_inline_functions(true)
-    .dynamic_library_name("dummychess")
-    .dynamic_link_require_all(true)
     //.explicit_padding(true)
     //.disable_name_namespacing()
     .enable_cxx_namespaces()

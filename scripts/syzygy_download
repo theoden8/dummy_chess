@@ -2,10 +2,12 @@
 
 set -ex
 
+MAKE=${MAKE:-make}
+
 [ -d 'external/syzygy' ] && exit 0
 CURDIR=$PWD
 git clone https://github.com/syzygy1/tb external/syzygy
 cd external/syzygy/
-make -C src
+"$MAKE" -C src
 cd src/
 PATH="$PATH:." ./run.pl --threads $(getconf _NPROCESSORS_ONLN) --generate --max 4 # --log

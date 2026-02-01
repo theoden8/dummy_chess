@@ -6,8 +6,8 @@ CC=$1; shift
   CC=cc
 }
 
-# musl doesn't support -p flag (gcrt1.o not found)
-if printf "int main(){}" | ${CC} -x c -p - -o /dev/null 2>/dev/null; then
+# musl doesn't support -pg flag (gcrt1.o not found)
+if printf "int main(){}" | ${CC} -x c -pg - -o /dev/null 2>/dev/null; then
   echo "enabled"
 else
   echo "disabled"

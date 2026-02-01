@@ -20,6 +20,7 @@ $(info FEATURE_SUPPORT_CLANG is $(FEATURE_SUPPORT_CLANG))
 $(info FEATURE_SUPPORT_LIBBSD is $(FEATURE_SUPPORT_LIBBSD))
 $(info FEATURE_SUPPORT_JEMALLOC is $(FEATURE_SUPPORT_JEMALLOC))
 $(info FEATURE_SUPPORT_STDRANGES is $(FEATURE_SUPPORT_STDRANGES))
+$(info FEATURE_SUPPORT_GPROF is $(FEATURE_SUPPORT_GPROF))
 $(info FLAG_THREADS is "$(FLAG_THREADS)")
 
 # sanitization
@@ -34,7 +35,7 @@ endif
 
 PROFFLAGS = -O1 -DNDEBUG -DFLAG_PROFILING -flto=auto -DUSE_INTRIN -pg
 OPTLIBFLAGS := -O3 -ffast-math -DNDEBUG -fno-trapping-math -fno-signed-zeros -march=native -DUSE_INTRIN -fno-exceptions
-ifeq ($(shell arch),x86_64)
+ifneq ($(filter x86_64 amd64,$(shell uname -m)),)
   OPTLIBFLAGS := $(OPTLIBFLAGS) -m64
 endif
 OPTFLAGS := $(OPTLIBFLAGS) -flto=auto
@@ -106,10 +107,10 @@ all :; @$(MAKE) _all -j$(CORES)
 _all : $(TARGETS) $(SOURCE_DEPS)
 
 external/syzygy:
-	./scripts/syzygy_download
+	MAKE=$(MAKE) ./scripts/syzygy_download
 
 external/fathom:
-	./scripts/fathom_download
+	MAKE=$(MAKE) ./scripts/fathom_download
 
 m42.cpp:
 	./scripts/m42_download
