@@ -52,28 +52,30 @@ struct MoveLine {
     return true;
   }
 
-  INLINE void pop_back() {
+  EXPORT INLINE void pop_back() {
     line.pop_back();
   }
 
-  INLINE void put(move_t m) {
+  EXPORT INLINE void put(move_t m) {
     tb = false;
     line.emplace_back(m);
   }
 
   INLINE move_t operator[](size_t i) const {
+    assert(start + i < line.size());
     return line[start+i];
   }
 
   INLINE move_t &operator[](size_t i) {
+    assert(start + i < line.size());
     return line[start+i];
   }
 
-  INLINE move_t front() const {
+  EXPORT INLINE move_t front() const {
     return self.empty() ? board::nullmove : line[start];
   }
 
-  INLINE move_t back() const {
+  EXPORT INLINE move_t back() const {
     return self.empty() ? board::nullmove : line.back();
   }
 
@@ -108,7 +110,7 @@ struct MoveLine {
     self.shift_start();
   }
 
-  INLINE void recall() {
+  EXPORT INLINE void recall() {
     if(start > 0)--start;
   }
 
@@ -121,7 +123,7 @@ struct MoveLine {
     while(start)self.recall();
   }
 
-  INLINE MoveLine full() const {
+  EXPORT INLINE MoveLine full() const {
     MoveLine f = self;
     f.start = 0;
     return f;
@@ -178,13 +180,17 @@ struct MoveLine {
     return MoveLine(std::vector<move_t>(line.begin(), self.begin()), mainline, true, false);
   }
 
-  INLINE move_t get_previous_move() const {
-    if(start == 0)return board::nullmove;
+  INLINE std::pair<size_t, move_t> get_previous_move() const {
+    assert(start <= line.size());
+    if(start == 0)return std::make_pair(SIZE_MAX, board::nullmove);
     if(line[start - 1] != board::nullmove) {
-      return line[start - 1];
+      return std::make_pair(start - 1, line[start - 1]);
     }
-    if(start < 3)return board::nullmove;
-    return line[start - 3];
+    if(start < 3)return std::make_pair(SIZE_MAX, board::nullmove);
+    if(line[start - 3] != board::nullmove) {
+      return std::make_pair(start - 3, line[start - 3]);
+    }
+    return std::make_pair(SIZE_MAX, board::nullmove);
   }
 
   INLINE move_t get_next_move() const {

@@ -406,6 +406,7 @@ public:
   INLINE bool is_castling_move(pos_t i, pos_t j) const {
     assert(j <= board::MOVEMASK);
     const COLOR c = self.color_at_pos(i);
+    assert(c != NEUTRAL);
     const pos_t castlrank = (c == WHITE) ? 1 : 8;
     if(!chess960) {
       return (i == pos_king[c]) && (i == board::_pos(E, castlrank))
@@ -574,7 +575,7 @@ public:
     return zobrist::zb_hash_material(self, mirror);
   }
 
-  INLINE ply_index_t get_current_ply() const {
+  EXPORT INLINE ply_index_t get_current_ply() const {
     return current_ply_;
   }
 
@@ -597,7 +598,7 @@ public:
           );
   }
 
-  INLINE bool check_valid_move(pos_t i, pos_t j, bool strict=true) {
+  INLINE bool check_valid_move(pos_t i, pos_t j, bool strict=true) const {
 #ifndef NDEBUG
     const bool tmp = !state.moves_initialized;
     if(tmp) {
@@ -611,7 +612,7 @@ public:
            && (state.moves[i] & piece::pos_mask(j & board::MOVEMASK)));
   }
 
-  INLINE bool check_valid_move(const move_t m, bool strict=true) {
+  INLINE bool check_valid_move(const move_t m, bool strict=true) const {
     return check_valid_move(bitmask::first(m), bitmask::second(m), strict);
   }
 

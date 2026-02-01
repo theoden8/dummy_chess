@@ -2,11 +2,13 @@
 
 #include <cstdio>
 
+#include <unordered_set>
 #include <string>
 
-#include "Optimizations.hpp"
+#include <Optimizations.hpp>
+#include <Piece.hpp>
 
-struct FFIString {
+struct FFI {
   EXPORT static const char *to_cstring(const std::string &s) {
     static char buf[255];
     snprintf(buf, 255, "%s", s.c_str());
@@ -20,5 +22,9 @@ struct FFIString {
 
   EXPORT static std::string make_string(const char *s) {
     return std::string(s);
+  }
+
+  EXPORT static std::unordered_set<move_t> make_searchmoves() {
+    return std::unordered_set<move_t>();
   }
 };

@@ -123,22 +123,15 @@ DEPS_UCI := uci.cpp $(DEPS_SHARED)
 
 ifeq ($(FEATURE_SUPPORT_PGO),disabled)
 
-dummy_chess_bench: $(DEPS_BENCH)
-	$(CXX) $(OPTFLAGS) $(CXXFLAGS) bench.cpp $(SOURCES) $(LDFLAGS) -o $@
-
 dummy_chess_alphabeta: $(DEPS_ALPHABETA)
 	$(CXX) $(PROFFLAGS) $(CXXFLAGS) alphabeta.cpp $(SOURCES) $(LDFLAGS) -o $@
 
 dummy_chess_uci: $(DEPS_UCI)
 	$(CXX) $(OPTFLAGS) $(CXXFLAGS) -DMUTE_ERRORS uci.cpp $(SOURCES) $(LDFLAGS) -o $@
 
-$(LIBDUMMYCHESS): $(DEPS_SHARED)
-	$(CXX) $(OPTFLAGS) $(CXXLIBFLAGS) -DMUTE_ERRORS shared_object.cpp $(SOURCES) $(LDFLAGS) -fPIC -shared -o $@
+PROFILE_USE :=
 
 else ifeq ($(FEATURE_SUPPORT_PGO),gcc)
-
-dummy_chess_bench: $(DEPS_BENCH) dummy_chess_uci
-	$(CXX) $(OPTFLAGS) -fprofile-use $(CXXFLAGS) bench.cpp $(SOURCES) $(LDFLAGS) -o $@
 
 dummy_chess_alphabeta: $(DEPS_ALPHABETA) dummy_chess_uci
 	$(CXX) $(PROFFLAGS) -fprofile-use -fprofile-correction $(CXXFLAGS) alphabeta.cpp $(SOURCES) $(LDFLAGS) -o $@
@@ -149,14 +142,11 @@ dummy_chess_uci: $(DEPS_UCI)
 	./scripts/pgo_bench.py "./dummy_chess_uci"
 	$(CXX) $(OPTFLAGS) -fprofile-use -fprofile-correction $(CXXFLAGS) -DMUTE_ERRORS uci.cpp $(SOURCES) $(LDFLAGS) -o $@
 
-$(LIBDUMMYCHESS): $(DEPS_SHARED) dummy_chess_uci
-	$(CXX) $(OPTFLAGS) -fprofile-use -fprofile-correction $(CXXLIBFLAGS) -DMUTE_ERRORS shared_object.cpp $(SOURCES) $(LDFLAGS) -fPIC -shared -o $@
+PROFILE_USE := -fprofile-use
 
 else ifeq ($(FEATURE_SUPPORT_PGO),clang)
 
 LLVM_PROFDATA = $(shell $(CXX) -print-prog-name=llvm-profdata)
-dummy_chess_bench: $(DEPS_BENCH) dummy_chess_uci
-	$(CXX) $(OPTFLAGS) -fprofile-use=uci.profdata $(CXXFLAGS) bench.cpp $(SOURCES) $(LDFLAGS) -o $@
 
 dummy_chess_alphabeta: $(DEPS_ALPHABETA) dummy_chess_uci
 	$(CXX) $(PROFFLAGS) -fprofile-use=uci.profdata $(CXXFLAGS) -Wno-backend-plugin alphabeta.cpp $(SOURCES) $(LDFLAGS) -o $@
@@ -169,17 +159,22 @@ dummy_chess_uci: $(DEPS_UCI)
 	$(LLVM_PROFDATA) merge -output=uci.profdata uci.d.profdata
 	$(CXX) $(OPTFLAGS) -fprofile-use=uci.profdata $(CXXFLAGS) -DMUTE_ERRORS uci.cpp $(SOURCES) $(LDFLAGS) -o $@
 
-$(LIBDUMMYCHESS): $(DEPS_SHARED) dummy_chess_uci
-	$(CXX) $(OPTFLAGS) -fprofile-use=uci.profdata $(CXXLIBFLAGS) -DMUTE_ERRORS shared_object.cpp $(SOURCES) $(LDFLAGS) -fPIC -shared -o $@
+PROFILE_USE := -fprofile-use=uci.profdata
 
 endif
+
+dummy_chess_bench: $(DEPS_BENCH) dummy_chess_uci
+	$(CXX) $(OPTFLAGS) $(PROFILE_USE) $(CXXFLAGS) bench.cpp $(SOURCES) $(LDFLAGS) -o $@
 
 dummy_chess_uci_dbg: $(DEPS_UCI)
 	$(CXX) $(DBGFLAGS) $(CXXFLAGS) uci.cpp $(SOURCES) $(LDFLAGS) -o $@
 
+$(LIBDUMMYCHESS): $(DEPS_SHARED)
+	$(CXX) $(DBGFLAGS) $(CXXLIBFLAGS) shared_object.cpp $(SOURCES) $(LDFLAGS) -fPIC -shared -o $@
+
 libdummychess.a: $(DEPS_STATIC)
-	$(CXX) $(OPTFLAGS) $(CXXLIBFLAGS) -c shared_object.cpp $(LDFLAGS) -o shared_object.o
-	$(CXX) $(OPTFLAGS) $(CXXLIBFLAGS) -c m42.cpp $(LDFLAGS) -o m42.o
+	$(CXX) $(DBGFLAGS) $(CXXLIBFLAGS) -c shared_object.cpp $(LDFLAGS) -o shared_object.o
+	$(CXX) $(DBGFLAGS) $(CXXLIBFLAGS) -c m42.cpp $(LDFLAGS) -o m42.o
 	ar rcs "$@" shared_object.o m42.o
 
 test:

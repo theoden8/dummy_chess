@@ -27,7 +27,7 @@ public:
   static constexpr bool ENABLE_IID = true;
   static constexpr bool ENABLE_SYZYGY = true;
 
-  INLINE Board &as_board() { return (Board &)self; }
+  EXPORT INLINE Board &as_board() { return (Board &)self; }
   INLINE const Board &as_board() const { return (const Board &)self; }
 
   // definitions and such
@@ -376,15 +376,38 @@ public:
     return .0;
   }
 
-  INLINE size_t get_cmt_index(const MoveLine &pline, move_t m) const {
+  INLINE size_t get_cmt_index(const MoveLine &pline, move_t m, bool ahead) const {
+    // can be called in to modes:
+    // (1) m is the future move
+    // (2) m is the last move
+    // therefore, no validity is assumed, nor finalization
+    assert(ahead || check_valid_move(m, false));
     constexpr size_t NO_INDEX = SIZE_MAX;
-    const move_t p_m = pline.get_previous_move();
+    const auto [p_index, p_m] = pline.get_previous_move();
+    if(p_index == NO_INDEX) {
+      return NO_INDEX;
+    }
+    assert(p_index < pline.start);
+    const size_t p_ply = self.get_current_ply() - (pline.start - p_index) + (ahead ? 0 : 1);
+    assert(!ahead || p_ply < self.get_current_ply() || check_valid_move(p_m, false));
     if(m != board::nullmove && p_m != board::nullmove && !(crazyhouse && is_drop_move(bitmask::first(m), bitmask::second(m)))) {
       const pos_t i = bitmask::first(m), _j = bitmask::second(m);
       const pos_t p_i = bitmask::first(p_m) & board::MOVEMASK;
       const pos_t p_j = bitmask::second(p_m) & board::MOVEMASK;
       // castling
-      if(self.empty_at_pos(p_j) || is_castling_move(p_i, p_j)) {
+      if(self.empty_at_pos(p_j)) {
+        return NO_INDEX;
+      }
+      const COLOR c = self.activePlayer();
+      const COLOR ec = enemy_of(c);
+      // TODO determine which color to check
+      if(
+          (self.castlings[board::_castling_index(c, QUEEN_SIDE)] == p_ply)
+          || (self.castlings[board::_castling_index(c, KING_SIDE)] == p_ply)
+          || (self.castlings[board::_castling_index(ec, QUEEN_SIDE)] == p_ply)
+          || (self.castlings[board::_castling_index(ec, KING_SIDE)] == p_ply)
+      )
+      {
         return NO_INDEX;
       }
       // crazyhouse, i is invalid
@@ -399,7 +422,8 @@ public:
   }
 
   INLINE mval_t move_heuristic_cmt(move_t m, const MoveLine &pline, const std::vector<float> &cmh_table) const {
-    const size_t cmt_index = get_cmt_index(pline, m);
+    assert(check_valid_move(m, false));
+    const size_t cmt_index = get_cmt_index(pline, m, false);
     if(cmt_index != SIZE_MAX) {
       return cmh_table[cmt_index];
     }
@@ -922,6 +946,9 @@ public:
       quiescmoves.emplace_back(val, m, reduce_nchecks);
     });
     std::sort(quiescmoves.begin(), quiescmoves.end(), std::greater<>());
+    #ifndef NDEBUG
+    quiescmoves.shrink_to_fit();
+    #endif
     return quiescmoves;
   }
 
@@ -1161,6 +1188,7 @@ public:
     const piece_bitboard_t edefendmap = get_attack_mask(ec) & bits[ec];
     iter_moves([&](pos_t i, pos_t j) mutable -> void {
       const move_t m = bitmask::_pos_pair(i, j);
+      assert(check_valid_move(i, j));
       mval_t val = .0;
       val += move_heuristic_pv(m, pline, hashmove, my_threatmove);
       if(!mval_is_primary(val)) {
@@ -1170,6 +1198,9 @@ public:
       moves.emplace_back(val, m);
     });
     std::sort(moves.begin(), moves.end(), std::greater<>());
+    #ifndef NDEBUG
+    moves.shrink_to_fit();
+    #endif
     return moves;
   }
 
@@ -1203,7 +1234,7 @@ public:
       {
         pline_alt.premove(board::nullmove);
         const move_t nextmove = pline_alt.front();
-        const size_t cmt_index = get_cmt_index(pline_alt, nextmove);
+        const size_t cmt_index = get_cmt_index(pline_alt, nextmove, true);
         if(cmt_index != SIZE_MAX) {
           assert(cmt_index < ab_state.cmh_table.size());
           const depth_t cmh_depth = std::max<depth_t>(0, depth - R + 2);
@@ -1309,10 +1340,10 @@ public:
         score_t score = 0;
         bool new_ispathdep = false;
         { // move scope
-          decltype(auto) mscope = self.mline_unfinalized_scope(m, pline_alt);
-          new_ispathdep = is_path_dependent(pline_alt);
           pos_t i = bitmask::first(m), j = bitmask::second(m) & board::MOVEMASK;
           const bool interesting_move = (is_drop_move(i, j) || is_castling_move(i, j) || is_promotion_move(i, j) || (is_naively_capture_move(i, j) && m_val > -3.5) || (is_naively_checking_move(i, j) && m_val > -9.));
+          decltype(auto) mscope = self.mline_unfinalized_scope(m, pline_alt);
+          new_ispathdep = is_path_dependent(pline_alt);
           const bool lmr_allowed = ENABLE_SEL_LMR && move_index >= 4 && depth >= 3
                                    && state.checkline[c] == bitmask::full && m_val < .1 && !interesting_move;
           if(lmr_allowed) {
@@ -1334,7 +1365,7 @@ public:
               if(zb.is_inactive(tt_age))++zb_occupied;
               zb.write(state.info, score, depth, tt_age, TT_CUTOFF, pline);
             }
-            const size_t cmt_index = get_cmt_index(pline, m);
+            const size_t cmt_index = get_cmt_index(pline, m, false);
             if(cmt_index != SIZE_MAX) {
               ab_state.cmh_table[cmt_index] += (depth * depth * (float(move_index + 1) / float(moves_size))) * 1e-7;
               ab_state.normalize_cmh_table(cmt_index);
@@ -1489,10 +1520,11 @@ public:
         } else {
           { // scout move scope
             const COLOR c = activePlayer();
-            decltype(auto) mscope = self.mline_unfinalized_scope(m, pline_alt);
-            new_ispathdep = is_path_dependent(pline_alt);
             const pos_t i = bitmask::first(m), j = bitmask::second(m) & board::MOVEMASK;
             const bool interesting_move = (is_drop_move(i, j) || is_castling_move(i, j) || is_promotion_move(i, j) || (is_naively_capture_move(i, j) && m_val > -3.5) || (is_naively_checking_move(i, j) && m_val > -9.));
+            decltype(auto) mscope = self.mline_unfinalized_scope(m, pline_alt);
+            new_ispathdep = is_path_dependent(pline_alt);
+            str::print("interesting move?", board::_move_str(m));
             const bool lmr_allowed = ENABLE_SEL_LMR && move_index >= (pline.is_mainline() ? 15 : 4)
                                      && depth >= 3 && state.checkline[c] == bitmask::full && m_val < .1 && !interesting_move;
             MoveLine pline_alt2 = pline_alt;
@@ -1535,7 +1567,7 @@ public:
               if(zb.is_inactive(tt_age))++zb_occupied;
               zb.write(state.info, score, depth, tt_age, TT_CUTOFF, pline);
             }
-            const size_t cmt_index = get_cmt_index(pline, m);
+            const size_t cmt_index = get_cmt_index(pline, m, false);
             if(cmt_index != SIZE_MAX) {
               ab_state.cmh_table[cmt_index] += (depth * depth * (float(move_index + 1) / float(moves_size))) * 1e-7;
               ab_state.normalize_cmh_table(cmt_index);
@@ -1738,18 +1770,18 @@ public:
     return idstate.currmove();
   }
 
-  INLINE move_t start_thinking(depth_t depth, iddfs_state &idstate, const std::unordered_set<move_t> &searchmoves={}) {
+  EXPORT INLINE move_t start_thinking(depth_t depth, iddfs_state &idstate, const std::unordered_set<move_t> &searchmoves={}) {
     return start_thinking(depth, idstate, make_callback_f(), searchmoves);
   }
 
-  INLINE move_t start_thinking(depth_t depth, const std::unordered_set<move_t> &searchmoves={}) {
+  EXPORT INLINE move_t start_thinking(depth_t depth, const std::unordered_set<move_t> &searchmoves={}) {
     iddfs_state idstate;
     return start_thinking(depth, idstate, searchmoves);
   }
 
   // constructor
   DebugTracer<Engine> debug;
-  Engine(const fen::FEN &fen=fen::starting_pos, size_t zbsize=ZOBRIST_SIZE):
+  EXPORT explicit Engine(const fen::FEN &fen=fen::starting_pos, size_t zbsize=ZOBRIST_SIZE):
     Perft(fen, zbsize), debug(self)
   {
     const std::vector<PIECE> piece_types = {PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING};
