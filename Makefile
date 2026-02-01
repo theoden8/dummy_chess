@@ -151,7 +151,7 @@ dummy_chess_uci: $(DEPS_UCI)
 	./scripts/pgo_bench.py "./dummy_chess_uci"
 	$(CXX) $(OPTFLAGS) -fprofile-use -fprofile-correction $(CXXFLAGS) -DMUTE_ERRORS uci.cpp $(SOURCES) $(LDFLAGS) -o $@
 
-$(LIBDUMMYCHESS): $(DEPS_SHARED)
+$(LIBDUMMYCHESS): $(DEPS_SHARED) dummy_chess_uci
 	$(CXX) $(OPTLIBFLAGS) -fprofile-use -fprofile-correction $(CXXFLAGS) -DMUTE_ERRORS shared_object.cpp $(SOURCES) $(LDFLAGS) -fPIC -shared -o $@
 
 else ifeq ($(FEATURE_SUPPORT_PGO),clang)
@@ -171,7 +171,7 @@ dummy_chess_uci: $(DEPS_UCI)
 	$(LLVM_PROFDATA) merge -output=uci.profdata uci.d.profdata
 	$(CXX) $(OPTFLAGS) -fprofile-use=uci.profdata $(CXXFLAGS) -DMUTE_ERRORS uci.cpp $(SOURCES) $(LDFLAGS) -o $@
 
-$(LIBDUMMYCHESS): $(DEPS_SHARED)
+$(LIBDUMMYCHESS): $(DEPS_SHARED) dummy_chess_uci
 	$(CXX) $(OPTLIBFLAGS) -fprofile-use=uci.profdata $(CXXFLAGS) -DMUTE_ERRORS shared_object.cpp $(SOURCES) $(LDFLAGS) -fPIC -shared -o $@
 
 endif

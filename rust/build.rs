@@ -1,9 +1,10 @@
 extern crate bindgen;
+extern crate cc;
 
 
 fn main() {
-  println!("cargo:rustc-link-search=..");
-  println!("cargo:rustc-link-lib=dummychess");
+  let out_dir = std::env::var("OUT_DIR").unwrap();
+  let out_path = std::path::PathBuf::from(&out_dir);
 
   let profile = std::env::var("PROFILE").unwrap();
   let mut clang_args = Vec::from(["-std=c++20", "-I..", "-Wall", "-Wextra", "-DINLINE=", "-x", "c++"]);
@@ -16,8 +17,50 @@ fn main() {
     clang_args.push("-DMUTE_ERRORS");
   }
 
+  if true {
+    let lib_extension = if cfg!(target_os = "macos") {
+      "dylib"
+    } else {
+      "so"
+    };
+    let lib_file_name = format!("libdummychess.{}", &lib_extension);
+    let lib_path = std::path::PathBuf::from("..");
+    std::fs::copy(&lib_path.join(&lib_file_name), &out_path.join(&lib_file_name))
+      .expect("Failed to copy dynamic lib file");
+    std::fs::copy(&lib_path.join("libdummychess.a"), &out_path.join("libdummychess.a"))
+      .expect("Failed to copy static lib file");
+  } else {
+    cc::Build::new()
+        .cpp(true)
+        .std("c++20")
+        .include("..")
+        .define("MUTE_ERRORS", None)
+        .define("NDEBUG", None)
+        .define("USE_INTRIN", None)
+        .file("../m42.cpp")
+        .file("../shared_object.cpp")
+        .flag("-O3")
+        .flag("-Wall").flag("-Wextra")
+        .flag("-Wno-unused-parameter").flag("-Wno-unused-variable").flag("-Wno-unused-but-set-variable")
+        .flag("-Wno-range-loop-construct").flag("-Wno-unknown-attributes").flag("-Wno-parentheses")
+        .flag("-fno-stack-protector").flag("-flto").flag("-fno-trapping-math").flag("-fno-signed-zeros").flag("-fno-exceptions")
+        .flag("-pthread")
+        .static_flag(true)
+        .shared_flag(true)
+        .compile("dummychess");
+  }
+
+  println!("cargo:rustc-link-search={}", out_dir);
+  println!("cargo:rustc-link-lib=c++");
+  println!("cargo:rustc-link-lib=dummychess");
+
+  let bindings_path = out_path.join("bindings.rs");
+
   let bindings = bindgen::Builder::default()
     .clang_args(&clang_args)
+    .raw_line("#[link(name=\"dummychess\")]")
+    .raw_line("#[link(name=\"c++\")]")
+    .raw_line("extern \"C\" {}")
     .header("../Engine.hpp")
     .blocklist_type(".*Scope")
     .blocklist_item("type_")
@@ -39,8 +82,7 @@ fn main() {
     .generate()
     .expect("Unable to generate bindings");
 
-  let out_path = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
   bindings
-    .write_to_file(out_path.join("bindings.rs"))
+    .write_to_file(&bindings_path)
     .expect("Couldn't write bindings!");
 }

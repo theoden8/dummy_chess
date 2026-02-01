@@ -39,6 +39,7 @@ namespace fen {
 
     static fen::FEN load_from_string(const std::string &s);
     static fen::FEN load_from_file(const std::string &fname);
+    std::string export_as_string() const;
   };
 
   fen::FEN load_from_string(const std::string &s) {
@@ -355,6 +356,10 @@ namespace fen {
     s += (f.enpassant == board::nopos) ? "-"s : board::_pos_str(f.enpassant);
     s += " "s + std::to_string(f.halfmove_clock) + " "s + std::to_string(f.fullmove);
     return s;
+  }
+
+  std::string FEN::export_as_string() const {
+    fen::export_as_string(*this);
   }
 
   INLINE std::string export_as_string(const Board &board) {
