@@ -20,12 +20,31 @@ jobs:
       - name: Install dependencies
         run: |
           apt-get update -y
-          apt-get install -y wget make pkgconf clang gcc g++ build-essential valgrind libbsd-dev libjemalloc-dev python3 git libzstd-dev libncurses-dev libncursesw5-dev perl stockfish fairy-stockfish
+          apt-get install -y wget curl make pkgconf clang llvm gcc g++ build-essential valgrind libbsd-dev libjemalloc-dev python3 git libzstd-dev libncurses-dev libncursesw5-dev perl stockfish fairy-stockfish
           rm -rf /var/lib/apt/lists/*
           echo "/usr/games" >> $GITHUB_PATH
 
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Cache syzygy tablebases
+        uses: actions/cache@v4
+        with:
+          path: external/syzygy
+          key: syzygy-v1
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: cargo-debian-${{ matrix.compiler }}-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: cargo-debian-${{ matrix.compiler }}-
 
       - name: Set compiler
         run: |
@@ -50,12 +69,15 @@ jobs:
           make clean
           make _all
 
-      - name: Upload syzygy artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: syzygy-debian-${{ matrix.compiler }}
-          path: external/syzygy
-          retention-days: 1
+      - name: Cargo build (release)
+        run: cargo build --release --locked
+        working-directory: rust
+
+      - name: Cargo test (release)
+        run: cargo test --release --lib
+        working-directory: rust
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}
 
   build-void-amd64:
     name: Void Linux (${{ matrix.compiler }}) - amd64
@@ -69,6 +91,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Cache syzygy tablebases
+        uses: actions/cache@v4
+        with:
+          path: external/syzygy
+          key: syzygy-v1
 
       - name: Build in Void Linux container
         run: |
@@ -91,13 +119,6 @@ jobs:
               make _all
             '
 
-      - name: Upload syzygy artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: syzygy-void-${{ matrix.compiler }}
-          path: external/syzygy
-          retention-days: 1
-
   build-debian-arm64:
     name: Debian (${{ matrix.compiler }}) - arm64
     runs-on: ubuntu-24.04-arm
@@ -115,18 +136,18 @@ jobs:
       - name: Install dependencies
         run: |
           apt-get update -y
-          apt-get install -y wget make pkgconf clang gcc g++ build-essential valgrind libbsd-dev libjemalloc-dev python3 git libzstd-dev libncurses-dev libncursesw5-dev perl stockfish fairy-stockfish
+          apt-get install -y wget make pkgconf clang llvm gcc g++ build-essential valgrind libbsd-dev libjemalloc-dev python3 git libzstd-dev libncurses-dev libncursesw5-dev perl stockfish fairy-stockfish
           rm -rf /var/lib/apt/lists/*
           echo "/usr/games" >> $GITHUB_PATH
 
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download syzygy artifacts
-        uses: actions/download-artifact@v4
+      - name: Cache syzygy tablebases
+        uses: actions/cache@v4
         with:
-          name: syzygy-debian-${{ matrix.compiler }}
           path: external/syzygy
+          key: syzygy-v1
 
       - name: Set compiler
         run: |
@@ -165,11 +186,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download syzygy artifacts
-        uses: actions/download-artifact@v4
+      - name: Cache syzygy tablebases
+        uses: actions/cache@v4
         with:
-          name: syzygy-void-${{ matrix.compiler }}
           path: external/syzygy
+          key: syzygy-v1
 
       - name: Build in Void Linux container
         run: |
@@ -203,14 +224,28 @@ jobs:
           brew install pkg-config libbsd jemalloc python3 git zstd ncurses stockfish fairy-stockfish
           brew link zstd jemalloc libbsd stockfish git ncurses fairy-stockfish --overwrite
 
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download syzygy artifacts
-        uses: actions/download-artifact@v4
+      - name: Cache syzygy tablebases
+        uses: actions/cache@v4
         with:
-          name: syzygy-debian-gcc
           path: external/syzygy
+          key: syzygy-v1
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: cargo-macos-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: cargo-macos-
 
       - name: Build (without PGO)
         run: |
@@ -224,3 +259,13 @@ jobs:
         run: |
           make clean
           make _all
+
+      - name: Cargo build (release)
+        run: cargo build --release
+        working-directory: rust
+
+      - name: Cargo test (release)
+        run: cargo test --release --lib
+        working-directory: rust
+        env:
+          DYLD_LIBRARY_PATH: ${{ github.workspace }}
