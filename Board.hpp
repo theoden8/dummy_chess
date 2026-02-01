@@ -6,8 +6,6 @@
 #endif
 
 #include <vector>
-#include <list>
-#include <bitset>
 
 #include <String.hpp>
 #include <Piece.hpp>
@@ -1148,11 +1146,11 @@ public:
 
   // sub-routines to evaluate game state: draw, mate, etc
   // 50-halfmoves-draw
-  INLINE bool is_draw_halfmoves() const {
+  EXPORT INLINE bool is_draw_halfmoves() const {
     return get_halfmoves() == 100;// && !is_checkmate();
   }
 
-  INLINE bool is_checkmate() const {
+  EXPORT INLINE bool is_checkmate() const {
     const COLOR c = activePlayer();
     if(state.checkline[c] == bitmask::full || (state.attacks[pos_king[c]] & ~bits[c] & ~get_attack_mask(enemy_of(c)))) {
       return false;
@@ -1178,7 +1176,7 @@ public:
     return false;
   }
 
-  INLINE bool can_move() const {
+  EXPORT INLINE bool can_move() const {
     assert(state.moves_initialized);
     const COLOR c = activePlayer();
     bool canmove = false;
@@ -1189,12 +1187,12 @@ public:
     return canmove || can_drop_move();
   }
 
-  INLINE bool is_draw_stalemate() const {
+  EXPORT INLINE bool is_draw_stalemate() const {
     const COLOR c = activePlayer();
     return !get_attacks_to(pos_king[c], enemy_of(c), bits[WHITE]|bits[BLACK]) && !can_move();
   }
 
-  INLINE bool is_draw_material() const {
+  EXPORT INLINE bool is_draw_material() const {
     if(bits_slid_orth)return false;
     const size_t no_pieces = piece::size(bits[WHITE] | bits[BLACK]);
     if(crazyhouse) {
@@ -1222,7 +1220,7 @@ public:
     return is_draw_halfmoves() || is_draw_material() || is_draw_stalemate() || is_draw_repetition();
   }
 
-  INLINE bool is_draw() const {
+  EXPORT INLINE bool is_draw() const {
     assert(((is_draw_nogenmoves() || is_draw_with_genmoves()) ? 1 : 0) == (is_draw_() ? 1 : 0));
     return is_draw_();
   }

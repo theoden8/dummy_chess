@@ -10,7 +10,8 @@ fn main() {
   let mut clang_args = Vec::from(["-std=c++20", "-I..", "-Wall", "-Wextra", "-DINLINE=", "-x", "c++"]);
 
   if profile == "debug" {
-    clang_args.push("-g3")
+    clang_args.push("-g3");
+    //println!("cargo:rustc-link-lib=asan");
   } else if profile == "release" {
     clang_args.push("-O3");
     clang_args.push("-DNDEBUG");
@@ -50,8 +51,8 @@ fn main() {
         .compile("dummychess");
   }
 
-  println!("cargo:rustc-link-search={}", out_dir);
   println!("cargo:rustc-link-lib=c++");
+  println!("cargo:rustc-link-search={}", out_dir);
   println!("cargo:rustc-link-lib=dummychess");
 
   let bindings_path = out_path.join("bindings.rs");

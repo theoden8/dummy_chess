@@ -3,8 +3,14 @@
 
 #define NEVER_INLINE __attribute__ ((noinline))
 #ifndef NDEBUG
-  #define INLINE NEVER_INLINE
-  #define ALWAYS_INLINE __attribute__((always_inline))
+  #ifndef INLINE
+    #define INLINE NEVER_INLINE
+  #endif
+  #if __APPLE__
+    #define ALWAYS_INLINE __attribute__((always_inline))
+  #else
+    #define ALWAYS_INLINE __always_inline
+  #endif
 #else
   #ifndef INLINE
     #define INLINE inline

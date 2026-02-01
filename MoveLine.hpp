@@ -20,7 +20,7 @@ struct MoveLine {
   bool mainline = true;
   bool tb = false;
 
-  INLINE MoveLine()
+  EXPORT INLINE MoveLine()
   {}
 
   explicit INLINE MoveLine(const std::vector<move_t> &line, bool mainline=true, bool shrink=false, bool tb=false):
@@ -210,10 +210,10 @@ struct MoveLine {
     return mline;
   }
 
-  INLINE void clear() {
+  EXPORT INLINE void clear() {
     line.resize(start);
   }
 
-  NEVER_INLINE std::string pgn(Board &engine) const;
-  NEVER_INLINE std::string pgn_full(Board &engine) const;
+  EXPORT NEVER_INLINE std::string pgn(Board &engine) const;
+  EXPORT NEVER_INLINE std::string pgn_full(Board &engine) const;
 };

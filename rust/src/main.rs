@@ -1,15 +1,19 @@
 extern crate dummy_chess;
 
-use root::*;
+
 use dummy_chess::*;
 
+
 fn main() {
-  let starting_pos = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
-  let fen: FEN = FEN::new(starting_pos);
+  let starting_pos = String::from("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+  let fen: FEN = FEN::new(&starting_pos);
   println!("fen: {}", fen.str());
-  unsafe {
-    let board = Board::new(&fen.raw(), 1usize << 20);
-    board.print();
-  };
+  let mut board = Board::new(&fen);
+  board.show();
+  board.make_move_pgn(&String::from("e2e4"));
+  board.show();
+  board.make_move_pgn(&String::from("e5"));
+  board.show();
   println!("EXIT");
 }
+

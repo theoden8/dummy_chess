@@ -16,16 +16,16 @@ struct PGN {
   fen::FEN startfen;
   Board &board;
   size_t cur_ply = 0;
-  std::vector<std::string> ply;
+  EXPORT std::vector<std::string> ply;
   std::string ending = "";
 
-  explicit PGN(Board &board):
+  EXPORT explicit PGN(Board &board):
     board(board)
   {
     startfen = board.export_as_fen();
   }
 
-  size_t size() const {
+  EXPORT size_t size() const {
     return cur_ply;
   }
 
@@ -227,7 +227,7 @@ struct PGN {
   }
 
   // read and return move, return whether check or mate are explicitly annotated
-  move_t read_move_with_flags(const std::string &s, bool &flag_check, bool &flag_mate) {
+  EXPORT move_t read_move_with_flags(const std::string &s, bool &flag_check, bool &flag_mate) {
     assert(!s.empty());
     COLOR c = board.activePlayer();
     // castlings
@@ -382,7 +382,7 @@ struct PGN {
   }
 
   // perform move, verify check/mate/capture situation
-  void read_move(const std::string &s) {
+  EXPORT void read_move(const std::string &s) {
     bool assert_check = false, assert_mate = false;
     const move_t m = read_move_with_flags(s, assert_check, assert_mate);
     handle_move(m);
@@ -438,7 +438,7 @@ struct PGN {
     }
   }
 
-  NEVER_INLINE std::string str() const {
+  EXPORT NEVER_INLINE std::string str() const {
     std::string s;
     if(startfen != fen::starting_pos) {
       if(!board.chess960 && !board.crazyhouse) {
@@ -458,8 +458,8 @@ struct PGN {
     return s;
   }
 
-  static pgn::PGN load_from_string(const std::string &s, Board &board);
-  static pgn::PGN load_from_file(const std::string &fname, Board &board);
+  EXPORT static pgn::PGN load_from_string(const std::string &s, Board &board);
+  EXPORT static pgn::PGN load_from_file(const std::string &fname, Board &board);
 };
 
 // functions to return as string and debug
