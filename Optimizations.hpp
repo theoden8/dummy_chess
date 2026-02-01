@@ -6,7 +6,9 @@
   #define INLINE NEVER_INLINE
   #define ALWAYS_INLINE __attribute__((always_inline))
 #else
-  #define INLINE inline
+  #ifndef INLINE
+    #define INLINE inline
+  #endif
   #define ALWAYS_INLINE INLINE
 #endif
 

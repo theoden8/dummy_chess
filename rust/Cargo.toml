@@ -1,0 +1,13 @@
+[package]
+name = "dummy_chess"
+version = "0.0.3"
+authors = ["Kirill Rodriguez"]
+description = "A UCI chess engine, written from scratch."
+repository = "https://codeberg.org/theoden8/dummy_chess"
+readme = "../README.md"
+
+[build-dependencies]
+bindgen = "0.69.4"
+
+[dependencies]
+libloading = "0.8"

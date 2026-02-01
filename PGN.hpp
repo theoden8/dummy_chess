@@ -457,6 +457,9 @@ struct PGN {
     }
     return s;
   }
+
+  static pgn::PGN load_from_string(const std::string &s, Board &board);
+  static pgn::PGN load_from_file(const std::string &fname, Board &board);
 };
 
 // functions to return as string and debug
@@ -523,6 +526,14 @@ pgn::PGN load_from_file(const std::string &fname, Board &board) {
   while((c=fgetc(fp))!=EOF)s+=c;
   fclose(fp);
   return load_from_string(s, board);
+}
+
+pgn::PGN PGN::load_from_string(const std::string &s, Board &board) {
+  return pgn::load_from_string(s, board);
+}
+
+pgn::PGN PGN::load_from_file(const std::string &fname, Board &board) {
+  return pgn::load_from_file(fname, board);
 }
 
 } // namespace pgn

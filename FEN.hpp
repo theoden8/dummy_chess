@@ -36,6 +36,9 @@ namespace fen {
              && enpassant == other.enpassant && halfmove_clock == other.halfmove_clock
              && fullmove == other.fullmove;
     }
+
+    static fen::FEN load_from_string(const std::string &s);
+    static fen::FEN load_from_file(const std::string &fname);
   };
 
   fen::FEN load_from_string(const std::string &s) {
@@ -257,6 +260,14 @@ namespace fen {
       return fen::load_from_string(fenstring);
     }
   };
+
+  fen::FEN FEN::load_from_string(const std::string &s) {
+    return fen::load_from_string(s);
+  }
+
+  fen::FEN FEN::load_from_file(const std::string &fname) {
+    return fen::load_from_file(fname);
+  }
 
   // standard
   const fen::FEN starting_pos = fen::load_from_string("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"s);
