@@ -2,21 +2,27 @@
 
 set -ev
 
+if test $(uname) = Linux; then
+  SED=sed
+else
+  SED=gsed
+fi
+
 test -d "external/fathom" && exit 0
 CURDIR=$(pwd)
 git clone https://github.com/jdart1/Fathom external/fathom
 for f in external/fathom/src/*.{c,h} external/fathom/src/apps/fathom.c; do
-  sed -i 's/WHITE/FWHITE/g' "$f"
-  sed -i 's/BLACK/FBLACK/g' "$f"
-  sed -i 's/PAWN/FPAWN/g' "$f"
-  sed -i 's/KNIGHT/FKNIGHT/g' "$f"
-  sed -i 's/ROOK/FROOK/g' "$f"
-  sed -i 's/BISHOP/FBISHOP/g' "$f"
-  sed -i 's/QUEEN/FQUEEN/g' "$f"
-  sed -i 's/KING/FKING/g' "$f"
-  sed -i 's/make_move/fmake_move/g' "$f"
-  sed -i 's/Piece/FPiece/g' "$f"
-  sed -i 's/max/_f_max/g' "$f"
-  sed -i 's/min/_f_min/g' "$f"
-  sed -i 's/board/Fboard/g' "$f"
+  $SED -i 's/WHITE/FWHITE/g' "$f"
+  $SED -i 's/BLACK/FBLACK/g' "$f"
+  $SED -i 's/PAWN/FPAWN/g' "$f"
+  $SED -i 's/KNIGHT/FKNIGHT/g' "$f"
+  $SED -i 's/ROOK/FROOK/g' "$f"
+  $SED -i 's/BISHOP/FBISHOP/g' "$f"
+  $SED -i 's/QUEEN/FQUEEN/g' "$f"
+  $SED -i 's/KING/FKING/g' "$f"
+  $SED -i 's/make_move/fmake_move/g' "$f"
+  $SED -i 's/Piece/FPiece/g' "$f"
+  $SED -i 's/max/_f_max/g' "$f"
+  $SED -i 's/min/_f_min/g' "$f"
+  $SED -i 's/board/Fboard/g' "$f"
 done
