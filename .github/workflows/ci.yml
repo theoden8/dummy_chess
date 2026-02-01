@@ -1,0 +1,226 @@
+name: CI
+
+on:
+  push:
+
+jobs:
+  build-debian-amd64:
+    name: Debian (${{ matrix.compiler }}) - amd64
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+
+    container:
+      image: debian:unstable-slim
+
+    steps:
+      - name: Install dependencies
+        run: |
+          apt-get update -y
+          apt-get install -y wget make pkgconf clang gcc g++ build-essential valgrind libbsd-dev libjemalloc-dev python3 git libzstd-dev libncurses-dev libncursesw5-dev perl stockfish fairy-stockfish
+          rm -rf /var/lib/apt/lists/*
+          echo "/usr/games" >> $GITHUB_PATH
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set compiler
+        run: |
+          if [ "${{ matrix.compiler }}" = "gcc" ]; then
+            echo "CC=gcc" >> $GITHUB_ENV
+            echo "CXX=g++" >> $GITHUB_ENV
+          else
+            echo "CC=clang" >> $GITHUB_ENV
+            echo "CXX=clang++" >> $GITHUB_ENV
+          fi
+
+      - name: Build (without PGO)
+        run: |
+          make clean
+          make FEATURE_SUPPORT_PGO=disabled _all
+
+      - name: Test
+        run: python3 scripts/perft_test.py
+
+      - name: Build (with PGO)
+        run: |
+          make clean
+          make _all
+
+      - name: Upload syzygy artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: syzygy-debian-${{ matrix.compiler }}
+          path: external/syzygy
+          retention-days: 1
+
+  build-void-amd64:
+    name: Void Linux (${{ matrix.compiler }}) - amd64
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build in Void Linux container
+        run: |
+          docker run --rm -v ${{ github.workspace }}:/workspace -w /workspace \
+            ghcr.io/void-linux/void-musl-busybox:latest \
+            sh -c '
+              set -ex
+              xbps-install -Syu
+              xbps-install -Sy wget bash make pkg-config clang gcc base-devel llvm libbsd-devel jemalloc-devel python3 git libzstd-devel ncurses-devel perl stockfish fairy-stockfish
+              export PATH="$PATH:/usr/games"
+              if [ "${{ matrix.compiler }}" = "gcc" ]; then
+                export CC=gcc CXX=g++
+              else
+                export CC=clang CXX=clang++
+              fi
+              make clean
+              make FEATURE_SUPPORT_PGO=disabled _all
+              python3 scripts/perft_test.py
+              make clean
+              make _all
+            '
+
+      - name: Upload syzygy artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: syzygy-void-${{ matrix.compiler }}
+          path: external/syzygy
+          retention-days: 1
+
+  build-debian-arm64:
+    name: Debian (${{ matrix.compiler }}) - arm64
+    runs-on: ubuntu-24.04-arm
+    needs: build-debian-amd64
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+
+    container:
+      image: debian:unstable-slim
+
+    steps:
+      - name: Install dependencies
+        run: |
+          apt-get update -y
+          apt-get install -y wget make pkgconf clang gcc g++ build-essential valgrind libbsd-dev libjemalloc-dev python3 git libzstd-dev libncurses-dev libncursesw5-dev perl stockfish fairy-stockfish
+          rm -rf /var/lib/apt/lists/*
+          echo "/usr/games" >> $GITHUB_PATH
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download syzygy artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: syzygy-debian-${{ matrix.compiler }}
+          path: external/syzygy
+
+      - name: Set compiler
+        run: |
+          if [ "${{ matrix.compiler }}" = "gcc" ]; then
+            echo "CC=gcc" >> $GITHUB_ENV
+            echo "CXX=g++" >> $GITHUB_ENV
+          else
+            echo "CC=clang" >> $GITHUB_ENV
+            echo "CXX=clang++" >> $GITHUB_ENV
+          fi
+
+      - name: Build (without PGO)
+        run: |
+          make clean
+          make FEATURE_SUPPORT_PGO=disabled _all
+
+      - name: Test
+        run: python3 scripts/perft_test.py
+
+      - name: Build (with PGO)
+        run: |
+          make clean
+          make _all
+
+  build-void-arm64:
+    name: Void Linux (${{ matrix.compiler }}) - arm64
+    runs-on: ubuntu-24.04-arm
+    needs: build-void-amd64
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download syzygy artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: syzygy-void-${{ matrix.compiler }}
+          path: external/syzygy
+
+      - name: Build in Void Linux container
+        run: |
+          docker run --rm -v ${{ github.workspace }}:/workspace -w /workspace \
+            ghcr.io/void-linux/void-musl-busybox:latest \
+            sh -c '
+              set -ex
+              xbps-install -Syu
+              xbps-install -Sy wget bash make pkg-config clang gcc base-devel llvm libbsd-devel jemalloc-devel python3 git libzstd-devel ncurses-devel perl stockfish fairy-stockfish
+              export PATH="$PATH:/usr/games"
+              if [ "${{ matrix.compiler }}" = "gcc" ]; then
+                export CC=gcc CXX=g++
+              else
+                export CC=clang CXX=clang++
+              fi
+              make clean
+              make FEATURE_SUPPORT_PGO=disabled _all
+              python3 scripts/perft_test.py
+              make clean
+              make _all
+            '
+
+  build-macos:
+    name: macOS
+    runs-on: macos-latest
+    needs: build-debian-amd64
+    timeout-minutes: 180
+    steps:
+      - name: Install dependencies
+        run: |
+          brew install pkg-config libbsd jemalloc python3 git zstd ncurses stockfish fairy-stockfish
+          brew link zstd jemalloc libbsd stockfish git ncurses fairy-stockfish --overwrite
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download syzygy artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: syzygy-debian-gcc
+          path: external/syzygy
+
+      - name: Build (without PGO)
+        run: |
+          make clean
+          make FEATURE_SUPPORT_PGO=disabled _all
+
+      - name: Test
+        run: python3 scripts/perft_test.py
+
+      - name: Build (with PGO)
+        run: |
+          make clean
+          make _all
