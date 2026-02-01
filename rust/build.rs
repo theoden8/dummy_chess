@@ -20,14 +20,24 @@ fn main() {
   // Note: CXX must be passed as a command-line argument, not an env var,
   // because make's built-in default (CXX=g++) has higher precedence than
   // environment variables.
+  let lib_build_type = if profile == "debug" {
+    "debug"
+  } else {
+    "release"
+  };
   let mut make_args: Vec<String> = vec![
     format!("FEATURE_SUPPORT_JEMALLOC={}", jemalloc),
     format!("FEATURE_SUPPORT_SANITIZE={}", sanitize),
+    format!("OPTION_LIB_BUILD_TYPE={}", lib_build_type),
   ];
 
   if !cxx.is_empty() {
     make_args.push(format!("CXX={}", cxx));
   }
+
+  // Remove old libraries to force rebuild with correct build type
+  let _ = std::fs::remove_file(lib_path.join("libdummychess.so"));
+  let _ = std::fs::remove_file(lib_path.join("libdummychess.a"));
 
   make_args.push("libdummychess.so".to_string());
   make_args.push("libdummychess.a".to_string());
@@ -59,16 +69,19 @@ fn main() {
   .expect("Failed to copy static library");
 
   // Rerun if source changes
+  println!("cargo:rerun-if-changed=./build.rs");
   println!("cargo:rerun-if-changed=../FFI.hpp");
   println!("cargo:rerun-if-changed=../Engine.hpp");
   println!("cargo:rerun-if-changed=../Board.hpp");
   println!("cargo:rerun-if-changed=../MoveLine.hpp");
   println!("cargo:rerun-if-changed=../shared_object.cpp");
   println!("cargo:rerun-if-changed=../m42.cpp");
+  println!("cargo:rerun-if-changed=../Makefile");
   println!("cargo:rerun-if-env-changed=FEATURE_SUPPORT_JEMALLOC");
   println!("cargo:rerun-if-env-changed=FEATURE_SUPPORT_SANITIZE");
   println!("cargo:rerun-if-env-changed=CXX");
   println!("cargo:rerun-if-env-changed=DUMMY_CHESS_CXX");
+  println!("cargo:rerun-if-env-changed=PROFILE");
 
   // Link libraries
   println!("cargo:rustc-link-lib=stdc++");

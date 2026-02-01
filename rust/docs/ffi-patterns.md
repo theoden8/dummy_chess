@@ -302,34 +302,50 @@ RUST_TEST_THREADS = "1"
 
 ## Building and Testing
 
-### Building the C++ Library
+### Building with Cargo (Recommended)
 
-Build **without** AddressSanitizer, **without** jemalloc, and **with** NDEBUG for stable, quiet operation:
-
-```bash
-cd /path/to/dummy_chess
-make clean
-FEATURE_SUPPORT_SANITIZE=disabled FEATURE_SUPPORT_JEMALLOC=disabled \
-  make CXXFLAGS="-std=c++20 -I. -Wall -Wextra -fno-stack-protector -Wno-unused -Wno-parentheses -DNDEBUG" \
-  libdummychess.so libdummychess.a
-```
-
-**Important:** 
-- **NDEBUG** suppresses debug output from the engine (search tree, IDDFS progress, etc.)
-- **ASan causes intermittent crashes** (~30% failure rate) with infinite "DEADLYSIGNAL" loops. This appears to be an incompatibility between ASan's signal handling and the Rust test harness. **Do not use ASan for testing.**
-- **jemalloc** requires special handling. If the C++ library uses jemalloc, you must use `LD_PRELOAD` to ensure all allocations use the same allocator:
-  ```bash
-  LD_PRELOAD=/lib/x86_64-linux-gnu/libjemalloc.so.2 cargo test
-  ```
-  The safest option is to build without jemalloc: `FEATURE_SUPPORT_JEMALLOC=disabled`
-
-### Building Rust Bindings
-
-The `build.rs` copies the pre-built library and generates bindings:
+The `build.rs` script automatically builds the C++ library and generates Rust bindings:
 
 ```bash
 cd rust
-cargo build
+cargo build          # Debug build (C++ library with -g3)
+cargo build --release  # Release build (C++ library with -Ofast)
+```
+
+The build system automatically:
+- Detects whether to build debug or release C++ library based on Rust profile
+- Disables jemalloc and ASan by default for FFI compatibility
+- Passes through the `CXX` compiler if specified via `DUMMY_CHESS_CXX` env var
+
+### Build Configuration
+
+Environment variables that can be set:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DUMMY_CHESS_CXX` | (system default) | C++ compiler to use (e.g., `clang++`) |
+| `FEATURE_SUPPORT_JEMALLOC` | `disabled` | Set to `external` to enable jemalloc |
+| `FEATURE_SUPPORT_SANITIZE` | `disabled` | Set to `enabled` for AddressSanitizer |
+
+Example with clang:
+```bash
+DUMMY_CHESS_CXX=clang++ cargo build
+```
+
+### Building the C++ Library Manually
+
+If you need to build the C++ library separately:
+
+```bash
+cd /path/to/dummy_chess
+
+# Debug build
+make OPTION_LIB_BUILD_TYPE=debug FEATURE_SUPPORT_JEMALLOC=disabled \
+  libdummychess.so libdummychess.a
+
+# Release build (optimized)
+make OPTION_LIB_BUILD_TYPE=release FEATURE_SUPPORT_JEMALLOC=disabled \
+  libdummychess.so libdummychess.a
 ```
 
 ### Running Tests
@@ -341,7 +357,14 @@ LD_LIBRARY_PATH=/path/to/dummy_chess cargo test
 
 Tests run single-threaded by default (configured in `.cargo/config.toml`).
 
-**Note:** Do not use ASan for testing - it causes intermittent "DEADLYSIGNAL" crashes due to signal handler conflicts between ASan and the Rust runtime. The code itself is correct; ASan just doesn't work reliably in this FFI context.
+### Known Issues
+
+- **ASan causes intermittent crashes** (~30% failure rate) with infinite "DEADLYSIGNAL" loops. This appears to be an incompatibility between ASan's signal handling and the Rust test harness. **Do not use ASan for testing.**
+- **jemalloc** requires `LD_PRELOAD` if enabled. The C++ library and Rust must use the same allocator:
+  ```bash
+  LD_PRELOAD=/lib/x86_64-linux-gnu/libjemalloc.so.2 cargo test
+  ```
+  The safest option is to keep jemalloc disabled (the default).
 
 ### Test Coverage
 

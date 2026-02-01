@@ -86,6 +86,14 @@ ifeq ($(shell uname),Darwin)
 endif
 LIBDUMMYCHESS := libdummychess.$(SHARED_LIB_EXT)
 CXXLIBFLAGS := $(CXXFLAGS) -DINLINE= -DFLAG_EXPORT
+# Library build type: debug or release (default: release)
+OPTION_LIB_BUILD_TYPE ?= release
+
+ifeq ($(OPTION_LIB_BUILD_TYPE),debug)
+  LIBBUILDFLAGS := $(DBGFLAGS)
+else
+  LIBBUILDFLAGS := $(OPTLIBFLAGS)
+endif
 
 TARGETS := dummy_chess dummy_chess_curses dummy_chess_bench
 ifeq ($(FEATURE_SUPPORT_GPROF),enabled)
@@ -170,11 +178,11 @@ dummy_chess_uci_dbg: $(DEPS_UCI)
 	$(CXX) $(DBGFLAGS) $(CXXFLAGS) uci.cpp $(SOURCES) $(LDFLAGS) -o $@
 
 $(LIBDUMMYCHESS): $(DEPS_SHARED)
-	$(CXX) $(DBGFLAGS) $(CXXLIBFLAGS) shared_object.cpp $(SOURCES) $(LDFLAGS) -fPIC -shared -o $@
+	$(CXX) $(LIBBUILDFLAGS) $(CXXLIBFLAGS) shared_object.cpp $(SOURCES) $(LDFLAGS) -fPIC -shared -o $@
 
 libdummychess.a: $(DEPS_STATIC)
-	$(CXX) $(DBGFLAGS) $(CXXLIBFLAGS) -c shared_object.cpp $(LDFLAGS) -o shared_object.o
-	$(CXX) $(DBGFLAGS) $(CXXLIBFLAGS) -c m42.cpp $(LDFLAGS) -o m42.o
+	$(CXX) $(LIBBUILDFLAGS) $(CXXLIBFLAGS) -c shared_object.cpp $(LDFLAGS) -o shared_object.o
+	$(CXX) $(LIBBUILDFLAGS) $(CXXLIBFLAGS) -c m42.cpp $(LDFLAGS) -o m42.o
 	ar rcs "$@" shared_object.o m42.o
 
 test:
