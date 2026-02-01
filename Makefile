@@ -37,10 +37,7 @@ OPTFLAGS := -Ofast -ffast-math -DNDEBUG -flto=auto -fno-trapping-math -fno-signe
 ifeq ($(shell arch),x86_64)
   OPTFLAGS := $(OPTFLAGS) -m64
 endif
-OPTLIBFLAGS := -O3 -ffast-pmath -DNDEBUG -flto=auto -fno-trapping-math -fno-signed-zeros -march=native -DUSE_INTRIN -fno-exceptions -DINLINE=
-ifeq ($(shell arch),x86_64)
-  OPTLIBFLAGS := $(OPTLIBFLAGS) -m64
-endif
+OPTLIBFLAGS := $(OPTFLAGS) -DINLINE=
 
 PKGCONFIG ?= $(shell ./scripts/command_pkgconfig)
 CXXFLAGS := -std=c++20 -I. -Wall -Wextra -fno-stack-protector
@@ -180,8 +177,8 @@ dummy_chess_uci_dbg: $(DEPS_UCI)
 	$(CXX) $(DBGFLAGS) $(CXXFLAGS) uci.cpp $(SOURCES) $(LDFLAGS) -o $@
 
 libdummychess.a: $(DEPS_STATIC)
-	$(CXX) $(OPTFLAGS) $(CXXFLAGS) -c shared_object.cpp $(LDFLAGS) -o shared_object.o
-	$(CXX) $(OPTFLAGS) $(CXXFLAGS) -c m42.cpp $(LDFLAGS) -o m42.o
+	$(CXX) $(OPTLIBFLAGS) $(CXXFLAGS) -c shared_object.cpp $(LDFLAGS) -o shared_object.o
+	$(CXX) $(OPTLIBFLAGS) $(CXXFLAGS) -c m42.cpp $(LDFLAGS) -o m42.o
 	ar rcs "$@" shared_object.o m42.o
 
 test:

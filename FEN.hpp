@@ -361,8 +361,4 @@ namespace fen {
   std::string FEN::export_as_string() const {
     fen::export_as_string(*this);
   }
-
-  INLINE std::string export_as_string(const Board &board) {
-    return export_as_string(export_from_board(board));
-  }
 } // namespace fen

@@ -1,8 +1,10 @@
 /gui
 dummy_chess*
 *.o
-*.so
 *.a
+*.so
+*.dylib
+mappings.txt
 *.out
 *.dSYM
 *.gcda
