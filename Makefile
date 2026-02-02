@@ -9,7 +9,6 @@ FEATURE_SUPPORT_CLANG ?= $(shell ./scripts/compiler_support_clangflags $(CXX))
 FEATURE_SUPPORT_LIBBSD ?= $(shell ./scripts/compiler_support_libbsd $(CXX))
 FEATURE_SUPPORT_JEMALLOC ?= $(shell ./scripts/compiler_support_jemalloc $(CXX))
 FEATURE_SUPPORT_STDRANGES ?= $(shell ./scripts/compiler_support_stdranges $(CXX))
-FEATURE_SUPPORT_GPROF ?= $(shell ./scripts/compiler_support_gprof $(CC))
 FLAG_THREADS ?= $(shell ./scripts/compiler_flag_threads $(CXX))
 
 $(info CXX is $(CXX))
@@ -20,7 +19,6 @@ $(info FEATURE_SUPPORT_CLANG is $(FEATURE_SUPPORT_CLANG))
 $(info FEATURE_SUPPORT_LIBBSD is $(FEATURE_SUPPORT_LIBBSD))
 $(info FEATURE_SUPPORT_JEMALLOC is $(FEATURE_SUPPORT_JEMALLOC))
 $(info FEATURE_SUPPORT_STDRANGES is $(FEATURE_SUPPORT_STDRANGES))
-$(info FEATURE_SUPPORT_GPROF is $(FEATURE_SUPPORT_GPROF))
 $(info FLAG_THREADS is "$(FLAG_THREADS)")
 
 # sanitization
@@ -33,7 +31,6 @@ else ifeq ($(FEATURE_SUPPORT_SANITIZE),minimal)
   DBGFLAGS := $(DBGFLAGS) -fsanitize-minimal-runtime -fno-omit-frame-pointer
 endif
 
-PROFFLAGS = -O1 -DNDEBUG -DFLAG_PROFILING -flto=auto -DUSE_INTRIN -pg
 OPTLIBFLAGS := -O3 -ffast-math -DNDEBUG -fno-trapping-math -fno-signed-zeros -march=native -DUSE_INTRIN -fno-exceptions
 ifneq ($(filter x86_64 amd64,$(shell uname -m)),)
   OPTLIBFLAGS := $(OPTLIBFLAGS) -m64
@@ -133,7 +130,7 @@ DEPS_UCI := uci.cpp $(DEPS_SHARED)
 ifeq ($(FEATURE_SUPPORT_PGO),disabled)
 
 dummy_chess_alphabeta: $(DEPS_ALPHABETA)
-	$(CXX) $(PROFFLAGS) $(CXXFLAGS) alphabeta.cpp $(SOURCES) $(LDFLAGS) -o $@
+	$(CXX) $(OPTFLAGS) $(CXXFLAGS) alphabeta.cpp $(SOURCES) $(LDFLAGS) -o $@
 
 dummy_chess_uci: $(DEPS_UCI)
 	$(CXX) $(OPTFLAGS) $(CXXFLAGS) -DMUTE_ERRORS uci.cpp $(SOURCES) $(LDFLAGS) -o $@
@@ -143,7 +140,7 @@ PROFILE_USE :=
 else ifeq ($(FEATURE_SUPPORT_PGO),gcc)
 
 dummy_chess_alphabeta: $(DEPS_ALPHABETA) dummy_chess_uci
-	$(CXX) $(PROFFLAGS) -fprofile-use -fprofile-correction $(CXXFLAGS) alphabeta.cpp $(SOURCES) $(LDFLAGS) -o $@
+	$(CXX) $(OPTFLAGS) -fprofile-use -fprofile-correction $(CXXFLAGS) alphabeta.cpp $(SOURCES) $(LDFLAGS) -o $@
 
 dummy_chess_uci: $(DEPS_UCI)
 	rm -vf *.gcda
@@ -158,7 +155,7 @@ else ifeq ($(FEATURE_SUPPORT_PGO),clang)
 LLVM_PROFDATA = $(shell $(CXX) -print-prog-name=llvm-profdata)
 
 dummy_chess_alphabeta: $(DEPS_ALPHABETA) dummy_chess_uci
-	$(CXX) $(PROFFLAGS) -fprofile-use=uci.profdata $(CXXFLAGS) -Wno-backend-plugin alphabeta.cpp $(SOURCES) $(LDFLAGS) -o $@
+	$(CXX) $(OPTFLAGS) -fprofile-use=uci.profdata $(CXXFLAGS) -Wno-backend-plugin alphabeta.cpp $(SOURCES) $(LDFLAGS) -o $@
 
 dummy_chess_uci: $(DEPS_UCI)
 	rm -rvf uci.d.profdata
