@@ -546,8 +546,11 @@ public:
     return std::make_pair(UINT64_C(0), EMPTY);
   }
 
-  score_t static_exchange_evaluation(pos_t i, pos_t j) const {
+  score_t static_exchange_evaluation(const pos_t i, const pos_t j) const {
     assert(j <= board::MOVEMASK);
+    if(self.color_at_pos(i) == NEUTRAL || self.color_at_pos(j) == NEUTRAL) {
+      return .0;
+    }
     std::array<score_t, 37> gain;
     int8_t depth = 0;
     const piece_bitboard_t may_xray = bits_slid_diag | bits_slid_orth | bits_pawns;
@@ -582,11 +585,8 @@ public:
         }
       }
       const COLOR c = self.color_at_pos((depth & 1) ? j : i);
-      piece_bitboard_t mask = 0x00;
-      if (c < 2) {
-        mask = attadef & bits[c];
-      }
-      std::tie(from_set, curpiece) = get_least_valuable_piece(mask);
+      assert(c != NEUTRAL);
+      std::tie(from_set, curpiece) = get_least_valuable_piece(attadef & bits[c]);
     } while(from_set);
 //    uint8_t maxdepth = depth;
     while(--depth) {

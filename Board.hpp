@@ -381,6 +381,7 @@ public:
     assert(j <= board::MOVEMASK);
     const piece_bitboard_t i_mask = piece::pos_mask(i);
     const COLOR c = self.color_at_pos(i);
+    assert(c != NEUTRAL);
     piece::move_pos(bits[c], i, j);
     if(bits_pawns & i_mask) {
       piece::move_pos(bits_pawns, i, j);
@@ -442,6 +443,7 @@ public:
   INLINE bool is_naively_capture_move(pos_t i, pos_t j) const {
     assert(i <= board::MOVEMASK && j <= board::MOVEMASK);
     const COLOR c = self.color_at_pos(i);
+    assert(c != NEUTRAL);
     return bits[enemy_of(c)] & piece::pos_mask(j);
   }
 
@@ -522,6 +524,7 @@ public:
 
   void update_castlings(pos_t i, pos_t j) {
     const COLOR c = self.color_at_pos(i);
+    assert(c != NEUTRAL);
     const piece_bitboard_t rooks = bits_slid_orth & ~bits_slid_diag;
     if(pos_king[c] == i) {
       unset_castling(c, KING_SIDE);
