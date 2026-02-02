@@ -582,7 +582,11 @@ public:
         }
       }
       const COLOR c = self.color_at_pos((depth & 1) ? j : i);
-      std::tie(from_set, curpiece) = get_least_valuable_piece(attadef & bits[c]);
+      piece_bitboard_t mask = 0x00;
+      if (c < 2) {
+        mask = attadef & bits[c];
+      }
+      std::tie(from_set, curpiece) = get_least_valuable_piece(mask);
     } while(from_set);
 //    uint8_t maxdepth = depth;
     while(--depth) {
