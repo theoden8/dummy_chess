@@ -15,6 +15,7 @@ set(OPTION_SUPPORT_PGO "auto" CACHE STRING "PGO support: auto, gcc, clang, or di
 option(BUILD_LIBRARIES "Build shared and static libraries" ON)
 option(BUILD_EXECUTABLES "Build executable targets" ON)
 option(BUILD_CURSES "Build ncurses UI" ON)
+option(BUILD_PYTHON "Build Python bindings" OFF)
 
 # =============================================================================
 # Compiler Detection
@@ -672,7 +673,54 @@ if(BUILD_EXECUTABLES)
   endif()
 endif()
 
-install(FILES ${HEADER_FILES} DESTINATION include/dummy_chess)
+if(BUILD_LIBRARIES)
+  install(FILES ${HEADER_FILES} DESTINATION include/dummy_chess)
+endif()
+
+# =============================================================================
+# Python Bindings
+# =============================================================================
+
+if(BUILD_PYTHON)
+  find_package(Python3 COMPONENTS Interpreter Development.Module)
+  if(Python3_FOUND)
+    # Use pybind11 from pip installation
+    execute_process(
+      COMMAND "${Python3_EXECUTABLE}" -m pybind11 --cmakedir
+      OUTPUT_VARIABLE pybind11_DIR
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+      RESULT_VARIABLE PYBIND11_RESULT
+    )
+    if(PYBIND11_RESULT EQUAL 0)
+      find_package(pybind11 CONFIG)
+    endif()
+
+    if(pybind11_FOUND)
+      message(STATUS "Building Python bindings")
+      message(STATUS "  Python: ${Python3_EXECUTABLE}")
+      message(STATUS "  pybind11: ${pybind11_DIR}")
+
+      # Python flags: like OPT_LIB_FLAGS but without -fno-exceptions (pybind11 needs exceptions)
+      set(PYTHON_FLAGS -O3 -ffast-math -DNDEBUG -fno-trapping-math -fno-signed-zeros -march=native -DUSE_INTRIN)
+      if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
+        list(APPEND PYTHON_FLAGS -m64)
+      endif()
+
+      pybind11_add_module(_dummychess MODULE python/Bindings.cpp ${CORE_SOURCES})
+      target_include_directories(_dummychess PRIVATE ${CMAKE_SOURCE_DIR})
+      target_compile_options(_dummychess PRIVATE ${COMMON_FLAGS} ${PYTHON_FLAGS})
+      target_compile_definitions(_dummychess PRIVATE ${COMMON_DEFINITIONS})
+      add_common_dependencies(_dummychess)
+
+      # Install into the package directory (for wheel building)
+      install(TARGETS _dummychess DESTINATION .)
+    else()
+      message(WARNING "pybind11 not found, skipping Python bindings (install with: pip install pybind11)")
+    endif()
+  else()
+    message(WARNING "Python3 not found, skipping Python bindings")
+  endif()
+endif()
 
 # =============================================================================
 # Summary
@@ -703,6 +751,7 @@ message(STATUS "  OPTION_SUPPORT_PGO: ${OPTION_SUPPORT_PGO}")
 message(STATUS "  BUILD_LIBRARIES: ${BUILD_LIBRARIES}")
 message(STATUS "  BUILD_EXECUTABLES: ${BUILD_EXECUTABLES}")
 message(STATUS "  BUILD_CURSES: ${BUILD_CURSES}")
+message(STATUS "  BUILD_PYTHON: ${BUILD_PYTHON}")
 message(STATUS "")
 message(STATUS "Targets:")
 if(BUILD_LIBRARIES)
@@ -716,5 +765,8 @@ if(BUILD_EXECUTABLES)
   if(NOT PGO_TYPE STREQUAL "disabled")
     message(STATUS "  PGO intermediate: dummy_chess_uci_instrumented")
   endif()
+endif()
+if(BUILD_PYTHON AND TARGET _dummychess)
+  message(STATUS "  Python: _dummychess")
 endif()
 message(STATUS "")

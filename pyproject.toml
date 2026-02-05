@@ -1,25 +1,17 @@
 [build-system]
-requires = [
-    "setuptools>=61.0", "wheel",
-    "scikit-build", "scikit-build-core", "cmake", "ninja",
-    "pybind11",
-]
+requires = ["setuptools>=61.0", "wheel", "scikit-build", "cmake", "ninja", "pybind11"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "dummy-chess"
 version = "0.0.3"
 description = "A chess engine with NNUE evaluation"
-requires-python = ">=3.11,<3.12"
-dependencies = [
-    "numpy",
-]
+requires-python = ">=3.11"
+dependencies = ["numpy"]
 
 [tool.setuptools]
 packages = ["dummy_chess"]
-package-dir = { "dummy_chess" = "python/dummy_chess" }
+package-dir = {"dummy_chess" = "python/dummy_chess"}
 
 [dependency-groups]
-dev = [
-    "bpython", "auditwheel",
-]
+dev = ["bpython", "auditwheel"]

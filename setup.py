@@ -1,20 +1,23 @@
-import subprocess
 import os
-import sys
-
-import setuptools
 import skbuild
 
-print('CWD', os.path.abspath(os.curdir))
+print("CWD", os.path.abspath(os.curdir))
 
 skbuild.setup(
     cmake_args=[
-        "-G", "Unix Makefiles",
+        "-G",
+        "Unix Makefiles",
         "-DCMAKE_BUILD_TYPE=Release",
+        "-DBUILD_PYTHON=ON",
+        "-DBUILD_LIBRARIES=OFF",
+        "-DBUILD_EXECUTABLES=OFF",
+        "-DBUILD_CURSES=OFF",
+        "-DOPTION_SUPPORT_JEMALLOC=disabled",
     ],
     zip_safe=False,
-    packages=['dummy_chess'],
+    packages=["dummy_chess"],
     package_dir={"dummy_chess": "python/dummy_chess"},
-    cmake_install_dir="python",
-    cmake_source_dir="python",
+    cmake_install_dir="python/dummy_chess",
+    cmake_source_dir=".",
+    include_package_data=False,
 )
