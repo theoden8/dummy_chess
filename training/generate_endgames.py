@@ -198,15 +198,16 @@ def wdl_to_score(wdl: int, turn: bool) -> float:
     WDL values from python-chess:
       2 = win, 1 = cursed win, 0 = draw, -1 = blessed loss, -2 = loss
 
-    Returns score from white's perspective in centipawns.
+    Returns score from side-to-move's perspective in centipawns.
+    Scores are scaled to match typical puzzle/engine evaluation ranges.
     """
-    # Map WDL to approximate centipawn values
+    # Map WDL to centipawn values matching typical engine output
     wdl_scores = {
-        2: 10000.0,  # Win
-        1: 5000.0,  # Cursed win (win but 50-move rule)
+        2: 1000.0,  # Win (forced mate)
+        1: 90.0,  # Cursed win (winning but draw by 50-move rule)
         0: 0.0,  # Draw
-        -1: -5000.0,  # Blessed loss
-        -2: -10000.0,  # Loss
+        -1: -90.0,  # Blessed loss (losing but draw by 50-move rule)
+        -2: -1000.0,  # Loss (forced mate against)
     }
     score = wdl_scores.get(wdl, 0.0)
 
@@ -400,16 +401,23 @@ class PuzzleDataset:
         return pl.scan_csv(self.path).select(pl.len()).collect().item()
 
 
+def _count_csv_rows(path: str) -> int:
+    """Count rows in CSV file using polars."""
+    import polars as pl
+
+    return pl.scan_csv(path).select(pl.len()).collect().item()
+
+
 class MixedDataset:
     """
     Dataset that mixes positions from multiple sources with deterministic interleaving.
 
     Combines puzzle data (CSV) and generated endgames with configurable ratios.
+    Total positions per epoch is auto-calculated to use all puzzles exactly once.
 
     Args:
         puzzle_path: Path to puzzle CSV file (expects 'fen' and 'score' columns)
         endgame_ratio: Fraction of positions from endgame generator (0.0-1.0)
-        positions_per_epoch: Total positions per iteration
         seed: Random seed for deterministic mixing and generation
         tablebase_path: Path to Syzygy tablebases for endgame generation
         endgame_config: Configuration for endgame generation
@@ -417,8 +425,7 @@ class MixedDataset:
     Example:
         dataset = MixedDataset(
             puzzle_path="data/puzzles.csv.gz",
-            endgame_ratio=0.3,  # 30% endgames, 70% puzzles
-            positions_per_epoch=100000,
+            endgame_ratio=0.3,  # 30% endgames, 70% puzzles (uses all puzzles)
             seed=42,
         )
         for fen, score in dataset:
@@ -429,20 +436,22 @@ class MixedDataset:
         self,
         puzzle_path: str,
         endgame_ratio: float = 0.3,
-        positions_per_epoch: int = 100000,
         seed: int | None = None,
         tablebase_path: str | None = None,
         endgame_config: EndgameConfig | None = None,
     ):
-        if not 0.0 <= endgame_ratio <= 1.0:
-            raise ValueError("endgame_ratio must be between 0.0 and 1.0")
+        if not 0.0 <= endgame_ratio < 1.0:
+            raise ValueError("endgame_ratio must be in [0.0, 1.0)")
 
         self.puzzle_path = puzzle_path
         self.endgame_ratio = endgame_ratio
-        self.positions_per_epoch = positions_per_epoch
         self.seed = seed
         self.tablebase_path = tablebase_path or DEFAULT_TABLEBASE_PATH
         self.endgame_config = endgame_config or EndgameConfig()
+
+        # Calculate positions_per_epoch from puzzle count and ratio
+        self._n_puzzles = _count_csv_rows(puzzle_path)
+        self.positions_per_epoch = int(self._n_puzzles / (1.0 - endgame_ratio))
 
         self._tablebase: chess.syzygy.Tablebase | None = None
         self._max_pieces: int | None = None
@@ -534,18 +543,22 @@ class MixedDataset:
         return self.positions_per_epoch
 
 
-class MixedTrainingDataset:
+import torch.utils.data
+
+
+class MixedTrainingDataset(torch.utils.data.Dataset):
     """
-    PyTorch-compatible dataset that yields HalfKP features for training.
+    PyTorch map-style dataset that yields HalfKP features for training.
 
     Combines puzzle data and generated endgames, yielding (w_feats, b_feats, stm, score)
     tuples compatible with train.py's collate_sparse function.
 
+    Pre-loads all data into memory for fast random access and multiprocessing support.
+
     Args:
         puzzle_path: Path to puzzle CSV file (expects 'fen' and 'score' columns)
         endgame_ratio: Fraction of positions from endgame generator (0.0-1.0)
-        positions_per_epoch: Total positions per iteration
-        seed: Random seed for deterministic mixing and generation
+        seed: Random seed for deterministic generation
         tablebase_path: Path to Syzygy tablebases for endgame generation
         endgame_config: Configuration for endgame generation
 
@@ -555,11 +568,10 @@ class MixedTrainingDataset:
 
         dataset = MixedTrainingDataset(
             puzzle_path="data/puzzles.csv.gz",
-            endgame_ratio=0.3,
-            positions_per_epoch=100000,
+            endgame_ratio=0.3,  # 30% endgames, 70% puzzles
             seed=42,
         )
-        loader = DataLoader(dataset, batch_size=8192, collate_fn=collate_sparse)
+        loader = DataLoader(dataset, batch_size=8192, collate_fn=collate_sparse, num_workers=4)
     """
 
     # HalfKP feature extraction constants (must match train.py)
@@ -576,36 +588,53 @@ class MixedTrainingDataset:
         self,
         puzzle_path: str,
         endgame_ratio: float = 0.3,
-        positions_per_epoch: int = 100000,
         seed: int | None = None,
         tablebase_path: str | None = None,
         endgame_config: EndgameConfig | None = None,
     ):
-        if not 0.0 <= endgame_ratio <= 1.0:
-            raise ValueError("endgame_ratio must be between 0.0 and 1.0")
+        import polars as pl
 
-        self.puzzle_path = puzzle_path
+        if not 0.0 <= endgame_ratio < 1.0:
+            raise ValueError("endgame_ratio must be in [0.0, 1.0)")
+
         self.endgame_ratio = endgame_ratio
-        self.positions_per_epoch = positions_per_epoch
         self.seed = seed
-        self.tablebase_path = tablebase_path or DEFAULT_TABLEBASE_PATH
-        self.endgame_config = endgame_config or EndgameConfig()
+        tablebase_path = tablebase_path or DEFAULT_TABLEBASE_PATH
+        endgame_config = endgame_config or EndgameConfig()
 
-        self._tablebase: chess.syzygy.Tablebase | None = None
-        self._max_pieces: int | None = None
+        # Load puzzles
+        print("Loading puzzles...")
+        puzzles_df = pl.read_csv(puzzle_path)
+        n_puzzles = len(puzzles_df)
+        n_endgames = int(n_puzzles * endgame_ratio / (1.0 - endgame_ratio))
 
-    def _get_tablebase(self) -> chess.syzygy.Tablebase:
-        if self._tablebase is None:
-            self._tablebase = chess.syzygy.Tablebase()
-            self._tablebase.add_directory(self.tablebase_path)
-        return self._tablebase
+        # Generate endgames
+        print(f"Generating {n_endgames} endgames...")
+        endgames = generate_endgames(
+            n_endgames,
+            tablebase_path=tablebase_path,
+            config=endgame_config,
+        )
 
-    def _get_max_pieces(self) -> int:
-        if self._max_pieces is None:
-            self._max_pieces = self.endgame_config.resolve_max_pieces(
-                self.tablebase_path
-            )
-        return self._max_pieces
+        # Build combined list of (fen, score)
+        print("Building dataset...")
+        self._data: list[tuple[str, float]] = []
+
+        # Add puzzles
+        for row in puzzles_df.iter_rows(named=True):
+            self._data.append((row["fen"], float(row["score"])))
+
+        # Add endgames
+        for fen, score, _wdl in endgames:
+            self._data.append((fen, score))
+
+        # Shuffle deterministically
+        rng = random.Random(seed)
+        rng.shuffle(self._data)
+
+        print(
+            f"Dataset ready: {len(self._data)} positions ({n_puzzles} puzzles + {len(endgames)} endgames)"
+        )
 
     @staticmethod
     def get_halfkp_features(fen: str) -> tuple[list[int], list[int], int]:
@@ -636,80 +665,13 @@ class MixedTrainingDataset:
 
         return white_feats, black_feats, 0 if board.turn else 1
 
-    def __iter__(self):
-        import pandas as pd
+    def __getitem__(self, idx: int) -> tuple[list[int], list[int], int, float]:
+        fen, score = self._data[idx]
+        w, b, stm = self.get_halfkp_features(fen)
+        return w, b, stm, score
 
-        rng = random.Random(self.seed)
-
-        # Load puzzle data
-        compression = "gzip" if self.puzzle_path.endswith(".gz") else None
-        puzzle_df = pd.read_csv(self.puzzle_path, compression=compression)
-
-        # Shuffle puzzles deterministically
-        if self.seed is not None:
-            puzzle_df = puzzle_df.sample(frac=1, random_state=self.seed).reset_index(
-                drop=True
-            )
-
-        puzzle_iter = puzzle_df.iterrows()
-        puzzle_exhausted = False
-
-        # Setup endgame generation
-        tb = self._get_tablebase()
-        max_pieces = self._get_max_pieces()
-
-        count = 0
-        max_attempts_per_endgame = 100
-
-        while count < self.positions_per_epoch:
-            # Decide source based on ratio
-            use_endgame = rng.random() < self.endgame_ratio
-
-            if use_endgame:
-                # Generate endgame position
-                for _ in range(max_attempts_per_endgame):
-                    board = generate_random_position(
-                        self.endgame_config, max_pieces, rng
-                    )
-                    if board is None:
-                        continue
-                    try:
-                        wdl = tb.probe_wdl(board)
-                        if wdl is None:
-                            continue
-                        score = wdl_to_score(wdl, board.turn)
-                        w, b, stm = self.get_halfkp_features(board.fen())
-                        yield w, b, stm, score
-                        count += 1
-                        break
-                    except Exception:
-                        continue
-            else:
-                # Get puzzle position
-                if puzzle_exhausted:
-                    # Restart puzzle iteration with new shuffle
-                    if self.seed is not None:
-                        puzzle_df = puzzle_df.sample(
-                            frac=1, random_state=self.seed + count
-                        ).reset_index(drop=True)
-                    puzzle_iter = puzzle_df.iterrows()
-                    puzzle_exhausted = False
-
-                try:
-                    _, row = next(puzzle_iter)
-                    fen = row["fen"]
-                    score = float(row["score"])
-                    w, b, stm = self.get_halfkp_features(fen)
-                    yield w, b, stm, score
-                    count += 1
-                except StopIteration:
-                    puzzle_exhausted = True
-                    continue
-                except Exception:
-                    continue
-
-    def __len__(self):
-        return self.positions_per_epoch
+    def __len__(self) -> int:
+        return len(self._data)
 
 
 def main():

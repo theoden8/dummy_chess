@@ -278,12 +278,17 @@ def train(
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
 
+    # Use num_workers=0 for iterable datasets to avoid multiprocessing issues
+    is_iterable = isinstance(
+        train_dataset, torch.utils.data.IterableDataset
+    ) or not hasattr(train_dataset, "__getitem__")
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
         batch_size=batch_size,
         collate_fn=collate_sparse,
-        num_workers=4,
-        prefetch_factor=2,
+        num_workers=0 if is_iterable else 4,
+        prefetch_factor=None if is_iterable else 2,
+        shuffle=not is_iterable,
     )
     n_train_batches = (len(train_dataset) + batch_size - 1) // batch_size
     val_loader = (
@@ -291,7 +296,7 @@ def train(
             val_dataset,
             batch_size=batch_size,
             collate_fn=collate_sparse,
-            num_workers=2,
+            num_workers=0 if is_iterable else 2,
         )
         if val_dataset is not None
         else None
