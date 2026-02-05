@@ -21,9 +21,29 @@ if test "$(uname -s)" = 'OpenBSD'; then
   exit 0
 fi
 
-# Check if static sanitizer libraries are available (GCC only)
-if echo "int main(){}" | "${CXX}" -x c++ - -fsanitize=address -fsanitize=undefined -static-libasan -static-libubsan -o /dev/null 2>/dev/null; then
-  echo "enabled-static"
+# Check ASan support (static first, then dynamic)
+ASAN=""
+if echo "int main(){}" | "${CXX}" -x c++ - -fsanitize=address -static-libasan -o /dev/null 2>/dev/null; then
+  ASAN="asan-static"
+elif echo "int main(){}" | "${CXX}" -x c++ - -fsanitize=address -o /dev/null 2>/dev/null; then
+  ASAN="asan-dynamic"
+fi
+
+# Check UBSan support (static first, then dynamic)
+UBSAN=""
+if echo "int main(){}" | "${CXX}" -x c++ - -fsanitize=undefined -static-libubsan -o /dev/null 2>/dev/null; then
+  UBSAN="ubsan-static"
+elif echo "int main(){}" | "${CXX}" -x c++ - -fsanitize=undefined -o /dev/null 2>/dev/null; then
+  UBSAN="ubsan-dynamic"
+fi
+
+# Output result
+if [ -n "${ASAN}" ] && [ -n "${UBSAN}" ]; then
+  echo "${ASAN}+${UBSAN}"
+elif [ -n "${ASAN}" ]; then
+  echo "${ASAN}"
+elif [ -n "${UBSAN}" ]; then
+  echo "${UBSAN}"
 else
-  echo "enabled-dynamic"
+  echo "disabled"
 fi

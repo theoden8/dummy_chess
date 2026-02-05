@@ -21,14 +21,26 @@ $(info FEATURE_SUPPORT_JEMALLOC is $(FEATURE_SUPPORT_JEMALLOC))
 $(info FEATURE_SUPPORT_STDRANGES is $(FEATURE_SUPPORT_STDRANGES))
 $(info FLAG_THREADS is "$(FLAG_THREADS)")
 
-# sanitization
-ifeq ($(FEATURE_SUPPORT_SANITIZE),enabled-static)
-  DBGFLAGS := -static-libasan -static-libubsan $(DBGFLAGS)
-  DBGFLAGS := $(DBGFLAGS) -fsanitize=address -fsanitize=undefined -fno-omit-frame-pointer
-else ifeq ($(FEATURE_SUPPORT_SANITIZE),enabled-dynamic)
-  DBGFLAGS := $(DBGFLAGS) -fsanitize=address -fsanitize=undefined -fno-omit-frame-pointer
-else ifeq ($(FEATURE_SUPPORT_SANITIZE),minimal)
+# sanitization (format: asan-{static,dynamic}+ubsan-{static,dynamic} or minimal or disabled)
+ifeq ($(FEATURE_SUPPORT_SANITIZE),minimal)
   DBGFLAGS := $(DBGFLAGS) -fsanitize-minimal-runtime -fno-omit-frame-pointer
+else ifneq ($(FEATURE_SUPPORT_SANITIZE),disabled)
+  # ASan
+  ifneq ($(findstring asan-static,$(FEATURE_SUPPORT_SANITIZE)),)
+    DBGFLAGS := -static-libasan $(DBGFLAGS) -fsanitize=address
+  else ifneq ($(findstring asan-dynamic,$(FEATURE_SUPPORT_SANITIZE)),)
+    DBGFLAGS := $(DBGFLAGS) -fsanitize=address
+  endif
+  # UBSan
+  ifneq ($(findstring ubsan-static,$(FEATURE_SUPPORT_SANITIZE)),)
+    DBGFLAGS := -static-libubsan $(DBGFLAGS) -fsanitize=undefined
+  else ifneq ($(findstring ubsan-dynamic,$(FEATURE_SUPPORT_SANITIZE)),)
+    DBGFLAGS := $(DBGFLAGS) -fsanitize=undefined
+  endif
+  # Common flags if any sanitizer is enabled
+  ifneq ($(findstring san,$(FEATURE_SUPPORT_SANITIZE)),)
+    DBGFLAGS := $(DBGFLAGS) -fno-omit-frame-pointer
+  endif
 endif
 
 OPTLIBFLAGS := -O3 -ffast-math -DNDEBUG -fno-trapping-math -fno-signed-zeros -march=native -DUSE_INTRIN -fno-exceptions
