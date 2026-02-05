@@ -1,21 +1,28 @@
 # dummy chess
 
 <center>
+<a href="https://github.com/theoden8/dummy_chess/actions">
+    <img src="https://github.com/theoden8/dummy_chess/actions/workflows/ci.yml/badge.svg" alt="GitHub CI"/>
+</a>
 <a href="https://ci.codeberg.org/repos/13782">
     <img src="https://ci.codeberg.org/api/badges/13782/status.svg?branch=master" alt="Codeberg CI"/>
 </a>
 <a href="https://gitlab.com/theoden8/dummy_chess/-/commits/master">
     <img src="https://gitlab.com/theoden8/dummy_chess/badges/master/pipeline.svg" alt="Gitlab CI"/>
 </a>
+<br>
+<a href="https://lichess.org/@/theoden8_uci">
+    <img src="https://img.shields.io/badge/Lichess-theoden8__uci-blue?logo=lichess" alt="Challenge on Lichess"/>
+</a>
 </center>
 
 * [**Source Code**](https://codeberg.org/theoden8/dummy_chess)
-* [**Challenge it**](https://lichess.org/@/theoden8_uci)
 
 ## building
 
 ```
-$ make
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build
 ```
 
 ## features
