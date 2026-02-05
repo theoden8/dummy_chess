@@ -263,6 +263,326 @@ PYBIND11_MODULE(_dummychess, m) {
     return fen::export_as_string(f);
   }, "Decompress bytes to a FEN string");
 
+  m.def("compress_fens_batch", [](const std::vector<std::string> &fens) {
+    py::list result;
+    for (const auto &fenstring : fens) {
+      fen::FEN f = fen::load_from_string(fenstring);
+      std::vector<uint8_t> compressed = fen::compress::compress_fen(f);
+      result.append(py::bytes(reinterpret_cast<const char*>(compressed.data()), compressed.size()));
+    }
+    return result;
+  }, "Compress a batch of FEN strings to a list of bytes");
+
+  m.def("decompress_fens_batch", [](const std::vector<py::bytes> &data_list) {
+    py::list result;
+    for (const auto &data : data_list) {
+      char *buffer;
+      Py_ssize_t length;
+      PyBytes_AsStringAndSize(data.ptr(), &buffer, &length);
+      std::vector<uint8_t> v(buffer, buffer + length);
+      fen::FEN f = fen::compress::decompress_fen(v);
+      result.append(fen::export_as_string(f));
+    }
+    return result;
+  }, "Decompress a batch of bytes to a list of FEN strings");
+
+  m.def("get_variant", [](const py::bytes &data) {
+    char *buffer;
+    Py_ssize_t length;
+    PyBytes_AsStringAndSize(data.ptr(), &buffer, &length);
+    std::vector<uint8_t> v(buffer, buffer + length);
+    fen::FEN f = fen::compress::decompress_fen(v);
+    if (f.chess960) return std::string("chess960");
+    if (f.crazyhouse) return std::string("crazyhouse");
+    return std::string("standard");
+  }, "Get variant name from compressed FEN: 'standard', 'chess960', or 'crazyhouse'");
+
+  m.def("get_variant_batch", [](const std::vector<py::bytes> &data_list) {
+    py::list result;
+    for (const auto &data : data_list) {
+      char *buffer;
+      Py_ssize_t length;
+      PyBytes_AsStringAndSize(data.ptr(), &buffer, &length);
+      std::vector<uint8_t> v(buffer, buffer + length);
+      fen::FEN f = fen::compress::decompress_fen(v);
+      if (f.chess960) result.append("chess960");
+      else if (f.crazyhouse) result.append("crazyhouse");
+      else result.append("standard");
+    }
+    return result;
+  }, "Get variant names from batch of compressed FENs. Returns list of 'standard', 'chess960', or 'crazyhouse'.");
+
+  // HalfKP feature extraction from compressed FEN bytes
+  // Returns (white_indices, white_offsets, black_indices, black_offsets, stm)
+  // where indices are flat arrays and offsets mark boundaries for each position
+  // If flip=true, swaps white/black perspectives and flips STM (caller should negate scores)
+  m.def("get_halfkp_features_batch", [](const std::vector<py::bytes> &data_list, bool flip) {
+    const size_t n_positions = data_list.size();
+    
+    // Pre-allocate with estimated sizes (max 30 pieces per position)
+    std::vector<int32_t> white_indices;
+    std::vector<int32_t> black_indices;
+    std::vector<int64_t> white_offsets(n_positions);
+    std::vector<int64_t> black_offsets(n_positions);
+    std::vector<int64_t> stm(n_positions);
+    
+    white_indices.reserve(n_positions * 16);
+    black_indices.reserve(n_positions * 16);
+    
+    for (size_t pos_idx = 0; pos_idx < n_positions; ++pos_idx) {
+      // Record offsets
+      white_offsets[pos_idx] = static_cast<int64_t>(white_indices.size());
+      black_offsets[pos_idx] = static_cast<int64_t>(black_indices.size());
+      
+      // Decompress FEN
+      char *buffer;
+      Py_ssize_t length;
+      PyBytes_AsStringAndSize(data_list[pos_idx].ptr(), &buffer, &length);
+      std::vector<uint8_t> v(buffer, buffer + length);
+      fen::FEN f = fen::compress::decompress_fen(v);
+      
+      // Set side to move (0 = white, 1 = black), flip if requested
+      int64_t stm_val = (f.active_player == WHITE) ? 0 : 1;
+      stm[pos_idx] = flip ? (1 - stm_val) : stm_val;
+      
+      // Parse board string to find pieces and king positions
+      int wk = -1, bk = -1;
+      std::vector<std::tuple<int, int, bool>> pieces; // (square, piece_type, is_white)
+      
+      int sq = 56; // Start at a8 (rank 8, file a)
+      for (char c : f.board) {
+        if (sq < 0) break;
+        
+        int piece_type = -1;
+        bool is_white = false;
+        
+        switch (c) {
+          case 'P': piece_type = 0; is_white = true; break;
+          case 'N': piece_type = 1; is_white = true; break;
+          case 'B': piece_type = 2; is_white = true; break;
+          case 'R': piece_type = 3; is_white = true; break;
+          case 'Q': piece_type = 4; is_white = true; break;
+          case 'K': wk = sq; break;
+          case 'p': piece_type = 0; is_white = false; break;
+          case 'n': piece_type = 1; is_white = false; break;
+          case 'b': piece_type = 2; is_white = false; break;
+          case 'r': piece_type = 3; is_white = false; break;
+          case 'q': piece_type = 4; is_white = false; break;
+          case 'k': bk = sq; break;
+          case ' ': break; // empty square
+          default: break;
+        }
+        
+        if (piece_type >= 0) {
+          pieces.emplace_back(sq, piece_type, is_white);
+        }
+        
+        // Move to next square (row by row, left to right)
+        sq++;
+        if (sq % 8 == 0) {
+          sq -= 16; // Move to start of previous rank
+        }
+      }
+      
+      // Compute HalfKP features for each piece
+      for (const auto& [piece_sq, pt, is_white] : pieces) {
+        // White perspective: friend=0, enemy=1
+        int w_idx = is_white ? 0 : 1;
+        // Black perspective: friend=0, enemy=1 (inverted)
+        int b_idx = is_white ? 1 : 0;
+        
+        // Feature index formula: king_sq * 641 + piece_index * 64 + piece_sq + 1
+        // piece_index = piece_type * 2 + color_offset
+        int32_t white_feat = wk * 641 + (pt * 2 + w_idx) * 64 + piece_sq + 1;
+        int32_t black_feat = (63 - bk) * 641 + (pt * 2 + b_idx) * 64 + (63 - piece_sq) + 1;
+        
+        if (flip) {
+          // Swap white and black features
+          white_indices.push_back(black_feat);
+          black_indices.push_back(white_feat);
+        } else {
+          white_indices.push_back(white_feat);
+          black_indices.push_back(black_feat);
+        }
+      }
+    }
+    
+    // Convert to numpy arrays
+    auto white_idx_arr = py::array_t<int32_t>(white_indices.size());
+    auto black_idx_arr = py::array_t<int32_t>(black_indices.size());
+    auto white_off_arr = py::array_t<int64_t>(n_positions);
+    auto black_off_arr = py::array_t<int64_t>(n_positions);
+    auto stm_arr = py::array_t<int64_t>(n_positions);
+    
+    std::copy(white_indices.begin(), white_indices.end(), white_idx_arr.mutable_data());
+    std::copy(black_indices.begin(), black_indices.end(), black_idx_arr.mutable_data());
+    std::copy(white_offsets.begin(), white_offsets.end(), white_off_arr.mutable_data());
+    std::copy(black_offsets.begin(), black_offsets.end(), black_off_arr.mutable_data());
+    std::copy(stm.begin(), stm.end(), stm_arr.mutable_data());
+    
+    return py::make_tuple(white_idx_arr, white_off_arr, black_idx_arr, black_off_arr, stm_arr);
+  }, py::arg("data_list"), py::arg("flip") = false,
+  "Extract HalfKP features from batch of compressed FENs. Returns (w_idx, w_off, b_idx, b_off, stm). If flip=true, swaps perspectives (caller should negate scores)");
+
+  // HalfKAv2 feature extraction
+  // Uses king buckets (12 buckets) + horizontal mirroring to reduce feature space
+  // and improve generalization. Buckets group strategically similar king positions.
+  //
+  // King bucket layout (from white's perspective, mirrored for black):
+  //   Files a-d are mirrored to e-h (horizontal symmetry)
+  //   Buckets based on king safety zones:
+  //     0-3: back rank (a1-d1 -> buckets by file groups)
+  //     4-7: second rank  
+  //     8-11: ranks 3-8 (less granular, king rarely there in middlegame)
+  //
+  // Feature index = bucket * 640 + piece_type * 2 * 64 + piece_color * 64 + piece_sq + 1
+  // Total features = 12 * 640 + 1 = 7681
+
+  m.def("get_halfkav2_features_batch", [](const std::vector<py::bytes> &data_list, bool flip) {
+    // King bucket table: maps king square (0-63) to bucket (0-11)
+    // For files e-h, we mirror to a-d first, so this table is for files a-d only
+    // Layout prioritizes back ranks where kings usually are
+    static constexpr int KING_BUCKET[32] = {
+      // Rank 1 (a1-d1): buckets 0-3 (most granular - castled king positions)
+      0, 1, 2, 3,
+      // Rank 2 (a2-d2): buckets 4-5 (king moved up one)
+      4, 4, 5, 5,
+      // Rank 3 (a3-d3): buckets 6-7
+      6, 6, 7, 7,
+      // Rank 4 (a4-d4): bucket 8
+      8, 8, 8, 8,
+      // Rank 5 (a5-d5): bucket 9
+      9, 9, 9, 9,
+      // Rank 6 (a6-d6): bucket 10
+      10, 10, 10, 10,
+      // Ranks 7-8 (a7-d8): bucket 11 (rare positions)
+      11, 11, 11, 11,
+    };
+    
+    const size_t n_positions = data_list.size();
+    
+    std::vector<int32_t> white_indices;
+    std::vector<int32_t> black_indices;
+    std::vector<int64_t> white_offsets(n_positions);
+    std::vector<int64_t> black_offsets(n_positions);
+    std::vector<int64_t> stm(n_positions);
+    
+    white_indices.reserve(n_positions * 16);
+    black_indices.reserve(n_positions * 16);
+    
+    auto get_bucket_and_mirror = [](int king_sq) -> std::pair<int, bool> {
+      int file = king_sq % 8;
+      int rank = king_sq / 8;
+      bool mirror = (file >= 4);
+      if (mirror) {
+        file = 7 - file;  // Mirror e-h to d-a
+      }
+      // Index into bucket table: rank * 4 + file (for files a-d)
+      int bucket_idx = rank * 4 + file;
+      if (bucket_idx >= 32) bucket_idx = 31;  // Safety clamp
+      return {KING_BUCKET[bucket_idx], mirror};
+    };
+    
+    for (size_t pos_idx = 0; pos_idx < n_positions; ++pos_idx) {
+      white_offsets[pos_idx] = static_cast<int64_t>(white_indices.size());
+      black_offsets[pos_idx] = static_cast<int64_t>(black_indices.size());
+      
+      // Decompress FEN
+      char *buffer;
+      Py_ssize_t length;
+      PyBytes_AsStringAndSize(data_list[pos_idx].ptr(), &buffer, &length);
+      std::vector<uint8_t> v(buffer, buffer + length);
+      fen::FEN f = fen::compress::decompress_fen(v);
+      
+      int64_t stm_val = (f.active_player == WHITE) ? 0 : 1;
+      stm[pos_idx] = flip ? (1 - stm_val) : stm_val;
+      
+      // Parse board
+      int wk = -1, bk = -1;
+      std::vector<std::tuple<int, int, bool>> pieces;
+      
+      int sq = 56;
+      for (char c : f.board) {
+        if (sq < 0) break;
+        
+        int piece_type = -1;
+        bool is_white = false;
+        
+        switch (c) {
+          case 'P': piece_type = 0; is_white = true; break;
+          case 'N': piece_type = 1; is_white = true; break;
+          case 'B': piece_type = 2; is_white = true; break;
+          case 'R': piece_type = 3; is_white = true; break;
+          case 'Q': piece_type = 4; is_white = true; break;
+          case 'K': wk = sq; break;
+          case 'p': piece_type = 0; is_white = false; break;
+          case 'n': piece_type = 1; is_white = false; break;
+          case 'b': piece_type = 2; is_white = false; break;
+          case 'r': piece_type = 3; is_white = false; break;
+          case 'q': piece_type = 4; is_white = false; break;
+          case 'k': bk = sq; break;
+          default: break;
+        }
+        
+        if (piece_type >= 0) {
+          pieces.emplace_back(sq, piece_type, is_white);
+        }
+        
+        sq++;
+        if (sq % 8 == 0) {
+          sq -= 16;
+        }
+      }
+      
+      // Get king buckets and mirror flags
+      auto [w_bucket, w_mirror] = get_bucket_and_mirror(wk);
+      auto [b_bucket, b_mirror] = get_bucket_and_mirror(63 - bk);  // Flip for black's perspective
+      
+      // Compute HalfKAv2 features for each piece
+      for (const auto& [piece_sq, pt, is_white] : pieces) {
+        int w_idx = is_white ? 0 : 1;
+        int b_idx = is_white ? 1 : 0;
+        
+        // Apply horizontal mirroring if king is on kingside
+        int w_piece_sq = w_mirror ? (piece_sq ^ 7) : piece_sq;  // XOR with 7 mirrors file
+        int b_piece_sq_flipped = 63 - piece_sq;  // Vertical flip for black
+        int b_piece_sq = b_mirror ? (b_piece_sq_flipped ^ 7) : b_piece_sq_flipped;
+        
+        // Feature index: bucket * 640 + piece_index * 64 + piece_sq + 1
+        int32_t white_feat = w_bucket * 641 + (pt * 2 + w_idx) * 64 + w_piece_sq + 1;
+        int32_t black_feat = b_bucket * 641 + (pt * 2 + b_idx) * 64 + b_piece_sq + 1;
+        
+        if (flip) {
+          white_indices.push_back(black_feat);
+          black_indices.push_back(white_feat);
+        } else {
+          white_indices.push_back(white_feat);
+          black_indices.push_back(black_feat);
+        }
+      }
+    }
+    
+    // Convert to numpy arrays
+    auto white_idx_arr = py::array_t<int32_t>(white_indices.size());
+    auto black_idx_arr = py::array_t<int32_t>(black_indices.size());
+    auto white_off_arr = py::array_t<int64_t>(n_positions);
+    auto black_off_arr = py::array_t<int64_t>(n_positions);
+    auto stm_arr = py::array_t<int64_t>(n_positions);
+    
+    std::copy(white_indices.begin(), white_indices.end(), white_idx_arr.mutable_data());
+    std::copy(black_indices.begin(), black_indices.end(), black_idx_arr.mutable_data());
+    std::copy(white_offsets.begin(), white_offsets.end(), white_off_arr.mutable_data());
+    std::copy(black_offsets.begin(), black_offsets.end(), black_off_arr.mutable_data());
+    std::copy(stm.begin(), stm.end(), stm_arr.mutable_data());
+    
+    return py::make_tuple(white_idx_arr, white_off_arr, black_idx_arr, black_off_arr, stm_arr);
+  }, py::arg("data_list"), py::arg("flip") = false,
+  "Extract HalfKAv2 features from batch of compressed FENs. Uses 12 king buckets + horizontal mirroring. Returns (w_idx, w_off, b_idx, b_off, stm).");
+
+  // Export constants for Python
+  m.attr("HALFKP_SIZE") = 64 * 641 + 1;   // 41025
+  m.attr("HALFKAV2_SIZE") = 12 * 641 + 1; // 7693
+
   py::enum_<BoardBindings::Status>(m, "Status")
     .value("ONGOING", BoardBindings::Status::ONGOING)
     .value("DRAW", BoardBindings::Status::DRAW)

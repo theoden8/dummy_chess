@@ -1,0 +1,11 @@
+data/
+*.csv
+*.csv.zst
+*.nnue
+*.pt
+*.egg-info/
+__pycache__/
+.venv/
+.ruff_cache/
+uv.lock
+*.ipynb

@@ -1,0 +1,18 @@
+[package]
+name = "nnue-training"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "train"
+path = "train.rs"
+
+[dependencies]
+burn = { version = "0.16", features = ["train", "wgpu", "ndarray", "autodiff"] }
+parquet = { version = "53", features = ["arrow"] }
+arrow = "53"
+indicatif = "0.17"
+clap = { version = "4", features = ["derive"] }
+rand = "0.8"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"

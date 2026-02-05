@@ -1,0 +1,8 @@
+output = "network.nnue"
+epochs = 1
+batch_size = 100
+backend = "cpu"
+
+[[sources]]
+path = "data/evals.parquet"
+weight = 1.0

@@ -1,0 +1,26 @@
+# NNUE Training Configuration
+# Copy this file to train.toml and adjust paths/settings
+
+output = "network.nnue"
+epochs = 30
+batch_size = 8192
+lr = 0.001
+val_ratio = 0.05
+test_ratio = 0.05
+flip_augment = false
+backend = "gpu"  # "cpu" or "gpu"
+
+# Data sources with weights (must sum to any value, will be normalized)
+# For large files, specify 'rows' to skip expensive row counting scan
+[[sources]]
+path = "data/evals.parquet"
+weight = 0.7
+# rows = 350000000  # optional: specify row count to avoid scanning
+
+[[sources]]
+path = "data/puzzles.parquet"
+weight = 0.2
+
+[[sources]]
+path = "data/endgames.parquet"
+weight = 0.1
