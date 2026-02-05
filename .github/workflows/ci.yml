@@ -20,12 +20,15 @@ jobs:
       - name: Install dependencies
         run: |
           apt-get update -y
-          apt-get install -y wget curl cmake make pkgconf clang llvm gcc g++ build-essential valgrind libbsd-dev libjemalloc-dev python3 git libzstd-dev libncurses-dev libncursesw5-dev perl stockfish fairy-stockfish
+          apt-get install -y wget curl cmake make pkgconf clang llvm gcc g++ build-essential valgrind libbsd-dev libjemalloc-dev python3 python3-dev git libzstd-dev libncurses-dev libncursesw5-dev perl stockfish fairy-stockfish
           rm -rf /var/lib/apt/lists/*
           echo "/usr/games" >> $GITHUB_PATH
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -79,6 +82,14 @@ jobs:
         working-directory: rust
         env:
           LD_LIBRARY_PATH: ${{ github.workspace }}/build
+
+      - name: Python wheel build
+        run: |
+          rm -rf dist _skbuild
+          uv build --wheel
+          uv venv /tmp/test_venv
+          uv pip install --python /tmp/test_venv dist/*.whl
+          /tmp/test_venv/bin/python -c "import dummy_chess; print(dummy_chess)"
 
   build-void-amd64:
     name: Void Linux (${{ matrix.compiler }}) - amd64
@@ -225,8 +236,8 @@ jobs:
     steps:
       - name: Install dependencies
         run: |
-          brew install cmake make pkg-config libbsd jemalloc python3 git zstd ncurses stockfish fairy-stockfish gsed
-          brew link zstd jemalloc libbsd stockfish git ncurses fairy-stockfish gsed --overwrite -f
+          brew install cmake make pkg-config libbsd jemalloc python3 git zstd ncurses stockfish fairy-stockfish gsed uv
+          brew link zstd jemalloc libbsd stockfish git ncurses fairy-stockfish gsed uv --overwrite -f
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -281,6 +292,14 @@ jobs:
         working-directory: rust
         env:
           DYLD_LIBRARY_PATH: ${{ github.workspace }}/build
+
+      - name: Python wheel build
+        run: |
+          rm -rf dist _skbuild
+          uv build --wheel
+          uv venv /tmp/test_venv
+          uv pip install --python /tmp/test_venv dist/*.whl
+          /tmp/test_venv/bin/python -c "import dummy_chess; print(dummy_chess)"
 
   build-freebsd-amd64:
     name: FreeBSD (${{ matrix.compiler }}) - amd64
