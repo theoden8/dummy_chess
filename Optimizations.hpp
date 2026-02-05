@@ -31,7 +31,7 @@
   #define EXPORT __attribute__((used,retain,visibility("default")))
   #define EXPORT_CLASS __attribute__((visibility("default")))
 #else
-  #define NOEXPORT __attribute__((visibility("hidden")))
-  #define EXPORT NOEXPORT
-  #define EXPORT_CLASS NOEXPORT
+  #define NOEXPORT
+  #define EXPORT
+  #define EXPORT_CLASS
 #endif
