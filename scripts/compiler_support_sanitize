@@ -1,20 +1,29 @@
 #!/usr/bin/env bash
 
-CC="$1"; shift
-[ -z "${CC}" ] && {
-  CC=cc
+CXX="$1"; shift
+[ -z "${CXX}" ] && {
+  CXX=c++
 }
 
 # https://wiki.musl-libc.org/open-issues
-if ! echo -e "
+if ! echo -e "#include <features.h>
 #if !defined(__GLIBC__) && !defined(__APPLE__)
 #error no glibc
 #endif
-int main(){}" | "${CC}" -x c - -o /dev/null 2>/dev/null; then
+int main(){}" | "${CXX}" -x c++ - -o /dev/null 2>/dev/null; then
   echo "disabled"
+  exit 0
+fi
+
 # https://man.openbsd.org/clang-local.1
-elif test "$(uname -m)" = 'OpenBSD'; then
+if test "$(uname -s)" = 'OpenBSD'; then
   echo "minimal"
+  exit 0
+fi
+
+# Check if static sanitizer libraries are available (GCC only)
+if echo "int main(){}" | "${CXX}" -x c++ - -fsanitize=address -fsanitize=undefined -static-libasan -static-libubsan -o /dev/null 2>/dev/null; then
+  echo "enabled-static"
 else
-  echo "enabled"
+  echo "enabled-dynamic"
 fi

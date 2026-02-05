@@ -2,7 +2,7 @@
 
 DBGFLAGS := -g3
 
-FEATURE_SUPPORT_SANITIZE ?= $(shell ./scripts/compiler_support_sanitize $(CC))
+FEATURE_SUPPORT_SANITIZE ?= $(shell ./scripts/compiler_support_sanitize $(CXX))
 FEATURE_SUPPORT_PGO ?= $(shell ./scripts/compiler_support_pgo $(CXX))
 FEATURE_SUPPORT_GCC ?= $(shell ./scripts/compiler_support_gccflags $(CXX))
 FEATURE_SUPPORT_CLANG ?= $(shell ./scripts/compiler_support_clangflags $(CXX))
@@ -22,10 +22,10 @@ $(info FEATURE_SUPPORT_STDRANGES is $(FEATURE_SUPPORT_STDRANGES))
 $(info FLAG_THREADS is "$(FLAG_THREADS)")
 
 # sanitization
-ifeq ($(FEATURE_SUPPORT_SANITIZE),enabled)
-  ifeq ($(FEATURE_SUPPORT_GCC),gcc)
-    DBGFLAGS := -static-libasan $(DBGFLAGS)
-  endif
+ifeq ($(FEATURE_SUPPORT_SANITIZE),enabled-static)
+  DBGFLAGS := -static-libasan -static-libubsan $(DBGFLAGS)
+  DBGFLAGS := $(DBGFLAGS) -fsanitize=address -fsanitize=undefined -fno-omit-frame-pointer
+else ifeq ($(FEATURE_SUPPORT_SANITIZE),enabled-dynamic)
   DBGFLAGS := $(DBGFLAGS) -fsanitize=address -fsanitize=undefined -fno-omit-frame-pointer
 else ifeq ($(FEATURE_SUPPORT_SANITIZE),minimal)
   DBGFLAGS := $(DBGFLAGS) -fsanitize-minimal-runtime -fno-omit-frame-pointer
