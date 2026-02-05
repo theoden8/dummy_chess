@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 
+import os
+import sys
 
 from uci_utilities import *
+
+DUMMY_CHESS_DIR = sys.argv[1] if len(sys.argv) > 1 else "."
 
 
 def get_output_uci(uci_exec, depth: int, fen=None, variant=STANDARD) -> dict:
@@ -36,7 +40,8 @@ def get_output_stockfish(depth=5, fen=None, variant=STANDARD) -> dict:
 
 
 def get_output_dummy_chess(depth=5, fen=None, variant=STANDARD) -> dict:
-    return get_output_uci('./dummy_chess_uci', depth=depth, fen=fen, variant=variant)
+    return get_output_uci(os.path.join(DUMMY_CHESS_DIR, "dummy_chess_uci"),
+                          depth=depth, fen=fen, variant=variant)
 
 
 def get_next_fen(fen: str, move: str, variant=STANDARD) -> str:

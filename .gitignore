@@ -11,9 +11,9 @@ mappings.txt
 *.profdata
 *.profraw
 *.profdata
+perf.data*
 m42.*
 _skbuild/
-uv.lock
 MANIFEST.in
 
 *.swp
@@ -29,3 +29,4 @@ external/
 
 tempfile
 /sync
+/build

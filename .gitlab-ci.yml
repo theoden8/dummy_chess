@@ -9,11 +9,15 @@ stages:
     RUNNER_SCRIPT_TIMEOUT: 3h
   script: |
     set -ex
-    "$MAKE" clean
-    "$MAKE" FEATURE_SUPPORT_PGO=disabled _all
-    python3 scripts/perft_test.py
-    "$MAKE" clean
-    "$MAKE" _all
+    # build without PGO
+    cmake -B build -DCMAKE_BUILD_TYPE=Release -DOPTION_SUPPORT_PGO=disabled
+    cmake --build build
+    # perft test
+    python3 scripts/perft_test.py build
+    # build with PGO
+    rm -rf build
+    cmake -B build -DCMAKE_BUILD_TYPE=Release
+    cmake --build build
 
 .run_linux:
   extends: .run
@@ -27,14 +31,12 @@ stages:
     set -ex
     if test "${IMAGE}" = "debian:unstable-slim"; then
       apt-get update -y
-      apt-get install -y wget make pkgconf clang gcc g++ build-essential valgrind libbsd-dev libjemalloc-dev python3 git libzstd-dev libncurses-dev libncursesw5-dev perl stockfish fairy-stockfish
+      apt-get install -y wget cmake make pkgconf clang gcc g++ build-essential valgrind libbsd-dev libjemalloc-dev python3 git libzstd-dev libncurses-dev libncursesw5-dev perl stockfish fairy-stockfish
       rm -rf /var/lib/apt/lists/*
-      export MAKE=make
       export PATH="$PATH:/usr/games"
     elif test "${IMAGE}" = "ghcr.io/void-linux/void-musl-busybox"; then
       xbps-install -Syu
-      xbps-install -Sy wget bash make pkg-config clang gcc base-devel llvm libbsd-devel jemalloc-devel python3 git libzstd-devel ncurses-devel perl stockfish fairy-stockfish
-      export MAKE=make
+      xbps-install -Sy wget bash cmake make pkg-config clang gcc base-devel llvm libbsd-devel jemalloc-devel python3 git libzstd-devel ncurses-devel perl stockfish fairy-stockfish
       export PATH="$PATH:/usr/games"
     else
       echo "image ${IMAGE}"
@@ -45,13 +47,6 @@ stages:
     elif test "${COMPILER}" = clang; then
       export CC=clang CXX=clang++
     fi
-  script: |
-    set -ex
-    "$MAKE" clean
-    "$MAKE" FEATURE_SUPPORT_PGO=disabled _all
-    python3 scripts/perft_test.py
-    "$MAKE" clean
-    "$MAKE" _all
 
 run_linux_amd64:
   stage: run_amd64
@@ -89,14 +84,13 @@ run_linux_arm64:
 #  before_script: |
 #    set -ex
 #    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-#    brew install pkg-config libbsd jemalloc python3 git libzstd ncurses stockfish
-#    export CC=cc CXX=CXX
-#    export MAKE=make
+#    brew install cmake pkg-config libbsd jemalloc python3 git libzstd ncurses stockfish
+#    export CC=cc CXX=c++
 #    CURRENT_DIR="$PWD"
 #    git clone https://github.com/fairy-stockfish/Fairy-Stockfish ~/fairy-stockfish
 #    cd ~/fairy-stockfish
-#    "$MAKE" -C ./src
+#    make -C ./src
 #    mkdir -p ~/.local/bin
 #    export PATH="$HOME/.local/bin:$PATH"
-#    "$MAKE" -C ./src install PREFIX=~/.local/bin
+#    make -C ./src install PREFIX=~/.local/bin
 #    cd "$CURRENT_DIR"

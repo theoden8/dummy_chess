@@ -27,34 +27,72 @@ fn detect_cxx_stdlib(lib_path: &Path) -> &'static str {
 fn main() {
   let out_dir = std::env::var("OUT_DIR").unwrap();
   let out_path = std::path::PathBuf::from(&out_dir);
-  let lib_path = std::path::PathBuf::from("..");
+  let source_dir = std::path::PathBuf::from("..").canonicalize().unwrap();
+  let build_dir = out_path.join("cmake_build");
 
   let profile = std::env::var("PROFILE").unwrap();
 
   // Feature flags for C++ build - default to disabled for FFI compatibility
-  let jemalloc = std::env::var("FEATURE_SUPPORT_JEMALLOC").unwrap_or("disabled".to_string());
-  let sanitize = std::env::var("FEATURE_SUPPORT_SANITIZE").unwrap_or("disabled".to_string());
+  let jemalloc = std::env::var("OPTION_SUPPORT_JEMALLOC").unwrap_or("disabled".to_string());
+  let sanitize = std::env::var("OPTION_SUPPORT_SANITIZE").unwrap_or("disabled".to_string());
   let cxx = std::env::var("DUMMY_CHESS_CXX")
     .or_else(|_| std::env::var("CXX"))
     .unwrap_or_default();
+  let cc = std::env::var("DUMMY_CHESS_CC")
+    .or_else(|_| std::env::var("CC"))
+    .unwrap_or_default();
 
-  // Build C++ library with make
-  // Note: CXX must be passed as a command-line argument, not an env var,
-  // because make's built-in default (CXX=g++) has higher precedence than
-  // environment variables.
-  let lib_build_type = if profile == "debug" {
-    "debug"
+  // Determine CMake build type
+  let cmake_build_type = if profile == "debug" {
+    "Debug"
   } else {
-    "release"
+    "Release"
   };
-  let mut make_args: Vec<String> = vec![
-    format!("FEATURE_SUPPORT_JEMALLOC={}", jemalloc),
-    format!("FEATURE_SUPPORT_SANITIZE={}", sanitize),
-    format!("OPTION_LIB_BUILD_TYPE={}", lib_build_type),
+
+  // Create build directory
+  std::fs::create_dir_all(&build_dir).expect("Failed to create build directory");
+
+  // Configure with CMake
+  let mut cmake_args = vec![
+    format!("-S{}", source_dir.display()),
+    format!("-B{}", build_dir.display()),
+    format!("-DCMAKE_BUILD_TYPE={}", cmake_build_type),
+    format!("-DOPTION_SUPPORT_JEMALLOC={}", jemalloc),
+    format!("-DOPTION_SUPPORT_SANITIZE={}", sanitize),
+    "-DBUILD_EXECUTABLES=OFF".to_string(), // Only build libraries
   ];
 
   if !cxx.is_empty() {
-    make_args.push(format!("CXX={}", cxx));
+    cmake_args.push(format!("-DCMAKE_CXX_COMPILER={}", cxx));
+  }
+  if !cc.is_empty() {
+    cmake_args.push(format!("-DCMAKE_C_COMPILER={}", cc));
+  }
+
+  let status = Command::new("cmake")
+    .args(&cmake_args)
+    .status()
+    .expect("Failed to run cmake configure");
+
+  if !status.success() {
+    panic!("cmake configure failed with status: {}", status);
+  }
+
+  // Build only the library targets
+  let status = Command::new("cmake")
+    .args([
+      "--build",
+      build_dir.to_str().unwrap(),
+      "--target",
+      "dummychess",
+      "dummychess_static",
+      "--parallel",
+    ])
+    .status()
+    .expect("Failed to run cmake build");
+
+  if !status.success() {
+    panic!("cmake build failed with status: {}", status);
   }
 
   // Determine shared library extension based on target OS
@@ -65,35 +103,15 @@ fn main() {
   };
   let shared_lib_name = format!("libdummychess.{}", shared_lib_ext);
 
-  // Remove old libraries to force rebuild with correct build type
-  let _ = std::fs::remove_file(lib_path.join(&shared_lib_name));
-  let _ = std::fs::remove_file(lib_path.join("libdummychess.a"));
+  // Copy built libraries from CMake build directory to Cargo output directory
+  let cmake_shared_lib = build_dir.join(&shared_lib_name);
+  let cmake_static_lib = build_dir.join("libdummychess.a");
 
-  make_args.push(shared_lib_name.clone());
-  make_args.push("libdummychess.a".to_string());
+  std::fs::copy(&cmake_shared_lib, out_path.join(&shared_lib_name))
+    .expect("Failed to copy shared library");
 
-  let status = Command::new("make")
-    .current_dir(&lib_path)
-    .args(&make_args)
-    .status()
-    .expect("Failed to run make");
-
-  if !status.success() {
-    panic!("make failed with status: {}", status);
-  }
-
-  // Copy built libraries to output directory
-  std::fs::copy(
-    lib_path.join(&shared_lib_name),
-    out_path.join(&shared_lib_name),
-  )
-  .expect("Failed to copy shared library");
-
-  std::fs::copy(
-    lib_path.join("libdummychess.a"),
-    out_path.join("libdummychess.a"),
-  )
-  .expect("Failed to copy static library");
+  std::fs::copy(&cmake_static_lib, out_path.join("libdummychess.a"))
+    .expect("Failed to copy static library");
 
   // Rerun if source changes
   println!("cargo:rerun-if-changed=./build.rs");
@@ -103,22 +121,23 @@ fn main() {
   println!("cargo:rerun-if-changed=../MoveLine.hpp");
   println!("cargo:rerun-if-changed=../shared_object.cpp");
   println!("cargo:rerun-if-changed=../m42.cpp");
-  println!("cargo:rerun-if-changed=../Makefile");
-  println!("cargo:rerun-if-env-changed=FEATURE_SUPPORT_JEMALLOC");
-  println!("cargo:rerun-if-env-changed=FEATURE_SUPPORT_SANITIZE");
+  println!("cargo:rerun-if-changed=../CMakeLists.txt");
+  println!("cargo:rerun-if-env-changed=OPTION_SUPPORT_JEMALLOC");
+  println!("cargo:rerun-if-env-changed=OPTION_SUPPORT_SANITIZE");
+  println!("cargo:rerun-if-env-changed=CC");
   println!("cargo:rerun-if-env-changed=CXX");
+  println!("cargo:rerun-if-env-changed=DUMMY_CHESS_CC");
   println!("cargo:rerun-if-env-changed=DUMMY_CHESS_CXX");
   println!("cargo:rerun-if-env-changed=PROFILE");
 
   // Detect which C++ standard library the built shared library links against
-  let shared_lib_path = lib_path.join(&shared_lib_name);
-  let cxx_lib = detect_cxx_stdlib(&shared_lib_path);
+  let cxx_lib = detect_cxx_stdlib(&cmake_shared_lib);
   println!("cargo:rustc-link-lib={}", cxx_lib);
   println!("cargo:rustc-link-search={}", out_dir);
   println!("cargo:rustc-link-lib=dummychess");
 
-  // Link ASan if enabled
-  if sanitize == "enabled" {
+  // Link ASan if enabled (check for any asan variant)
+  if sanitize.contains("asan") {
     println!("cargo:rustc-link-lib=asan");
   }
 

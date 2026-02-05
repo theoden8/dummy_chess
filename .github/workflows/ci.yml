@@ -20,7 +20,7 @@ jobs:
       - name: Install dependencies
         run: |
           apt-get update -y
-          apt-get install -y wget curl make pkgconf clang llvm gcc g++ build-essential valgrind libbsd-dev libjemalloc-dev python3 git libzstd-dev libncurses-dev libncursesw5-dev perl stockfish fairy-stockfish
+          apt-get install -y wget curl cmake make pkgconf clang llvm gcc g++ build-essential valgrind libbsd-dev libjemalloc-dev python3 git libzstd-dev libncurses-dev libncursesw5-dev perl stockfish fairy-stockfish
           rm -rf /var/lib/apt/lists/*
           echo "/usr/games" >> $GITHUB_PATH
 
@@ -58,16 +58,17 @@ jobs:
 
       - name: Build (without PGO)
         run: |
-          make clean
-          make FEATURE_SUPPORT_PGO=disabled _all
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DOPTION_SUPPORT_PGO=disabled
+          cmake --build build
 
       - name: Test
-        run: python3 scripts/perft_test.py
+        run: python3 scripts/perft_test.py build
 
       - name: Build (with PGO)
         run: |
-          make clean
-          make _all
+          rm -rf build
+          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
 
       - name: Cargo build (release)
         run: cargo build --release --locked
@@ -77,7 +78,7 @@ jobs:
         run: cargo test --release --lib
         working-directory: rust
         env:
-          LD_LIBRARY_PATH: ${{ github.workspace }}
+          LD_LIBRARY_PATH: ${{ github.workspace }}/build
 
   build-void-amd64:
     name: Void Linux (${{ matrix.compiler }}) - amd64
@@ -105,18 +106,19 @@ jobs:
             sh -c '
               set -ex
               xbps-install -Syu
-              xbps-install -Sy wget bash make pkg-config clang gcc base-devel llvm libbsd-devel jemalloc-devel python3 git libzstd-devel ncurses-devel perl stockfish fairy-stockfish
+              xbps-install -Sy wget bash cmake make pkg-config clang gcc base-devel llvm libbsd-devel jemalloc-devel python3 git libzstd-devel ncurses-devel perl stockfish fairy-stockfish
               export PATH="$PATH:/usr/games"
               if [ "${{ matrix.compiler }}" = "gcc" ]; then
                 export CC=gcc CXX=g++
               else
                 export CC=clang CXX=clang++
               fi
-              make clean
-              make FEATURE_SUPPORT_PGO=disabled _all
-              python3 scripts/perft_test.py
-              make clean
-              make _all
+              cmake -B build -DCMAKE_BUILD_TYPE=Release -DOPTION_SUPPORT_PGO=disabled
+              cmake --build build
+              python3 scripts/perft_test.py build
+              rm -rf build
+              cmake -B build -DCMAKE_BUILD_TYPE=Release
+              cmake --build build
             '
 
   build-debian-arm64:
@@ -136,7 +138,7 @@ jobs:
       - name: Install dependencies
         run: |
           apt-get update -y
-          apt-get install -y wget make pkgconf clang llvm gcc g++ build-essential valgrind libbsd-dev libjemalloc-dev python3 git libzstd-dev libncurses-dev libncursesw5-dev perl stockfish fairy-stockfish
+          apt-get install -y wget cmake make pkgconf clang llvm gcc g++ build-essential valgrind libbsd-dev libjemalloc-dev python3 git libzstd-dev libncurses-dev libncursesw5-dev perl stockfish fairy-stockfish
           rm -rf /var/lib/apt/lists/*
           echo "/usr/games" >> $GITHUB_PATH
 
@@ -161,16 +163,17 @@ jobs:
 
       - name: Build (without PGO)
         run: |
-          make clean
-          make FEATURE_SUPPORT_PGO=disabled _all
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DOPTION_SUPPORT_PGO=disabled
+          cmake --build build
 
       - name: Test
-        run: python3 scripts/perft_test.py
+        run: python3 scripts/perft_test.py build
 
       - name: Build (with PGO)
         run: |
-          make clean
-          make _all
+          rm -rf build
+          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
 
   build-void-arm64:
     name: Void Linux (${{ matrix.compiler }}) - arm64
@@ -199,18 +202,19 @@ jobs:
             sh -c '
               set -ex
               xbps-install -Syu
-              xbps-install -Sy wget bash make pkg-config clang gcc base-devel llvm libbsd-devel jemalloc-devel python3 git libzstd-devel ncurses-devel perl stockfish fairy-stockfish
+              xbps-install -Sy wget bash cmake make pkg-config clang gcc base-devel llvm libbsd-devel jemalloc-devel python3 git libzstd-devel ncurses-devel perl stockfish fairy-stockfish
               export PATH="$PATH:/usr/games"
               if [ "${{ matrix.compiler }}" = "gcc" ]; then
                 export CC=gcc CXX=g++
               else
                 export CC=clang CXX=clang++
               fi
-              make clean
-              make FEATURE_SUPPORT_PGO=disabled _all
-              python3 scripts/perft_test.py
-              make clean
-              make _all
+              cmake -B build -DCMAKE_BUILD_TYPE=Release -DOPTION_SUPPORT_PGO=disabled
+              cmake --build build
+              python3 scripts/perft_test.py build
+              rm -rf build
+              cmake -B build -DCMAKE_BUILD_TYPE=Release
+              cmake --build build
             '
 
   build-macos:
@@ -221,7 +225,7 @@ jobs:
     steps:
       - name: Install dependencies
         run: |
-          brew install pkg-config libbsd jemalloc python3 git zstd ncurses stockfish fairy-stockfish gsed
+          brew install cmake make pkg-config libbsd jemalloc python3 git zstd ncurses stockfish fairy-stockfish gsed
           brew link zstd jemalloc libbsd stockfish git ncurses fairy-stockfish gsed --overwrite -f
 
       - name: Install Rust
@@ -246,18 +250,27 @@ jobs:
           key: cargo-macos-${{ hashFiles('rust/Cargo.lock') }}
           restore-keys: cargo-macos-
 
+      - name: Setup Homebrew paths
+        run: |
+          BREW_PREFIX=$(brew --prefix)
+          echo "PKG_CONFIG_PATH=$BREW_PREFIX/lib/pkgconfig:$BREW_PREFIX/opt/jemalloc/lib/pkgconfig" >> $GITHUB_ENV
+          echo "LIBRARY_PATH=$BREW_PREFIX/lib:$BREW_PREFIX/opt/jemalloc/lib" >> $GITHUB_ENV
+          echo "CPATH=$BREW_PREFIX/include:$BREW_PREFIX/opt/jemalloc/include" >> $GITHUB_ENV
+          echo "CMAKE_PREFIX_PATH=$BREW_PREFIX;$BREW_PREFIX/opt/jemalloc" >> $GITHUB_ENV
+
       - name: Build (without PGO)
         run: |
-          make clean
-          make FEATURE_SUPPORT_PGO=disabled _all
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DOPTION_SUPPORT_PGO=disabled -DCMAKE_PREFIX_PATH="$CMAKE_PREFIX_PATH"
+          cmake --build build
 
       - name: Test
-        run: python3 scripts/perft_test.py
+        run: python3 scripts/perft_test.py build
 
       - name: Build (with PGO)
         run: |
-          make clean
-          make _all
+          rm -rf build
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$CMAKE_PREFIX_PATH"
+          cmake --build build
 
       - name: Cargo build (release)
         run: cargo build --release
@@ -267,7 +280,7 @@ jobs:
         run: cargo test --release --lib
         working-directory: rust
         env:
-          DYLD_LIBRARY_PATH: ${{ github.workspace }}
+          DYLD_LIBRARY_PATH: ${{ github.workspace }}/build
 
   build-freebsd-amd64:
     name: FreeBSD (${{ matrix.compiler }}) - amd64
@@ -294,7 +307,7 @@ jobs:
         with:
           usesh: true
           prepare: |
-            pkg install -y wget bash gsed gmake pkgconf llvm gcc git python3 zstd ncurses perl5 stockfish
+            pkg install -y wget bash gsed cmake gmake pkgconf llvm gcc git python3 zstd ncurses perl5 stockfish
           run: |
             set -ex
             if [ "${{ matrix.compiler }}" = "gcc" ]; then
@@ -303,8 +316,9 @@ jobs:
               export CC=clang CXX=clang++
             fi
             export MAKE=gmake
-            gmake clean
-            gmake FEATURE_SUPPORT_PGO=disabled _all
-            PYTHONPATH=scripts python3 -c "from perft_test import check_traditional; check_traditional()"
-            gmake clean
-            gmake _all
+            cmake -B build -DCMAKE_BUILD_TYPE=Release -DOPTION_SUPPORT_PGO=disabled
+            cmake --build build
+            PYTHONPATH=scripts python3 -c "import sys; sys.argv=['', 'build']; from perft_test import check_traditional; check_traditional()"
+            rm -rf build
+            cmake -B build -DCMAKE_BUILD_TYPE=Release
+            cmake --build build
