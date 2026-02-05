@@ -654,6 +654,16 @@ add_test(NAME perft_test
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
 
+# NNUE test executable
+if(BUILD_EXECUTABLES)
+  add_chess_executable(nnue_test nnue_test.cpp "${OPT_FLAGS}" "${OPT_FLAGS}")
+  
+  add_test(NAME nnue_test
+    COMMAND nnue_test
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  )
+endif()
+
 # =============================================================================
 # Installation
 # =============================================================================
