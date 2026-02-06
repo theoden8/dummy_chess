@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import chess
+import chess.engine
 import chess.syzygy
 
 
@@ -223,24 +224,34 @@ def generate_endgames(
     tablebase_path: str | None = None,
     config: EndgameConfig | None = None,
     max_attempts_per_position: int = 100,
-) -> list[tuple[str, float, int]]:
+    stockfish_path: str | None = None,
+) -> list[tuple[str, float]]:
     """
-    Generate endgame positions with tablebase evaluations.
+    Generate endgame positions with Stockfish evaluations.
+
+    Uses tablebases to filter valid endgame positions, then evaluates with Stockfish
+    for consistency with puzzle preprocessing.
 
     Args:
         n_positions: Number of positions to generate
         tablebase_path: Path to Syzygy tablebase files
         config: Generation configuration
         max_attempts_per_position: Max attempts before giving up on a position
+        stockfish_path: Path to Stockfish binary (uses 'stockfish' from PATH if None)
 
     Returns:
-        List of (fen, score, wdl) tuples
+        List of (fen, score) tuples
     """
+    from preprocess_puzzles import stockfish_eval
+
     if config is None:
         config = EndgameConfig()
 
     if tablebase_path is None:
         tablebase_path = DEFAULT_TABLEBASE_PATH
+
+    if stockfish_path is None:
+        stockfish_path = "stockfish"
 
     # Resolve max_pieces from tablebases if not specified
     max_pieces = config.resolve_max_pieces(tablebase_path)
@@ -249,32 +260,44 @@ def generate_endgames(
     tablebase = chess.syzygy.Tablebase()
     tablebase.add_directory(tablebase_path)
 
-    results: list[tuple[str, float, int]] = []
+    # Open Stockfish
+    engine = chess.engine.SimpleEngine.popen_uci(stockfish_path)
+
+    results: list[tuple[str, float]] = []
     attempts = 0
     max_total_attempts = n_positions * max_attempts_per_position * 10
 
-    while len(results) < n_positions and attempts < max_total_attempts:
-        attempts += 1
+    try:
+        while len(results) < n_positions and attempts < max_total_attempts:
+            attempts += 1
 
-        board = generate_random_position(config, max_pieces)
-        if board is None:
-            continue
-
-        # Probe tablebase
-        try:
-            wdl = tablebase.probe_wdl(board)
-            if wdl is None:
+            board = generate_random_position(config, max_pieces)
+            if board is None:
                 continue
-        except chess.syzygy.MissingTableError:
-            continue
-        except Exception:
-            continue
 
-        score = wdl_to_score(wdl, board.turn)
-        fen = board.fen()
-        results.append((fen, score, wdl))
+            # Probe tablebase to ensure it's a valid endgame position
+            try:
+                wdl = tablebase.probe_wdl(board)
+                if wdl is None:
+                    continue
+            except chess.syzygy.MissingTableError:
+                continue
+            except Exception:
+                continue
 
-    tablebase.close()
+            # Use Stockfish for evaluation (consistent with puzzle preprocessing)
+            try:
+                score = stockfish_eval(board, engine)
+                score = max(-15000, min(15000, score))
+            except Exception:
+                continue
+
+            fen = board.fen()
+            results.append((fen, float(score)))
+    finally:
+        engine.quit()
+        tablebase.close()
+
     return results
 
 
@@ -553,7 +576,8 @@ class MixedTrainingDataset(torch.utils.data.Dataset):
     Combines puzzle data and generated endgames, yielding (w_feats, b_feats, stm, score)
     tuples compatible with train.py's collate_sparse function.
 
-    Pre-loads all data into memory for fast random access and multiprocessing support.
+    Stores FEN strings and scores, extracts features on-the-fly using numba-optimized
+    extraction. Endgames are evaluated with Stockfish for consistency with puzzle data.
 
     Args:
         puzzle_path: Path to puzzle CSV file (expects 'fen' and 'score' columns)
@@ -561,6 +585,7 @@ class MixedTrainingDataset(torch.utils.data.Dataset):
         seed: Random seed for deterministic generation
         tablebase_path: Path to Syzygy tablebases for endgame generation
         endgame_config: Configuration for endgame generation
+        stockfish_path: Path to Stockfish binary (uses 'stockfish' from PATH if None)
 
     Example:
         from generate_endgames import MixedTrainingDataset
@@ -571,18 +596,8 @@ class MixedTrainingDataset(torch.utils.data.Dataset):
             endgame_ratio=0.3,  # 30% endgames, 70% puzzles
             seed=42,
         )
-        loader = DataLoader(dataset, batch_size=8192, collate_fn=collate_sparse, num_workers=4)
+        loader = DataLoader(dataset, batch_size=8192, collate_fn=collate_sparse, num_workers=0)
     """
-
-    # HalfKP feature extraction constants (must match train.py)
-    PIECE_TO_INDEX = [
-        [0, 1],
-        [2, 3],
-        [4, 5],
-        [6, 7],
-        [8, 9],
-        [-1, -1],  # P, N, B, R, Q, K
-    ]
 
     def __init__(
         self,
@@ -591,6 +606,7 @@ class MixedTrainingDataset(torch.utils.data.Dataset):
         seed: int | None = None,
         tablebase_path: str | None = None,
         endgame_config: EndgameConfig | None = None,
+        stockfish_path: str | None = None,
     ):
         import polars as pl
 
@@ -608,12 +624,13 @@ class MixedTrainingDataset(torch.utils.data.Dataset):
         n_puzzles = len(puzzles_df)
         n_endgames = int(n_puzzles * endgame_ratio / (1.0 - endgame_ratio))
 
-        # Generate endgames
+        # Generate endgames with Stockfish evaluation
         print(f"Generating {n_endgames} endgames...")
         endgames = generate_endgames(
             n_endgames,
             tablebase_path=tablebase_path,
             config=endgame_config,
+            stockfish_path=stockfish_path,
         )
 
         # Build combined list of (fen, score)
@@ -625,7 +642,7 @@ class MixedTrainingDataset(torch.utils.data.Dataset):
             self._data.append((row["fen"], float(row["score"])))
 
         # Add endgames
-        for fen, score, _wdl in endgames:
+        for fen, score in endgames:
             self._data.append((fen, score))
 
         # Shuffle deterministically
@@ -636,38 +653,11 @@ class MixedTrainingDataset(torch.utils.data.Dataset):
             f"Dataset ready: {len(self._data)} positions ({n_puzzles} puzzles + {len(endgames)} endgames)"
         )
 
-    @staticmethod
-    def get_halfkp_features(fen: str) -> tuple[list[int], list[int], int]:
-        """Extract HalfKP features from FEN (same as train.py)."""
-        board = chess.Board(fen)
-        wk, bk = board.king(chess.WHITE), board.king(chess.BLACK)
-
-        white_feats, black_feats = [], []
-        for sq in chess.SQUARES:
-            pc = board.piece_at(sq)
-            if pc is None or pc.piece_type == chess.KING:
-                continue
-            pt = pc.piece_type - 1
-            is_white = pc.color
-
-            white_feats.append(
-                wk * 641
-                + MixedTrainingDataset.PIECE_TO_INDEX[pt][0 if is_white else 1] * 64
-                + sq
-                + 1
-            )
-            black_feats.append(
-                (63 - bk) * 641
-                + MixedTrainingDataset.PIECE_TO_INDEX[pt][1 if is_white else 0] * 64
-                + (63 - sq)
-                + 1
-            )
-
-        return white_feats, black_feats, 0 if board.turn else 1
-
     def __getitem__(self, idx: int) -> tuple[list[int], list[int], int, float]:
+        from train import get_halfkp_features
+
         fen, score = self._data[idx]
-        w, b, stm = self.get_halfkp_features(fen)
+        w, b, stm = get_halfkp_features(fen)
         return w, b, stm, score
 
     def __len__(self) -> int:
@@ -740,22 +730,17 @@ def main():
     # Write to CSV
     output_path = Path(args.output)
     with open(output_path, "w") as f:
-        f.write("fen,score,wdl\n")
-        for fen, score, wdl in positions:
-            f.write(f"{fen},{score},{wdl}\n")
+        f.write("fen,score\n")
+        for fen, score in positions:
+            f.write(f"{fen},{score}\n")
 
     print(f"Saved to {output_path}")
 
-    # Print WDL distribution
-    wdl_counts = {-2: 0, -1: 0, 0: 0, 1: 0, 2: 0}
-    for _, _, wdl in positions:
-        wdl_counts[wdl] += 1
-    print("\nWDL distribution:")
-    print(f"  Wins:    {wdl_counts[2]}")
-    print(f"  Cursed:  {wdl_counts[1]}")
-    print(f"  Draws:   {wdl_counts[0]}")
-    print(f"  Blessed: {wdl_counts[-1]}")
-    print(f"  Losses:  {wdl_counts[-2]}")
+    # Print score stats
+    scores = [s for _, s in positions]
+    print(
+        f"\nScore stats: min={min(scores):.0f}, max={max(scores):.0f}, mean={sum(scores) / len(scores):.0f}"
+    )
 
 
 if __name__ == "__main__":

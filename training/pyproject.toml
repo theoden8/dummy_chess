@@ -12,10 +12,11 @@ dependencies = [
     "torch>=2.5.0,<2.6.0",
     "numpy>=1.24.0",
     "pandas>=2.0.0",
-    "python-chess>=1.999",
+    "chess>=1.10.0",
     "tqdm>=4.65.0",
     "scipy>=1.15.3",
     "polars>=1.38.0",
+    "numba>=0.60.0",
     "dummy-chess @ file:///${PROJECT_ROOT}/..",
 ]
 
@@ -30,12 +31,17 @@ explicit = true
 [tool.setuptools]
 py-modules = ["train", "preprocess_puzzles", "generate_endgames"]
 
+[tool.pytest.ini_options]
+markers = [
+    "benchmark: marks tests as benchmarks (deselect with '-m \"not benchmark\"')",
+]
+
 [dependency-groups]
 dev = [
     "bpython>=0.26",
-    "chess>=1.11.2",
     "ipykernel>=7.1.0",
     "ipywidgets>=8.1.8",
     "matplotlib>=3.10.8",
     "seaborn>=0.13.2",
+    "pytest>=8.0.0",
 ]

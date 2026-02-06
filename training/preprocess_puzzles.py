@@ -2,17 +2,17 @@
 """
 Preprocess Lichess puzzles for NNUE training.
 
-Generates train/val/test splits from puzzle CSV.
+Generates train/val/test splits from puzzle CSV (supports .zst compression).
 """
 
 import argparse
-import os
 import random
 import sys
 from pathlib import Path
 
 import chess
-import pandas as pd
+import chess.engine
+import polars as pl
 from tqdm import tqdm
 
 PIECE_VALUES = {
@@ -45,17 +45,15 @@ def stockfish_eval(board: chess.Board, engine) -> int:
     return score.score()
 
 
-def process_puzzle(line: str, engine=None):
-    """Process single puzzle line. Returns (fen, score) or None."""
+def process_puzzle_row(row: dict, engine=None):
+    """Process single puzzle row. Returns (fen, score) or None."""
     try:
-        parts = line.strip().split(",")
-        if len(parts) < 3:
+        fen = row.get("FEN")
+        moves_str = row.get("Moves")
+        if not fen or not moves_str:
             return None
 
-        fen, moves = parts[1], parts[2].split()
-        if not fen or not moves:
-            return None
-
+        moves = moves_str.split()
         board = chess.Board(fen)
         for m in moves:
             move = chess.Move.from_uci(m)
@@ -71,7 +69,7 @@ def process_puzzle(line: str, engine=None):
 
 def main():
     parser = argparse.ArgumentParser(description="Preprocess puzzles for NNUE training")
-    parser.add_argument("-i", "--input", default="data/lichess_db_puzzle.csv")
+    parser.add_argument("-i", "--input", default="data/lichess_db_puzzle.csv.zst")
     parser.add_argument("-o", "--output-dir", default="data")
     parser.add_argument("-s", "--stockfish", default=None, help="Path to stockfish")
     parser.add_argument("-n", "--max", type=int, default=None)
@@ -87,11 +85,10 @@ def main():
         args.max = 35000  # ~10k each after 90/5/5 split, with some buffer for invalid
         args.output_dir = "data/toy"
 
-    if not os.path.exists(args.input):
+    input_path = Path(args.input)
+    if not input_path.exists():
         print(f"Error: {args.input} not found")
-        print(
-            "Download: wget https://database.lichess.org/lichess_db_puzzle.csv.zst && zstd -d *.zst"
-        )
+        print("Download: wget https://database.lichess.org/lichess_db_puzzle.csv.zst")
         sys.exit(1)
 
     # Setup stockfish
@@ -103,24 +100,21 @@ def main():
         except Exception as e:
             print(f"Stockfish failed ({e}), using material eval")
 
-    # Count lines
-    print("Counting lines...")
-    with open(args.input) as f:
-        total = sum(1 for _ in f) - 1
+    # Load puzzles with polars (handles .zst automatically)
+    print(f"Loading {args.input}...")
+    df = pl.read_csv(args.input)
+    total = len(df)
     if args.max:
         total = min(total, args.max)
+        df = df.head(total)
 
     # Process
     print(f"Processing {total} puzzles...")
     data = []
-    with open(args.input) as f:
-        f.readline()  # skip header
-        for i, line in enumerate(tqdm(f, total=total)):
-            if args.max and i >= args.max:
-                break
-            result = process_puzzle(line, engine)
-            if result:
-                data.append(result)
+    for row in tqdm(df.iter_rows(named=True), total=total):
+        result = process_puzzle_row(row, engine)
+        if result:
+            data.append(result)
 
     if engine:
         engine.quit()
@@ -147,10 +141,10 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
 
     for name, rows in splits.items():
-        df = pd.DataFrame(rows, columns=["fen", "score"])
+        out_df = pl.DataFrame(rows, schema=["fen", "score"], orient="row")
         path = out_dir / f"{name}.csv.gz"
-        df.to_csv(path, index=False, compression="gzip")
-        print(f"{name}: {len(df)} -> {path}")
+        out_df.write_csv(path)
+        print(f"{name}: {len(out_df)} -> {path}")
 
     # Stats
     all_scores = [s for _, s in data]
