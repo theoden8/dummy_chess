@@ -219,3 +219,88 @@ Network Layers:
 | **Total from scratch** | **~2300** | **~1150** |
 
 At 3GHz: ~100ns incremental, ~400ns full refresh (AVX2)
+
+## Training Infrastructure
+
+### Overview
+
+Training uses PyTorch with a streaming data pipeline. The model trains in float32, then weights are quantized for C++ inference.
+
+### Data Pipeline
+
+```
+Lichess Data (.csv.zst)
+        |
+        v
+preprocess.py (streaming)
+        |
+        v
+Parquet files (compressed FEN + score)
+        |
+        v
+LazyFrameDataset (polars streaming)
+        |
+        v
+C++ get_halfkp_features_batch()
+        |
+        v
+PyTorch DataLoader
+```
+
+### Key Components
+
+**`training/preprocess.py`**
+- `process_evals()`: Lichess evaluation database
+- `process_puzzles()`: Lichess puzzles (2 positions per puzzle: start + after move 1)
+- `process_endgames()`: Random endgame positions with tablebase scores
+- All use streaming and batch FEN compression
+
+**`training/train.py`**
+- `SplitConfig`: Controls train/val/test splits with seed for reproducibility
+- `LazyFrameDataset`: Streams parquet data, extracts features via C++ bindings
+- `HalfKPNet`: PyTorch model matching the target architecture
+- Uses `SparseAdam` for HalfKP embeddings, `AdamW` for dense layers
+
+**`python/Bindings.cpp`**
+- `compress_fen()` / `decompress_fen()`: FEN compression (single)
+- `compress_fens_batch()` / `decompress_fens_batch()`: Batch compression
+- `get_halfkp_features_batch(fens, flip)`: ~250x faster than Python feature extraction
+
+### Training Features
+
+- **Flip augmentation**: `--flip-augment` yields both original and color-swapped positions (2x data, zero-mean scores)
+- **Memory efficient**: True streaming via `collect_batches()`, no full dataset materialization
+- **Mixed precision**: Optional AMP for faster training on supported GPUs
+
+### Usage
+
+```bash
+cd training
+
+# Preprocess data
+uv run python preprocess.py evals -n 100000 -o data/evals.parquet
+uv run python preprocess.py puzzles -n 50000 -o data/puzzles.parquet
+
+# Train
+uv run python -m train data/evals.parquet --epochs 10 --batch-size 4096 --flip-augment
+
+# Rebuild C++ module after Bindings.cpp changes
+uv run --reinstall-package dummy-chess python -c "import dummy_chess"
+```
+
+## TODO
+
+### Inference (C++)
+- [ ] Implement SIMD-optimized forward pass
+- [ ] Implement incremental accumulator updates
+- [ ] Add weight quantization export from PyTorch
+- [ ] Integrate with search
+
+### Training
+- [x] Streaming data pipeline
+- [x] C++ batched feature extraction
+- [x] Flip augmentation for zero-mean scores
+- [x] Memory-efficient batch iteration
+- [ ] Learning rate scheduling
+- [ ] Validation/early stopping
+- [ ] Train on full Lichess eval dataset

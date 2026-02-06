@@ -5,14 +5,22 @@ Efficient NNUE Training using PyTorch
 Architecture: HalfKP(41024) -> 256x2 -> 32 -> 32 -> 1
 """
 
+import __future__
+
 import argparse
+import dataclasses
+import pathlib
+import random
 import struct
-from pathlib import Path
+import sys
+import threading
+import typing
 
 import chess
+import dummy_chess
 import numba
 import numpy as np
-import pandas as pd
+import polars as pl
 import torch
 import torch.nn.functional as F
 import tqdm.auto as tqdm
@@ -105,8 +113,6 @@ def _compute_halfkp_features(
 
 
 # Thread-local storage for pre-allocated arrays (needed for num_workers > 0)
-import threading
-
 _MAX_PIECES = 32
 
 
@@ -171,8 +177,12 @@ def parse_fen_fast(
     return piece_squares, piece_types, piece_colors, n_pieces, wk, bk, white_to_move
 
 
-def get_halfkp_features(fen: str) -> tuple[list[int], list[int], int]:
-    """Extract HalfKP features from FEN (numba-accelerated)."""
+def get_halfkp_features(fen: str | bytes) -> tuple[list[int], list[int], int]:
+    """Extract HalfKP features from FEN string or compressed FEN bytes (numba-accelerated)."""
+    # Decompress if bytes
+    if isinstance(fen, bytes):
+        fen = dummy_chess.decompress_fen(fen)
+
     piece_squares, piece_types, piece_colors, n_pieces, wk, bk, white_to_move = (
         parse_fen_fast(fen)
     )
@@ -187,12 +197,16 @@ def get_halfkp_features(fen: str) -> tuple[list[int], list[int], int]:
     return white_feats.tolist(), black_feats.tolist(), 0 if white_to_move else 1
 
 
-def get_halfkp_features_np(fen: str) -> tuple[np.ndarray, np.ndarray, int]:
+def get_halfkp_features_np(fen: str | bytes) -> tuple[np.ndarray, np.ndarray, int]:
     """
-    Extract HalfKP features from FEN, returning numpy arrays.
+    Extract HalfKP features from FEN string or compressed FEN bytes, returning numpy arrays.
 
     Faster than get_halfkp_features when arrays are needed (avoids .tolist()).
     """
+    # Decompress if bytes
+    if isinstance(fen, bytes):
+        fen = dummy_chess.decompress_fen(fen)
+
     piece_squares, piece_types, piece_colors, n_pieces, wk, bk, white_to_move = (
         parse_fen_fast(fen)
     )
@@ -245,31 +259,257 @@ class NNUE(torch.nn.Module):
 # ============================================================================
 
 
-class ChunkDataset(torch.utils.data.IterableDataset):
-    def __init__(self, path: str, chunk_size: int = 50000):
-        self.path = path
+@dataclasses.dataclass
+class SplitConfig:
+    """
+    Configuration for deterministic train/val/test splitting.
+
+    Data should be pre-shuffled during preprocessing. This config only controls
+    which portion of the data to use for each split (no runtime shuffling).
+
+    Example:
+        split_cfg = SplitConfig(val_ratio=0.1, test_ratio=0.1)
+        train_ds = LazyFrameDataset(sources, split="train", split_config=split_cfg)
+        val_ds = LazyFrameDataset(sources, split="val", split_config=split_cfg)
+    """
+
+    val_ratio: float = 0.05
+    test_ratio: float = 0.05
+
+    def get_split_indices(self, n: int, split: str | None) -> tuple[int, int]:
+        """Get start and end indices for a split."""
+        n_test = int(n * self.test_ratio)
+        n_val = int(n * self.val_ratio)
+        n_train = n - n_val - n_test
+
+        if split == "train":
+            return 0, n_train
+        elif split == "val":
+            return n_train, n_train + n_val
+        elif split == "test":
+            return n_train + n_val, n
+        else:
+            return 0, n
+
+    def get_split_len(self, total: int, split: str | None) -> int:
+        """Get the length of a split."""
+        start, end = self.get_split_indices(total, split)
+        return end - start
+
+
+class LazyFrameDataset(torch.utils.data.IterableDataset):
+    """
+    Streaming dataset for large parquet files.
+
+    Streams data directly from parquet without loading into memory.
+    Data should be pre-shuffled during preprocessing.
+
+    Args:
+        sources: LazyFrame, or list of LazyFrames, or list of (LazyFrame, weight) tuples
+        split: Which split to use ('train', 'val', 'test', or None for all)
+        split_config: SplitConfig for splitting (uses row ranges, no shuffle)
+        chunk_size: Number of rows to process at a time
+        flip_augment: If True, yield both original and flipped positions (2x data)
+
+    Example:
+        split_cfg = SplitConfig(val_ratio=0.05, test_ratio=0.05)
+
+        # Single source (pre-shuffled)
+        lf = pl.scan_parquet("data/evals.parquet")
+        train_ds = LazyFrameDataset(lf, split="train", split_config=split_cfg)
+
+        # Multiple sources with weights (70% evals, 20% puzzles, 10% endgames)
+        train_ds = LazyFrameDataset([
+            (pl.scan_parquet("data/evals.parquet"), 0.7),
+            (pl.scan_parquet("data/puzzles.parquet"), 0.2),
+            (pl.scan_parquet("data/endgames.parquet"), 0.1),
+        ], split="train", split_config=split_cfg)
+    """
+
+    def __init__(
+        self,
+        sources: pl.LazyFrame | list[pl.LazyFrame] | list[tuple[pl.LazyFrame, float]],
+        split: str | None = None,
+        split_config: SplitConfig | None = None,
+        chunk_size: int = 50000,
+        flip_augment: bool = False,
+    ):
+        # Normalize to list of (LazyFrame, weight)
+        if isinstance(sources, pl.LazyFrame):
+            self.sources = [(sources, 1.0)]
+        elif isinstance(sources, list) and len(sources) > 0:
+            if isinstance(sources[0], tuple):
+                self.sources = list(sources)  # Already (lf, weight) tuples
+            else:
+                self.sources = [(lf, 1.0) for lf in sources]  # Equal weights
+        else:
+            self.sources = []
+
+        self.split = split
+        self.split_config = split_config or SplitConfig()
         self.chunk_size = chunk_size
+        self.flip_augment = flip_augment
         self._len: int | None = None
+        self._source_lens: list[int] | None = None
+
+    def _get_source_lens(self) -> list[int]:
+        """Get row counts for each source (cached)."""
+        if self._source_lens is None:
+            self._source_lens = []
+            for lf, _ in self.sources:
+                n = lf.select(pl.len()).collect(engine="streaming").item()
+                self._source_lens.append(n)
+        return self._source_lens
+
+    def _get_weighted_counts(self) -> list[int]:
+        """Calculate sample counts per source respecting weights with strict ratio."""
+        source_lens = self._get_source_lens()
+        weights = [w for _, w in self.sources]
+        total_weight = sum(weights)
+        norm_weights = [w / total_weight for w in weights]
+
+        split_lens = [
+            self.split_config.get_split_len(n, self.split) for n in source_lens
+        ]
+
+        # Find max total that respects strict ratio (limited by smallest source)
+        # For each source: max_total = available / weight
+        max_totals = [
+            avail / w if w > 0 else float("inf")
+            for avail, w in zip(split_lens, norm_weights)
+        ]
+        max_total = min(max_totals)
+
+        # Calculate actual counts maintaining strict ratio
+        return [int(max_total * w) for w in norm_weights]
 
     def __len__(self) -> int:
-        """Count rows in file (cached)."""
+        """Count samples in this split (cached)."""
         if self._len is None:
-            import polars as pl
-
-            self._len = pl.scan_csv(self.path).select(pl.len()).collect().item()
+            self._len = sum(self._get_weighted_counts())
+            if self.flip_augment:
+                self._len *= 2
         return self._len
 
     def __iter__(self):
-        compression = "gzip" if self.path.endswith(".gz") else None
-        for chunk in pd.read_csv(
-            self.path, chunksize=self.chunk_size, compression=compression
-        ):
-            for _, row in chunk.iterrows():
-                try:
-                    w, b, stm = get_halfkp_features(row["fen"])
-                    yield w, b, stm, float(row["score"])
-                except:
+        source_lens = self._get_source_lens()
+        weights = [w for _, w in self.sources]
+        total_weight = sum(weights)
+        norm_weights = [w / total_weight for w in weights]
+
+        # Get weighted counts (strict ratio)
+        actual_counts = self._get_weighted_counts()
+
+        # Create iterators for each source's split (limited to actual_count)
+        source_iters = []
+        for i, (lf, _) in enumerate(self.sources):
+            n = source_lens[i]
+            start_idx, end_idx = self.split_config.get_split_indices(n, self.split)
+
+            # Limit to actual_count samples
+            end_idx = min(end_idx, start_idx + actual_counts[i])
+
+            if start_idx == 0:
+                split_lf = lf.head(end_idx)
+            else:
+                split_size = end_idx - start_idx
+                split_lf = lf.slice(start_idx, split_size)
+
+            source_iters.append(split_lf.collect_batches(chunk_size=self.chunk_size))
+
+        # Interleave sources round-robin style
+        source_buffers: list[list] = [[] for _ in self.sources]
+        source_exhausted = [False] * len(self.sources)
+
+        def refill_buffer(idx: int) -> bool:
+            """Try to refill buffer for source idx. Returns False if exhausted."""
+            if source_exhausted[idx]:
+                return False
+            try:
+                batch = next(source_iters[idx])
+                fens = batch["fen"].to_list()
+                scores = batch["score"].to_list()
+
+                w_idx, w_off, b_idx, b_off, stm = dummy_chess.get_halfkp_features_batch(
+                    fens, False
+                )
+
+                n_samples = len(fens)
+                for i in range(n_samples):
+                    w_start = w_off[i]
+                    w_end = w_off[i + 1] if i + 1 < n_samples else len(w_idx)
+                    b_start = b_off[i]
+                    b_end = b_off[i + 1] if i + 1 < n_samples else len(b_idx)
+
+                    source_buffers[idx].append(
+                        (
+                            w_idx[w_start:w_end].copy(),
+                            b_idx[b_start:b_end].copy(),
+                            int(stm[i]),
+                            float(scores[i]),
+                        )
+                    )
+
+                # Also add flipped if augmenting
+                if self.flip_augment:
+                    w_idx_f, w_off_f, b_idx_f, b_off_f, stm_f = (
+                        dummy_chess.get_halfkp_features_batch(fens, True)
+                    )
+                    for i in range(n_samples):
+                        w_start = w_off_f[i]
+                        w_end = w_off_f[i + 1] if i + 1 < n_samples else len(w_idx_f)
+                        b_start = b_off_f[i]
+                        b_end = b_off_f[i + 1] if i + 1 < n_samples else len(b_idx_f)
+
+                        source_buffers[idx].append(
+                            (
+                                w_idx_f[w_start:w_end].copy(),
+                                b_idx_f[b_start:b_end].copy(),
+                                int(stm_f[i]),
+                                -float(scores[i]),
+                            )
+                        )
+
+                return True
+            except StopIteration:
+                source_exhausted[idx] = True
+                return False
+
+        # Yield samples interleaved by weight
+        rng = random.Random(42)  # Deterministic interleaving
+        while True:
+            # Check if all sources exhausted
+            all_empty = all(
+                len(buf) == 0 and source_exhausted[i]
+                for i, buf in enumerate(source_buffers)
+            )
+            if all_empty:
+                break
+
+            # Pick source based on weights (only from non-exhausted sources with data)
+            available = [
+                i
+                for i in range(len(self.sources))
+                if len(source_buffers[i]) > 0 or not source_exhausted[i]
+            ]
+            if not available:
+                break
+
+            # Weighted choice among available sources
+            avail_weights = [norm_weights[i] for i in available]
+            total_avail = sum(avail_weights)
+            avail_weights = [w / total_avail for w in avail_weights]
+
+            src_idx = rng.choices(available, avail_weights)[0]
+
+            # Refill if needed
+            if len(source_buffers[src_idx]) == 0:
+                if not refill_buffer(src_idx):
                     continue
+
+            # Yield sample
+            if source_buffers[src_idx]:
+                yield source_buffers[src_idx].pop(0)
 
 
 def collate_sparse(batch):
@@ -443,6 +683,7 @@ def train(
     epochs: int,
     batch_size: int,
     lr: float,
+    tracker: Tracker | None = None,
 ) -> tuple[NNUE, Tracker]:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
@@ -468,9 +709,15 @@ def train(
         if val_dataset is not None
         else None
     )
+    n_val_batches = (
+        (len(val_dataset) + batch_size - 1) // batch_size
+        if val_dataset is not None
+        else 0
+    )
 
     model = NNUE().to(device)
-    tracker = Tracker()
+    if tracker is None:
+        tracker = Tracker()
 
     # Use SparseAdam for sparse embedding, AdamW for dense layers
     sparse_params = [model.ft.weight]
@@ -488,11 +735,6 @@ def train(
     best_val = float("inf")
 
     # Calculate total batches for single progress bar across all epochs
-    n_val_batches = (
-        (len(val_dataset) + batch_size - 1) // batch_size
-        if val_dataset is not None
-        else 0
-    )
     batches_per_epoch = n_train_batches + n_val_batches
     total_batches = batches_per_epoch * epochs
 
@@ -641,7 +883,7 @@ def evaluate_fen(
     """
     if model is None:
         if model_path is None:
-            model_path = str(Path(__file__).parent / "network.pt")
+            model_path = str(pathlib.Path(__file__).parent / "network.pt")
         model = NNUE()
         model.load_state_dict(
             torch.load(model_path, map_location="cpu", weights_only=True)
@@ -664,13 +906,13 @@ def evaluate_fen(
 
 
 def evaluate_fens(
-    fens: list[str], model: NNUE | None = None, model_path: str | None = None
+    fens: list[str | bytes], model: NNUE | None = None, model_path: str | None = None
 ) -> list[float]:
     """
     Evaluate multiple FEN positions using the NNUE model (batched).
 
     Args:
-        fens: List of FEN strings to evaluate
+        fens: List of FEN strings or compressed FEN bytes to evaluate
         model: Pre-loaded NNUE model (optional)
         model_path: Path to .pt model file (used if model is None)
 
@@ -679,7 +921,7 @@ def evaluate_fens(
     """
     if model is None:
         if model_path is None:
-            model_path = str(Path(__file__).parent / "network.pt")
+            model_path = str(pathlib.Path(__file__).parent / "network.pt")
         model = NNUE()
         model.load_state_dict(
             torch.load(model_path, map_location="cpu", weights_only=True)
@@ -688,8 +930,26 @@ def evaluate_fens(
 
     device = _get_model_device(model)
 
+    # Batch decompress any compressed FENs
+    fen_strs: list[str] = []
+    compressed_indices: list[int] = []
+    compressed_fens: list[bytes] = []
+
+    for i, fen in enumerate(fens):
+        if isinstance(fen, bytes):
+            compressed_indices.append(i)
+            compressed_fens.append(fen)
+            fen_strs.append("")  # placeholder
+        else:
+            fen_strs.append(fen)
+
+    if compressed_fens:
+        decompressed = dummy_chess.decompress_fens_batch(compressed_fens)
+        for i, idx in enumerate(compressed_indices):
+            fen_strs[idx] = decompressed[i]
+
     # Extract features for all positions
-    batch = [get_halfkp_features(fen) for fen in fens]
+    batch = [get_halfkp_features(fen) for fen in fen_strs]
 
     # Collate into batched tensors
     w_all, b_all, w_off, b_off = [], [], [0], [0]
@@ -718,17 +978,61 @@ def evaluate_fens(
 # ============================================================================
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--train", default="data/train.csv.gz")
-    parser.add_argument("--val", default="data/val.csv.gz")
+    import polars as pl
+
+    parser = argparse.ArgumentParser(
+        description="Train NNUE network. Data should be pre-shuffled during preprocessing."
+    )
+    parser.add_argument(
+        "data",
+        nargs="+",
+        help="One or more parquet/CSV files (pre-shuffled)",
+    )
     parser.add_argument("--output", default="network.nnue")
     parser.add_argument("--epochs", type=int, default=30)
     parser.add_argument("--batch-size", type=int, default=8192)
     parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--val-ratio", type=float, default=0.05)
+    parser.add_argument("--test-ratio", type=float, default=0.05)
+    parser.add_argument(
+        "--flip-augment",
+        action="store_true",
+        help="Augment data by including flipped positions (2x data, zero mean scores)",
+    )
     args = parser.parse_args()
 
-    train_dataset = ChunkDataset(args.train)
-    val_dataset = ChunkDataset(args.val) if Path(args.val).exists() else None
+    # Load all data sources as LazyFrames
+    sources: list[pl.LazyFrame] = []
+    for path in args.data:
+        if not pathlib.Path(path).exists():
+            print(f"Error: {path} not found")
+            sys.exit(1)
+        if path.endswith(".parquet"):
+            sources.append(pl.scan_parquet(path))
+        else:
+            sources.append(pl.scan_csv(path))
+        print(f"Added: {path}")
+
+    # Create split config and datasets
+    split_config = SplitConfig(
+        val_ratio=args.val_ratio,
+        test_ratio=args.test_ratio,
+    )
+    train_dataset = LazyFrameDataset(
+        sources,
+        split="train",
+        split_config=split_config,
+        flip_augment=args.flip_augment,
+    )
+    val_dataset = LazyFrameDataset(
+        sources,
+        split="val",
+        split_config=split_config,
+        flip_augment=False,  # No augmentation for validation
+    )
+
+    print(f"Train: {len(train_dataset)} rows, Val: {len(val_dataset)} rows")
+
     train(
         train_dataset, val_dataset, args.output, args.epochs, args.batch_size, args.lr
     )
