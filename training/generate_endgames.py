@@ -219,39 +219,85 @@ def wdl_to_score(wdl: int, turn: bool) -> float:
     return score
 
 
+def dtz_to_score(dtz: int, wdl: int, turn: bool) -> float:
+    """
+    Convert tablebase DTZ (Distance To Zeroing) to a more granular score.
+
+    DTZ gives distance in plies to a zeroing move (capture or pawn push).
+    Positive DTZ = winning, negative DTZ = losing.
+    Combines WDL outcome with DTZ distance for more informative training signal.
+
+    Args:
+        dtz: Distance to zeroing (plies). Positive = winning, negative = losing.
+        wdl: WDL value (2=win, 1=cursed win, 0=draw, -1=blessed loss, -2=loss)
+        turn: True if white to move
+
+    Returns:
+        Score in centipawns from white's perspective.
+        - Winning positions: 800-1000cp based on DTZ (shorter = higher)
+        - Losing positions: -800 to -1000cp based on DTZ
+        - Cursed/blessed: ±90cp (will likely be drawn by 50-move rule)
+        - Draws: 0cp
+    """
+    if wdl == 0:  # Draw
+        return 0.0
+
+    if wdl == 1:  # Cursed win (50-move rule likely)
+        score = 90.0
+    elif wdl == -1:  # Blessed loss
+        score = -90.0
+    elif wdl == 2:  # Win
+        # Map DTZ to score: shorter wins get higher scores
+        # Typical DTZ range is 1-100+ plies
+        # Score range: 800cp (DTZ=100) to 1000cp (DTZ=1)
+        abs_dtz = abs(dtz)
+        # Clamp DTZ to reasonable range and map to 800-1000
+        clamped_dtz = min(max(abs_dtz, 1), 100)
+        score = 1000.0 - (clamped_dtz - 1) * 2.0  # 1->1000, 100->802
+    elif wdl == -2:  # Loss
+        abs_dtz = abs(dtz)
+        clamped_dtz = min(max(abs_dtz, 1), 100)
+        score = -1000.0 + (clamped_dtz - 1) * 2.0  # 1->-1000, 100->-802
+    else:
+        score = 0.0
+
+    # Convert to white's perspective
+    if not turn:
+        score = -score
+
+    return score
+
+
 def generate_endgames(
     n_positions: int,
     tablebase_path: str | None = None,
     config: EndgameConfig | None = None,
     max_attempts_per_position: int = 100,
-    stockfish_path: str | None = None,
+    use_dtz: bool = True,
 ) -> list[tuple[str, float]]:
     """
-    Generate endgame positions with Stockfish evaluations.
+    Generate endgame positions with tablebase evaluations.
 
-    Uses tablebases to filter valid endgame positions, then evaluates with Stockfish
-    for consistency with puzzle preprocessing.
+    Uses tablebases to generate valid endgame positions and converts WDL/DTZ to
+    approximate centipawn scores.
 
     Args:
         n_positions: Number of positions to generate
         tablebase_path: Path to Syzygy tablebase files
         config: Generation configuration
         max_attempts_per_position: Max attempts before giving up on a position
-        stockfish_path: Path to Stockfish binary (uses 'stockfish' from PATH if None)
+        use_dtz: If True, use DTZ for more granular scoring (default True)
 
     Returns:
         List of (fen, score) tuples
     """
-    from preprocess_puzzles import stockfish_eval
+    from tqdm.auto import tqdm
 
     if config is None:
         config = EndgameConfig()
 
     if tablebase_path is None:
         tablebase_path = DEFAULT_TABLEBASE_PATH
-
-    if stockfish_path is None:
-        stockfish_path = "stockfish"
 
     # Resolve max_pieces from tablebases if not specified
     max_pieces = config.resolve_max_pieces(tablebase_path)
@@ -260,12 +306,11 @@ def generate_endgames(
     tablebase = chess.syzygy.Tablebase()
     tablebase.add_directory(tablebase_path)
 
-    # Open Stockfish
-    engine = chess.engine.SimpleEngine.popen_uci(stockfish_path)
-
     results: list[tuple[str, float]] = []
     attempts = 0
     max_total_attempts = n_positions * max_attempts_per_position * 10
+
+    pbar = tqdm(total=n_positions, desc="Endgames")
 
     try:
         while len(results) < n_positions and attempts < max_total_attempts:
@@ -275,27 +320,32 @@ def generate_endgames(
             if board is None:
                 continue
 
-            # Probe tablebase to ensure it's a valid endgame position
+            # Probe tablebase
             try:
                 wdl = tablebase.probe_wdl(board)
                 if wdl is None:
                     continue
+
+                if use_dtz:
+                    dtz = tablebase.probe_dtz(board)
+                    if dtz is None:
+                        # Fall back to WDL if DTZ unavailable
+                        score = wdl_to_score(wdl, board.turn)
+                    else:
+                        score = dtz_to_score(dtz, wdl, board.turn)
+                else:
+                    score = wdl_to_score(wdl, board.turn)
+
             except chess.syzygy.MissingTableError:
                 continue
             except Exception:
                 continue
 
-            # Use Stockfish for evaluation (consistent with puzzle preprocessing)
-            try:
-                score = stockfish_eval(board, engine)
-                score = max(-15000, min(15000, score))
-            except Exception:
-                continue
-
             fen = board.fen()
-            results.append((fen, float(score)))
+            results.append((fen, score))
+            pbar.update(1)
     finally:
-        engine.quit()
+        pbar.close()
         tablebase.close()
 
     return results
@@ -321,11 +371,13 @@ class EndgameDataset:
         config: EndgameConfig | None = None,
         positions_per_epoch: int = 100000,
         seed: int | None = None,
+        use_dtz: bool = True,
     ):
         self.tablebase_path = tablebase_path or DEFAULT_TABLEBASE_PATH
         self.config = config or EndgameConfig()
         self.positions_per_epoch = positions_per_epoch
         self.seed = seed
+        self.use_dtz = use_dtz
         self._tablebase: chess.syzygy.Tablebase | None = None
         self._max_pieces: int | None = None
 
@@ -360,10 +412,18 @@ class EndgameDataset:
                 wdl = tb.probe_wdl(board)
                 if wdl is None:
                     continue
+
+                if self.use_dtz:
+                    dtz = tb.probe_dtz(board)
+                    if dtz is None:
+                        score = wdl_to_score(wdl, board.turn)
+                    else:
+                        score = dtz_to_score(dtz, wdl, board.turn)
+                else:
+                    score = wdl_to_score(wdl, board.turn)
             except Exception:
                 continue
 
-            score = wdl_to_score(wdl, board.turn)
             yield board.fen(), score, wdl
             count += 1
 
@@ -462,6 +522,7 @@ class MixedDataset:
         seed: int | None = None,
         tablebase_path: str | None = None,
         endgame_config: EndgameConfig | None = None,
+        use_dtz: bool = True,
     ):
         if not 0.0 <= endgame_ratio < 1.0:
             raise ValueError("endgame_ratio must be in [0.0, 1.0)")
@@ -471,6 +532,7 @@ class MixedDataset:
         self.seed = seed
         self.tablebase_path = tablebase_path or DEFAULT_TABLEBASE_PATH
         self.endgame_config = endgame_config or EndgameConfig()
+        self.use_dtz = use_dtz
 
         # Calculate positions_per_epoch from puzzle count and ratio
         self._n_puzzles = _count_csv_rows(puzzle_path)
@@ -533,7 +595,16 @@ class MixedDataset:
                         wdl = tb.probe_wdl(board)
                         if wdl is None:
                             continue
-                        score = wdl_to_score(wdl, board.turn)
+
+                        if self.use_dtz:
+                            dtz = tb.probe_dtz(board)
+                            if dtz is None:
+                                score = wdl_to_score(wdl, board.turn)
+                            else:
+                                score = dtz_to_score(dtz, wdl, board.turn)
+                        else:
+                            score = wdl_to_score(wdl, board.turn)
+
                         yield board.fen(), score
                         count += 1
                         break
@@ -577,7 +648,7 @@ class MixedTrainingDataset(torch.utils.data.Dataset):
     tuples compatible with train.py's collate_sparse function.
 
     Stores FEN strings and scores, extracts features on-the-fly using numba-optimized
-    extraction. Endgames are evaluated with Stockfish for consistency with puzzle data.
+    extraction. Endgames are evaluated using tablebase WDL/DTZ scoring.
 
     Args:
         puzzle_path: Path to puzzle CSV file (expects 'fen' and 'score' columns)
@@ -585,7 +656,7 @@ class MixedTrainingDataset(torch.utils.data.Dataset):
         seed: Random seed for deterministic generation
         tablebase_path: Path to Syzygy tablebases for endgame generation
         endgame_config: Configuration for endgame generation
-        stockfish_path: Path to Stockfish binary (uses 'stockfish' from PATH if None)
+        use_dtz: If True, use DTZ for more granular endgame scoring (default True)
 
     Example:
         from generate_endgames import MixedTrainingDataset
@@ -606,7 +677,7 @@ class MixedTrainingDataset(torch.utils.data.Dataset):
         seed: int | None = None,
         tablebase_path: str | None = None,
         endgame_config: EndgameConfig | None = None,
-        stockfish_path: str | None = None,
+        use_dtz: bool = True,
     ):
         import polars as pl
 
@@ -624,13 +695,13 @@ class MixedTrainingDataset(torch.utils.data.Dataset):
         n_puzzles = len(puzzles_df)
         n_endgames = int(n_puzzles * endgame_ratio / (1.0 - endgame_ratio))
 
-        # Generate endgames with Stockfish evaluation
+        # Generate endgames with WDL/DTZ evaluation
         print(f"Generating {n_endgames} endgames...")
         endgames = generate_endgames(
             n_endgames,
             tablebase_path=tablebase_path,
             config=endgame_config,
-            stockfish_path=stockfish_path,
+            use_dtz=use_dtz,
         )
 
         # Build combined list of (fen, score)
