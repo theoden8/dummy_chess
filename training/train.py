@@ -5,17 +5,26 @@ Efficient NNUE Training using PyTorch
 Architecture: HalfKP(41024) -> 256x2 -> 32 -> 32 -> 1
 """
 
+from __future__ import annotations
+
 import argparse
+import random
 import struct
+import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import chess
 import numba
 import numpy as np
 import pandas as pd
+import polars as pl
 import torch
 import torch.nn.functional as F
 import tqdm.auto as tqdm
+
+if TYPE_CHECKING:
+    pass
 
 # ============================================================================
 # Architecture Constants (must match NNUE.hpp)
@@ -245,30 +254,301 @@ class NNUE(torch.nn.Module):
 # ============================================================================
 
 
-class ChunkDataset(torch.utils.data.IterableDataset):
-    def __init__(self, path: str, chunk_size: int = 50000):
+class DataSource:
+    """
+    A data source with a LazyFrame and optional weight for proportional sampling.
+
+    Args:
+        path: Path to CSV file
+        weight: Relative weight for sampling (default 1.0)
+        name: Optional name for logging
+    """
+
+    def __init__(self, path: str, weight: float = 1.0, name: str | None = None):
         self.path = path
+        self.weight = weight
+        self.name = name or Path(path).stem
+        self._lf: pl.LazyFrame | None = None
+        self._len: int | None = None
+
+    @property
+    def lf(self) -> pl.LazyFrame:
+        if self._lf is None:
+            self._lf = pl.scan_csv(self.path)
+        return self._lf
+
+    def __len__(self) -> int:
+        if self._len is None:
+            self._len = self.lf.select(pl.len()).collect().item()
+        return self._len
+
+    def __repr__(self) -> str:
+        return f"DataSource({self.name}, weight={self.weight}, len={len(self)})"
+
+
+class ProportionalDataset(torch.utils.data.IterableDataset):
+    """
+    Dataset that samples from multiple sources with configurable proportions.
+
+    Each epoch samples from sources according to their weights. Sources are
+    shuffled independently and sampled proportionally.
+
+    Args:
+        sources: List of DataSource objects or (path, weight) tuples
+        split: Which split to use ('train', 'val', 'test', or None for all)
+        val_ratio: Fraction for validation set (default 0.05)
+        test_ratio: Fraction for test set (default 0.05)
+        seed: Random seed for shuffling and sampling
+        epoch_size: Total samples per epoch (None = sum of all source lengths)
+
+    Example:
+        dataset = ProportionalDataset([
+            DataSource("data/evals.csv.gz", weight=0.7),
+            DataSource("data/puzzles.csv.gz", weight=0.2),
+            DataSource("data/endgames.csv.gz", weight=0.1),
+        ], split="train")
+
+        # Or with tuples:
+        dataset = ProportionalDataset([
+            ("data/evals.csv.gz", 0.7),
+            ("data/puzzles.csv.gz", 0.2),
+            ("data/endgames.csv.gz", 0.1),
+        ], split="train")
+    """
+
+    def __init__(
+        self,
+        sources: list[DataSource | tuple[str, float]],
+        split: str | None = None,
+        val_ratio: float = 0.05,
+        test_ratio: float = 0.05,
+        seed: int = 42,
+        epoch_size: int | None = None,
+    ):
+        # Normalize sources
+        self.sources = []
+        for src in sources:
+            if isinstance(src, DataSource):
+                self.sources.append(src)
+            else:
+                path, weight = src
+                self.sources.append(DataSource(path, weight))
+
+        self.split = split
+        self.val_ratio = val_ratio
+        self.test_ratio = test_ratio
+        self.seed = seed
+        self.epoch_size = epoch_size
+        self._len: int | None = None
+
+        # Normalize weights to sum to 1
+        total_weight = sum(s.weight for s in self.sources)
+        self._normalized_weights = [s.weight / total_weight for s in self.sources]
+
+    def __len__(self) -> int:
+        if self._len is None:
+            if self.epoch_size is not None:
+                total = self.epoch_size
+            else:
+                total = sum(len(s) for s in self.sources)
+
+            # Adjust for split
+            if self.split == "train":
+                self._len = int(total * (1 - self.val_ratio - self.test_ratio))
+            elif self.split == "val":
+                self._len = int(total * self.val_ratio)
+            elif self.split == "test":
+                self._len = int(total * self.test_ratio)
+            else:
+                self._len = total
+
+        return self._len  # type: ignore[return-value]
+
+    def _get_split_ratio(self) -> tuple[float, float]:
+        """Get (start_ratio, end_ratio) for current split."""
+        if self.split == "train":
+            return 0.0, 1.0 - self.val_ratio - self.test_ratio
+        elif self.split == "val":
+            return 1.0 - self.val_ratio - self.test_ratio, 1.0 - self.test_ratio
+        elif self.split == "test":
+            return 1.0 - self.test_ratio, 1.0
+        else:
+            return 0.0, 1.0
+
+    def __iter__(self):
+        rng = random.Random(self.seed)
+        start_ratio, end_ratio = self._get_split_ratio()
+
+        # Load and shuffle each source, then take the split portion
+        source_iters = []
+        for src in self.sources:
+            # Shuffle deterministically using hash
+            df = (
+                src.lf.with_columns(
+                    (pl.col("fen").hash(seed=self.seed) % (2**32)).alias("_shuffle_key")
+                )
+                .sort("_shuffle_key")
+                .drop("_shuffle_key")
+                .collect()
+            )
+
+            # Take split portion
+            n = len(df)
+            start_idx = int(n * start_ratio)
+            end_idx = int(n * end_ratio)
+            split_df = df.slice(start_idx, end_idx - start_idx)
+
+            source_iters.append(iter(split_df.iter_rows(named=True)))
+
+        # Sample proportionally from sources
+        samples_yielded = 0
+        target_samples = len(self)
+
+        while samples_yielded < target_samples:
+            # Choose source based on weights
+            src_idx = rng.choices(range(len(self.sources)), self._normalized_weights)[0]
+
+            try:
+                row = next(source_iters[src_idx])
+                w, b, stm = get_halfkp_features(row["fen"])
+                yield w, b, stm, float(row["score"])
+                samples_yielded += 1
+            except StopIteration:
+                # Source exhausted, reload and reshuffle
+                src = self.sources[src_idx]
+                df = (
+                    src.lf.with_columns(
+                        (
+                            pl.col("fen").hash(seed=self.seed + samples_yielded)
+                            % (2**32)
+                        ).alias("_shuffle_key")
+                    )
+                    .sort("_shuffle_key")
+                    .drop("_shuffle_key")
+                    .collect()
+                )
+
+                n = len(df)
+                start_idx = int(n * start_ratio)
+                end_idx = int(n * end_ratio)
+                split_df = df.slice(start_idx, end_idx - start_idx)
+
+                source_iters[src_idx] = iter(split_df.iter_rows(named=True))
+            except Exception:
+                continue
+
+
+class LazyFrameDataset(torch.utils.data.IterableDataset):
+    """
+    Dataset that accepts one or more polars LazyFrames.
+
+    Supports train/val/test splitting and multiple data sources.
+
+    Args:
+        sources: LazyFrame or list of LazyFrames with 'fen' and 'score' columns
+        split: Which split to use ('train', 'val', 'test', or None for all)
+        val_ratio: Fraction for validation set (default 0.05)
+        test_ratio: Fraction for test set (default 0.05)
+        seed: Random seed for splitting
+        chunk_size: Batch size for iterating over LazyFrames
+
+    Example:
+        # Single source
+        lf = pl.scan_csv("data/evals.csv.gz")
+        train_ds = LazyFrameDataset(lf, split="train")
+        val_ds = LazyFrameDataset(lf, split="val")
+
+        # Multiple sources
+        lf1 = pl.scan_csv("data/puzzles.csv.gz")
+        lf2 = pl.scan_csv("data/evals.csv.gz")
+        dataset = LazyFrameDataset([lf1, lf2], split="train")
+    """
+
+    def __init__(
+        self,
+        sources: pl.LazyFrame | list[pl.LazyFrame],
+        split: str | None = None,
+        val_ratio: float = 0.05,
+        test_ratio: float = 0.05,
+        seed: int = 42,
+        chunk_size: int = 50000,
+    ):
+        # Normalize to list
+        if isinstance(sources, pl.LazyFrame):
+            sources = [sources]
+        self.sources = sources
+        self.split = split
+        self.val_ratio = val_ratio
+        self.test_ratio = test_ratio
+        self.seed = seed
         self.chunk_size = chunk_size
         self._len: int | None = None
 
     def __len__(self) -> int:
-        """Count rows in file (cached)."""
+        """Count total rows across all sources (cached)."""
         if self._len is None:
-            import polars as pl
+            total = 0
+            for lf in self.sources:
+                total += lf.select(pl.len()).collect().item()
 
-            self._len = pl.scan_csv(self.path).select(pl.len()).collect().item()
-        return self._len
+            # Adjust for split
+            if self.split == "train":
+                self._len = int(total * (1 - self.val_ratio - self.test_ratio))
+            elif self.split == "val":
+                self._len = int(total * self.val_ratio)
+            elif self.split == "test":
+                self._len = int(total * self.test_ratio)
+            else:
+                self._len = total
+
+        return self._len  # type: ignore[return-value]
+
+    def _get_split_indices(self, n: int) -> tuple[int, int]:
+        """Get start and end indices for the current split."""
+        n_test = int(n * self.test_ratio)
+        n_val = int(n * self.val_ratio)
+        n_train = n - n_val - n_test
+
+        if self.split == "train":
+            return 0, n_train
+        elif self.split == "val":
+            return n_train, n_train + n_val
+        elif self.split == "test":
+            return n_train + n_val, n
+        else:
+            return 0, n
 
     def __iter__(self):
-        compression = "gzip" if self.path.endswith(".gz") else None
-        for chunk in pd.read_csv(
-            self.path, chunksize=self.chunk_size, compression=compression
-        ):
-            for _, row in chunk.iterrows():
+        # Concatenate all sources
+        if len(self.sources) == 1:
+            combined = self.sources[0]
+        else:
+            combined = pl.concat(self.sources)
+
+        # Get total count for splitting
+        total = combined.select(pl.len()).collect().item()
+        start_idx, end_idx = self._get_split_indices(total)
+
+        # Add row numbers and filter to split
+        combined = combined.with_row_index("_row_idx")
+
+        # Apply deterministic shuffle using hash of fen + seed
+        combined = combined.with_columns(
+            (pl.col("fen").hash(seed=self.seed) % (2**32)).alias("_shuffle_key")
+        ).sort("_shuffle_key")
+
+        # Filter to split range
+        combined = combined.filter(
+            (pl.col("_row_idx") >= start_idx) & (pl.col("_row_idx") < end_idx)
+        ).drop("_row_idx", "_shuffle_key")
+
+        # Iterate in chunks
+        for batch in combined.collect().iter_slices(self.chunk_size):
+            for row in batch.iter_rows(named=True):
                 try:
                     w, b, stm = get_halfkp_features(row["fen"])
                     yield w, b, stm, float(row["score"])
-                except:
+                except Exception:
                     continue
 
 
@@ -718,17 +998,50 @@ def evaluate_fens(
 # ============================================================================
 
 if __name__ == "__main__":
+    import polars as pl
+
     parser = argparse.ArgumentParser()
-    parser.add_argument("--train", default="data/train.csv.gz")
-    parser.add_argument("--val", default="data/val.csv.gz")
+    parser.add_argument(
+        "data",
+        nargs="+",
+        help="One or more CSV files (will be combined for training)",
+    )
     parser.add_argument("--output", default="network.nnue")
     parser.add_argument("--epochs", type=int, default=30)
     parser.add_argument("--batch-size", type=int, default=8192)
     parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--val-ratio", type=float, default=0.05)
+    parser.add_argument("--test-ratio", type=float, default=0.05)
+    parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
-    train_dataset = ChunkDataset(args.train)
-    val_dataset = ChunkDataset(args.val) if Path(args.val).exists() else None
+    # Load all data sources as LazyFrames
+    sources = []
+    for path in args.data:
+        if not Path(path).exists():
+            print(f"Error: {path} not found")
+            sys.exit(1)
+        sources.append(pl.scan_csv(path))
+        print(f"Added: {path}")
+
+    # Create train/val datasets with splitting
+    train_dataset = LazyFrameDataset(
+        sources,
+        split="train",
+        val_ratio=args.val_ratio,
+        test_ratio=args.test_ratio,
+        seed=args.seed,
+    )
+    val_dataset = LazyFrameDataset(
+        sources,
+        split="val",
+        val_ratio=args.val_ratio,
+        test_ratio=args.test_ratio,
+        seed=args.seed,
+    )
+
+    print(f"Train: {len(train_dataset)} rows, Val: {len(val_dataset)} rows")
+
     train(
         train_dataset, val_dataset, args.output, args.epochs, args.batch_size, args.lr
     )
