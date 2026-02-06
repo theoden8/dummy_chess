@@ -10,6 +10,7 @@ import struct
 from pathlib import Path
 
 import chess
+import numba
 import numpy as np
 import pandas as pd
 import torch
@@ -37,31 +38,174 @@ PIECE_TO_INDEX = [
     [-1, -1],  # P, N, B, R, Q, K
 ]
 
+# Piece char to (piece_type 0-5, is_white)
+# P=0, N=1, B=2, R=3, Q=4, K=5
+PIECE_CHAR_MAP = {
+    "P": (0, True),
+    "N": (1, True),
+    "B": (2, True),
+    "R": (3, True),
+    "Q": (4, True),
+    "K": (5, True),
+    "p": (0, False),
+    "n": (1, False),
+    "b": (2, False),
+    "r": (3, False),
+    "q": (4, False),
+    "k": (5, False),
+}
 
-def get_halfkp_features(fen: str):
-    """Extract HalfKP features from FEN."""
-    board = chess.Board(fen)
-    wk, bk = board.king(chess.WHITE), board.king(chess.BLACK)
+# Numba-compatible constants (numpy arrays for JIT)
+_PIECE_TO_INDEX = np.array(
+    [[0, 1], [2, 3], [4, 5], [6, 7], [8, 9], [-1, -1]], dtype=np.int32
+)
 
-    white_feats, black_feats = [], []
-    for sq in chess.SQUARES:
-        pc = board.piece_at(sq)
-        if pc is None or pc.piece_type == chess.KING:
-            continue
-        pt = pc.piece_type - 1
-        is_white = pc.color
 
-        white_feats.append(
-            wk * 641 + PIECE_TO_INDEX[pt][0 if is_white else 1] * 64 + sq + 1
-        )
-        black_feats.append(
-            (63 - bk) * 641
-            + PIECE_TO_INDEX[pt][1 if is_white else 0] * 64
-            + (63 - sq)
-            + 1
-        )
+@numba.jit(nopython=True, cache=True)
+def _compute_halfkp_features(
+    piece_squares: np.ndarray,
+    piece_types: np.ndarray,
+    piece_colors: np.ndarray,
+    n_pieces: int,
+    wk: int,
+    bk: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Numba-optimized HalfKP feature computation.
 
-    return white_feats, black_feats, 0 if board.turn else 1
+    Args:
+        piece_squares: Array of squares for each non-king piece
+        piece_types: Array of piece types (0-4: P,N,B,R,Q)
+        piece_colors: Array of colors (1=white, 0=black)
+        n_pieces: Number of non-king pieces
+        wk: White king square
+        bk: Black king square
+
+    Returns:
+        white_feats, black_feats as int32 arrays
+    """
+    white_feats = np.empty(n_pieces, dtype=np.int32)
+    black_feats = np.empty(n_pieces, dtype=np.int32)
+
+    for i in range(n_pieces):
+        sq = piece_squares[i]
+        pt = piece_types[i]
+        is_white = piece_colors[i]
+
+        # Index into piece table: 0 if same color, 1 if opposite
+        w_idx = 0 if is_white else 1
+        b_idx = 1 if is_white else 0
+
+        # Feature indices (matching _PIECE_TO_INDEX layout)
+        # pt*2 + color_offset gives the piece index
+        white_feats[i] = wk * 641 + (pt * 2 + w_idx) * 64 + sq + 1
+        black_feats[i] = (63 - bk) * 641 + (pt * 2 + b_idx) * 64 + (63 - sq) + 1
+
+    return white_feats, black_feats
+
+
+# Thread-local storage for pre-allocated arrays (needed for num_workers > 0)
+import threading
+
+_MAX_PIECES = 32
+
+
+class _ThreadLocalArrays(threading.local):
+    """Thread-local pre-allocated arrays for FEN parsing."""
+
+    def __init__(self):
+        self.piece_squares = np.zeros(_MAX_PIECES, dtype=np.int32)
+        self.piece_types = np.zeros(_MAX_PIECES, dtype=np.int32)
+        self.piece_colors = np.zeros(_MAX_PIECES, dtype=np.int32)
+
+
+_tls = _ThreadLocalArrays()
+
+
+def parse_fen_fast(
+    fen: str,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, int, int, int, bool]:
+    """
+    Fast FEN parser that fills thread-local numpy arrays.
+
+    Returns:
+        piece_squares, piece_types, piece_colors: Arrays with piece data
+        n_pieces: Number of non-king pieces
+        wk: white king square
+        bk: black king square
+        white_to_move: True if white to move
+    """
+    parts = fen.split(" ")
+    board_str = parts[0]
+    white_to_move = parts[1] == "w" if len(parts) > 1 else True
+
+    # Get thread-local arrays
+    piece_squares = _tls.piece_squares
+    piece_types = _tls.piece_types
+    piece_colors = _tls.piece_colors
+
+    n_pieces = 0
+    wk = -1
+    bk = -1
+    sq = 56  # Start at a8
+
+    for c in board_str:
+        if c == "/":
+            sq -= 16  # Next rank
+        elif c.isdigit():
+            sq += int(c)
+        elif c in PIECE_CHAR_MAP:
+            pt, is_white = PIECE_CHAR_MAP[c]
+            if pt == 5:  # King
+                if is_white:
+                    wk = sq
+                else:
+                    bk = sq
+            else:
+                piece_squares[n_pieces] = sq
+                piece_types[n_pieces] = pt
+                piece_colors[n_pieces] = 1 if is_white else 0
+                n_pieces += 1
+            sq += 1
+
+    return piece_squares, piece_types, piece_colors, n_pieces, wk, bk, white_to_move
+
+
+def get_halfkp_features(fen: str) -> tuple[list[int], list[int], int]:
+    """Extract HalfKP features from FEN (numba-accelerated)."""
+    piece_squares, piece_types, piece_colors, n_pieces, wk, bk, white_to_move = (
+        parse_fen_fast(fen)
+    )
+
+    if n_pieces == 0:
+        return [], [], 0 if white_to_move else 1
+
+    white_feats, black_feats = _compute_halfkp_features(
+        piece_squares, piece_types, piece_colors, n_pieces, wk, bk
+    )
+
+    return white_feats.tolist(), black_feats.tolist(), 0 if white_to_move else 1
+
+
+def get_halfkp_features_np(fen: str) -> tuple[np.ndarray, np.ndarray, int]:
+    """
+    Extract HalfKP features from FEN, returning numpy arrays.
+
+    Faster than get_halfkp_features when arrays are needed (avoids .tolist()).
+    """
+    piece_squares, piece_types, piece_colors, n_pieces, wk, bk, white_to_move = (
+        parse_fen_fast(fen)
+    )
+
+    if n_pieces == 0:
+        empty = np.array([], dtype=np.int32)
+        return empty, empty, 0 if white_to_move else 1
+
+    white_feats, black_feats = _compute_halfkp_features(
+        piece_squares, piece_types, piece_colors, n_pieces, wk, bk
+    )
+
+    return white_feats.copy(), black_feats.copy(), 0 if white_to_move else 1
 
 
 # ============================================================================
@@ -129,22 +273,47 @@ class ChunkDataset(torch.utils.data.IterableDataset):
 
 
 def collate_sparse(batch):
-    w_all, b_all, w_off, b_off = [], [], [0], [0]
-    stm_list, score_list = [], []
-    for w, b, stm, score in batch:
-        w_all.extend(w)
-        b_all.extend(b)
-        w_off.append(len(w_all))
-        b_off.append(len(b_all))
-        stm_list.append(stm)
-        score_list.append(score)
+    """Collate sparse HalfKP features into batched tensors."""
+    # Pre-compute sizes for numpy pre-allocation
+    n = len(batch)
+    w_lens = [len(b[0]) for b in batch]
+    b_lens = [len(b[1]) for b in batch]
+    w_total = sum(w_lens)
+    b_total = sum(b_lens)
+
+    # Pre-allocate numpy arrays
+    w_all = np.empty(w_total, dtype=np.int64)
+    b_all = np.empty(b_total, dtype=np.int64)
+    w_off = np.empty(n, dtype=np.int64)
+    b_off = np.empty(n, dtype=np.int64)
+    stm_arr = np.empty(n, dtype=np.int64)
+    score_arr = np.empty(n, dtype=np.float32)
+
+    # Fill arrays
+    w_pos, b_pos = 0, 0
+    for i, (w, b, stm, score) in enumerate(batch):
+        w_len = w_lens[i]
+        b_len = b_lens[i]
+
+        w_off[i] = w_pos
+        b_off[i] = b_pos
+
+        w_all[w_pos : w_pos + w_len] = w
+        b_all[b_pos : b_pos + b_len] = b
+
+        w_pos += w_len
+        b_pos += b_len
+
+        stm_arr[i] = stm
+        score_arr[i] = score
+
     return (
-        torch.tensor(w_all, dtype=torch.long),
-        torch.tensor(w_off[:-1], dtype=torch.long),
-        torch.tensor(b_all, dtype=torch.long),
-        torch.tensor(b_off[:-1], dtype=torch.long),
-        torch.tensor(stm_list, dtype=torch.long),
-        torch.tensor(score_list, dtype=torch.float32).unsqueeze(1),
+        torch.from_numpy(w_all),
+        torch.from_numpy(w_off),
+        torch.from_numpy(b_all),
+        torch.from_numpy(b_off),
+        torch.from_numpy(stm_arr),
+        torch.from_numpy(score_arr).unsqueeze(1),
     )
 
 
@@ -162,16 +331,20 @@ class Tracker:
 
     Usage:
         tracker = Tracker()
+        pbar = tqdm(total=total_batches * epochs, desc="Training")
         for epoch in range(epochs):
-            pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}")
-            for batch in pbar:
+            for batch in train_loader:
                 loss = train_step(batch)
                 tracker.track("train", "loss", loss.item())
                 pbar.set_postfix(**tracker.postfix)
+                pbar.update(1)
             # Run validation
             for batch in val_loader:
                 tracker.track("val", "loss", compute_val_loss(batch))
+                pbar.update(1)
             tracker.submit_epoch()
+            tracker.track_epoch("epoch", epoch + 1)
+        pbar.close()
     """
 
     def __init__(self):
@@ -182,15 +355,20 @@ class Tracker:
         )
         self._history: list[dict[str, dict[str, float]]] = []
         self._epoch = 0
+        self._epoch_metrics: dict[str, str] = {}
 
     def track(self, split: str, name: str, value: float) -> None:
         """Track a metric value for the current epoch."""
         self._current[split][name].append(value)
 
+    def track_epoch(self, name: str, value: float | int | str) -> None:
+        """Track an epoch-level metric (shown in postfix, not averaged)."""
+        self._epoch_metrics[name] = f"{value}"
+
     @property
     def postfix(self) -> dict[str, str]:
         """Get current aggregate values for tqdm postfix."""
-        result = {}
+        result = dict(self._epoch_metrics)
         for split, metrics in self._current.items():
             for name, values in metrics.items():
                 if values:
@@ -200,7 +378,7 @@ class Tracker:
 
     def submit_epoch(self) -> dict[str, dict[str, float]]:
         """
-        Finalize current epoch: average all tracked metrics, print summary.
+        Finalize current epoch: average all tracked metrics.
 
         Returns:
             Dict of {split: {name: avg_value}} for all tracked metrics
@@ -217,15 +395,6 @@ class Tracker:
         # Store in history and reset
         self._history.append(metrics)
         self._current.clear()
-
-        # Print epoch summary
-        parts = [f"Epoch {self._epoch}"]
-        for split, split_metrics in metrics.items():
-            if split == "epoch":
-                continue
-            for name, value in split_metrics.items():
-                parts.append(f"{split}_{name}: {value:.4f}")
-        print(" - ".join(parts))
 
         return metrics
 
@@ -278,7 +447,6 @@ def train(
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
 
-    # Use num_workers=0 for iterable datasets to avoid multiprocessing issues
     is_iterable = isinstance(
         train_dataset, torch.utils.data.IterableDataset
     ) or not hasattr(train_dataset, "__getitem__")
@@ -286,8 +454,7 @@ def train(
         train_dataset,
         batch_size=batch_size,
         collate_fn=collate_sparse,
-        num_workers=0 if is_iterable else 4,
-        prefetch_factor=None if is_iterable else 2,
+        num_workers=0,
         shuffle=not is_iterable,
     )
     n_train_batches = (len(train_dataset) + batch_size - 1) // batch_size
@@ -296,7 +463,7 @@ def train(
             val_dataset,
             batch_size=batch_size,
             collate_fn=collate_sparse,
-            num_workers=0 if is_iterable else 2,
+            num_workers=0,
         )
         if val_dataset is not None
         else None
@@ -320,13 +487,24 @@ def train(
     scaler = torch.amp.GradScaler("cuda") if device.type == "cuda" else None
     best_val = float("inf")
 
+    # Calculate total batches for single progress bar across all epochs
+    n_val_batches = (
+        (len(val_dataset) + batch_size - 1) // batch_size
+        if val_dataset is not None
+        else 0
+    )
+    batches_per_epoch = n_train_batches + n_val_batches
+    total_batches = batches_per_epoch * epochs
+
+    pbar = tqdm.tqdm(total=total_batches, desc="Training")
+    tracker.track_epoch("epoch", f"1/{epochs}")
+
     for epoch in range(epochs):
         model.train()
+        tracker.track_epoch("epoch", f"{epoch + 1}/{epochs}")
 
-        pbar = tqdm.tqdm(
-            train_loader, desc=f"Epoch {epoch + 1}/{epochs}", total=n_train_batches
-        )
-        for batch in pbar:
+        # Training
+        for batch in train_loader:
             w_idx, w_off, b_idx, b_off, stm, target = [x.to(device) for x in batch]
             sparse_optimizer.zero_grad(set_to_none=True)
             dense_optimizer.zero_grad(set_to_none=True)
@@ -346,8 +524,9 @@ def train(
 
             tracker.track("train", "loss", loss.item())
             pbar.set_postfix(**tracker.postfix)
+            pbar.update(1)
 
-        # Run validation
+        # Validation
         if val_loader is not None:
             model.eval()
             with torch.no_grad():
@@ -358,6 +537,8 @@ def train(
                     pred = model(w_idx, w_off, b_idx, b_off, stm)
                     val_loss = F.mse_loss(pred, target).item()
                     tracker.track("val", "loss", val_loss)
+                    pbar.set_postfix(**tracker.postfix)
+                    pbar.update(1)
 
         scheduler.step()
         tracker.submit_epoch()
@@ -367,7 +548,8 @@ def train(
             best_val = val_loss
             torch.save(model.state_dict(), output.replace(".nnue", ".pt"))
             export_nnue(model, output)
-            print(f"  -> saved (best val: {val_loss:.4f})")
+
+    pbar.close()
 
     return model, tracker
 
