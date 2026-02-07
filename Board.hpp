@@ -158,6 +158,36 @@ public:
       zobrist::init(zobrist_size);
       initialized_ = true;
     }
+    // delegate to set_fen for board setup
+    set_fen_impl(f);
+  }
+
+  virtual void set_fen(const fen::FEN &f) {
+    // validate variant matches (chess960/crazyhouse are const)
+    if(f.chess960 != chess960 || f.crazyhouse != crazyhouse) {
+      fprintf(stderr, "fen variant does not match current variant of the board\n");
+      fprintf(stderr, "%s\n", fen::export_as_string(f).c_str());
+      abort();
+    }
+    // reset state before setting new position
+    kcastlrook = {0xff, 0xff}, qcastlrook = {0xff, 0xff},
+      state_hist_enpassants.clear(),
+      std::fill(castlings.begin(), castlings.end(), board::nocastlings),
+      state_hist_halfmoves.clear(),
+      state_hist_repetitions = INT16_MAX,
+      bits = {0x00, 0x00},
+      bits_slid_diag = 0x00, bits_slid_orth = 0x00, bits_pawns = 0x00,
+      pos_king = {board::nopos, board::nopos},
+      bits_promoted_pawns = 0ULL,
+      std::fill(n_subs.begin(), n_subs.end(), 0),
+      state_hist.clear();
+    set_fen_impl(f);
+  }
+
+private:
+  void set_fen_impl(const fen::FEN &f) {
+    self.activePlayer_ = f.active_player;
+    self.current_ply_ = f.fullmove * 2 - (f.active_player == WHITE ? 1 : 0);
     // set bitboards
     for(pos_t i = 0; i < f.board.length(); ++i) {
       if(f.board[i]==' ')continue;
@@ -236,6 +266,8 @@ public:
     update_state_info();
     state.null_move_state = false;
   }
+
+public:
 
   INLINE constexpr COLOR activePlayer() const {
     return activePlayer_;

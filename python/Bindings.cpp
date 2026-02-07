@@ -79,6 +79,10 @@ public:
     engine.retract_move();
   }
 
+  void set_fen(const std::string &fenstring) {
+    engine.set_fen(fen::load_from_string(fenstring));
+  }
+
   MoveScopeBindings mscope(const MoveBindings &py_m) {
     if(!contains_move(list_legal_moves(), py_m)) {
       throw std::runtime_error("invalid move <" + std::string(py_m.m_pgn) + ">");
@@ -275,6 +279,7 @@ PYBIND11_MODULE(_dummychess, m) {
     .def("sample", &BoardBindings::sample)
     .def("step", &BoardBindings::make_move)
     .def("undo", &BoardBindings::retract_move)
+    .def("set_fen", &BoardBindings::set_fen)
     .def("step_scope", &BoardBindings::mscope)
     .def("perft", &BoardBindings::perft)
     .def("get_depth_move", &BoardBindings::get_fixed_depth_move)

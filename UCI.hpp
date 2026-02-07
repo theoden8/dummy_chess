@@ -495,7 +495,13 @@ struct UCI {
           str::pdebug("info string loaded fen", fen::export_as_string(f));
         }
         f.chess960 = engine_options.chess960;
-        init(f);
+        // use set_fen if engine exists with matching variants, otherwise init
+        if(engine_ptr && engine_ptr->chess960 == f.chess960 && engine_ptr->crazyhouse == f.crazyhouse) {
+          engine_ptr->set_fen(f);
+          should_stop = false;
+        } else {
+          init(f);
+        }
         if(ind < cmd.size() && cmd[ind++] == "moves"s) {
           MoveLine moves;
           for(; ind < cmd.size(); ++ind) {
