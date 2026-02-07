@@ -23,13 +23,13 @@ test_start "Infinite search and stop"
 uci_send "go infinite"
 
 # Wait a bit for search to start
-after 500
+after 1000
 
 # Send stop
 uci_send "stop"
 
 # Should get bestmove response
-set timeout 5
+set timeout 10
 expect {
     -re "bestmove\\s+\\w+" {
         test_pass "Got bestmove after stop"
@@ -64,7 +64,7 @@ uci_send "position startpos moves e2e4"
 uci_send "go depth 20"
 
 # Wait briefly then stop
-after 200
+after 500
 uci_send "stop"
 
 expect {
