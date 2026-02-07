@@ -22,6 +22,7 @@ from typing import Iterator
 import chess
 import chess.engine
 import chess.syzygy
+import dummy_chess
 import orjson
 import polars as pl
 import zstandard as zstd
@@ -202,9 +203,9 @@ def stockfish_eval(
 
 def process_puzzle_row(
     row: dict, engine=None, depth: int = 12
-) -> list[tuple[str, int, int, int]]:
+) -> list[tuple[bytes, int, int, int]]:
     """
-    Process single puzzle row. Returns list of (fen, score, depth, knodes).
+    Process single puzzle row. Returns list of (compressed_fen, score, depth, knodes).
 
     Extracts two positions:
     1. Starting position (FEN) - before any moves
@@ -220,7 +221,7 @@ def process_puzzle_row(
         if not moves:
             return []
 
-        results: list[tuple[str, int, int, int]] = []
+        results: list[tuple[bytes, int, int, int]] = []
 
         # Position 1: Starting position
         board = chess.Board(fen)
@@ -231,7 +232,8 @@ def process_puzzle_row(
             out_depth = 0
             out_knodes = 0
         score = max(-15000, min(15000, score))
-        results.append((board.fen(), score, out_depth, out_knodes))
+        compressed_fen = dummy_chess.compress_fen(board.fen())
+        results.append((compressed_fen, score, out_depth, out_knodes))
 
         # Position 2: After move 1 (opponent's mistake)
         move = chess.Move.from_uci(moves[0])
@@ -246,7 +248,8 @@ def process_puzzle_row(
             out_depth = 0
             out_knodes = 0
         score = max(-15000, min(15000, score))
-        results.append((board.fen(), score, out_depth, out_knodes))
+        compressed_fen = dummy_chess.compress_fen(board.fen())
+        results.append((compressed_fen, score, out_depth, out_knodes))
 
         return results
     except Exception:
@@ -258,7 +261,7 @@ def process_puzzles(
     max_rows: int | None,
     stockfish_path: str | None,
     depth: int,
-) -> list[tuple[str, int, int, int]]:
+) -> list[tuple[bytes, int, int, int]]:
     """Process puzzle data with optional Stockfish evaluation."""
     engine = None
     if stockfish_path:
@@ -278,7 +281,7 @@ def process_puzzles(
         lf = lf.head(max_rows)
 
     print("Processing puzzles...")
-    data: list[tuple[str, int, int, int]] = []
+    data: list[tuple[bytes, int, int, int]] = []
     rows = list(lf.collect().iter_rows(named=True))
     for row in tqdm(rows, desc="Puzzles"):
         results = process_puzzle_row(row, engine, depth)
@@ -295,7 +298,7 @@ def process_puzzles(
 # =============================================================================
 
 
-def process_eval_row(row: dict) -> tuple[str, int, int, int] | None:
+def process_eval_row(row: dict) -> tuple[bytes, int, int, int] | None:
     """Process single evaluation row from lichess_db_eval.jsonl.zst."""
     try:
         fen = row.get("fen")
@@ -325,7 +328,8 @@ def process_eval_row(row: dict) -> tuple[str, int, int, int] | None:
             return None
 
         score = max(-15000, min(15000, score))
-        return fen, score, depth, knodes
+        compressed_fen = dummy_chess.compress_fen(fen)
+        return compressed_fen, score, depth, knodes
     except Exception:
         return None
 
@@ -359,14 +363,21 @@ def process_evals(
     count = 0
     written = 0
     batch_num = 0
-    batch: list[tuple[str, int, int, int]] = []
+    batch: list[tuple[bytes, int, int, int]] = []
 
     def flush_batch():
         nonlocal batch, batch_num
         if not batch:
             return
         df = pl.DataFrame(
-            batch, schema=["fen", "score", "depth", "knodes"], orient="row"
+            batch,
+            schema={
+                "fen": pl.Binary,
+                "score": pl.Int64,
+                "depth": pl.Int64,
+                "knodes": pl.Int64,
+            },
+            orient="row",
         )
         df.write_parquet(f"{tmp_dir}/batch_{batch_num:06d}.parquet")
         batch_num += 1
@@ -593,7 +604,7 @@ def process_endgames(
     max_pieces: int | None = None,
     include_pawns: bool = True,
     use_dtz: bool = True,
-) -> list[tuple[str, int, int, int]]:
+) -> list[tuple[bytes, int, int, int]]:
     """Generate endgame positions with tablebase evaluations."""
     if tablebase_path is None:
         tablebase_path = DEFAULT_TABLEBASE_PATH
@@ -610,7 +621,7 @@ def process_endgames(
     tablebase = chess.syzygy.Tablebase()
     tablebase.add_directory(tablebase_path)
 
-    results: list[tuple[str, int, int, int]] = []
+    results: list[tuple[bytes, int, int, int]] = []
     attempts = 0
     max_attempts = n_positions * 1000
 
@@ -643,7 +654,8 @@ def process_endgames(
             except Exception:
                 continue
 
-            results.append((board.fen(), int(score), TABLEBASE_DEPTH, 0))
+            compressed_fen = dummy_chess.compress_fen(board.fen())
+            results.append((compressed_fen, int(score), TABLEBASE_DEPTH, 0))
             pbar.update(1)
     finally:
         pbar.close()
@@ -658,12 +670,12 @@ def process_endgames(
 
 
 def save_data(
-    data: list[tuple[str, int, int, int]],
+    data: list[tuple[bytes, int, int, int]],
     output_path: Path,
     shuffle: bool = True,
     seed: int = 42,
 ):
-    """Save data to parquet or CSV file with columns: fen, score, depth, knodes."""
+    """Save data to parquet or CSV file with columns: fen (binary), score, depth, knodes."""
     if shuffle:
         random.seed(seed)
         random.shuffle(data)
@@ -671,7 +683,14 @@ def save_data(
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     out_df = pl.DataFrame(
-        data, schema=["fen", "score", "depth", "knodes"], orient="row"
+        data,
+        schema={
+            "fen": pl.Binary,
+            "score": pl.Int64,
+            "depth": pl.Int64,
+            "knodes": pl.Int64,
+        },
+        orient="row",
     )
 
     out_str = str(output_path)
@@ -760,7 +779,7 @@ def main():
         args.output = str(output_path.parent / f"toy_{output_path.name}")
 
     # Process
-    data: list[tuple[str, int, int, int]] = []
+    data: list[tuple[bytes, int, int, int]] = []
 
     if args.source == "puzzles":
         input_path = Path(args.input)

@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import chess
+import dummy_chess
 import numba
 import numpy as np
 import pandas as pd
@@ -180,8 +181,12 @@ def parse_fen_fast(
     return piece_squares, piece_types, piece_colors, n_pieces, wk, bk, white_to_move
 
 
-def get_halfkp_features(fen: str) -> tuple[list[int], list[int], int]:
-    """Extract HalfKP features from FEN (numba-accelerated)."""
+def get_halfkp_features(fen: str | bytes) -> tuple[list[int], list[int], int]:
+    """Extract HalfKP features from FEN string or compressed FEN bytes (numba-accelerated)."""
+    # Decompress if bytes
+    if isinstance(fen, bytes):
+        fen = dummy_chess.decompress_fen(fen)
+
     piece_squares, piece_types, piece_colors, n_pieces, wk, bk, white_to_move = (
         parse_fen_fast(fen)
     )
@@ -196,12 +201,16 @@ def get_halfkp_features(fen: str) -> tuple[list[int], list[int], int]:
     return white_feats.tolist(), black_feats.tolist(), 0 if white_to_move else 1
 
 
-def get_halfkp_features_np(fen: str) -> tuple[np.ndarray, np.ndarray, int]:
+def get_halfkp_features_np(fen: str | bytes) -> tuple[np.ndarray, np.ndarray, int]:
     """
-    Extract HalfKP features from FEN, returning numpy arrays.
+    Extract HalfKP features from FEN string or compressed FEN bytes, returning numpy arrays.
 
     Faster than get_halfkp_features when arrays are needed (avoids .tolist()).
     """
+    # Decompress if bytes
+    if isinstance(fen, bytes):
+        fen = dummy_chess.decompress_fen(fen)
+
     piece_squares, piece_types, piece_colors, n_pieces, wk, bk, white_to_move = (
         parse_fen_fast(fen)
     )
