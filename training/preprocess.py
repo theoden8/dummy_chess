@@ -203,9 +203,9 @@ def stockfish_eval(
 
 def process_puzzle_row(
     row: dict, engine=None, depth: int = 12
-) -> list[tuple[bytes, int, int, int]]:
+) -> list[tuple[str, int, int, int]]:
     """
-    Process single puzzle row. Returns list of (compressed_fen, score, depth, knodes).
+    Process single puzzle row. Returns list of (fen_str, score, depth, knodes).
 
     Extracts two positions:
     1. Starting position (FEN) - before any moves
@@ -220,7 +220,7 @@ def process_puzzle_row(
     if not moves:
         return []
 
-    results: list[tuple[bytes, int, int, int]] = []
+    results: list[tuple[str, int, int, int]] = []
 
     # Position 1: Starting position
     board = chess.Board(fen)
@@ -231,8 +231,7 @@ def process_puzzle_row(
         out_depth = 0
         out_knodes = 0
     score = max(-15000, min(15000, score))
-    compressed_fen = dummy_chess.compress_fen(board.fen())
-    results.append((compressed_fen, score, out_depth, out_knodes))
+    results.append((board.fen(), score, out_depth, out_knodes))
 
     # Position 2: After move 1 (opponent's mistake)
     move = chess.Move.from_uci(moves[0])
@@ -247,8 +246,7 @@ def process_puzzle_row(
         out_depth = 0
         out_knodes = 0
     score = max(-15000, min(15000, score))
-    compressed_fen = dummy_chess.compress_fen(board.fen())
-    results.append((compressed_fen, score, out_depth, out_knodes))
+    results.append((board.fen(), score, out_depth, out_knodes))
 
     return results
 
@@ -295,14 +293,21 @@ def process_puzzles(
     count = 0
     written = 0
     batch_num = 0
-    batch: list[tuple[bytes, int, int, int]] = []
+    batch: list[tuple[str, int, int, int]] = []  # FEN strings, not compressed
 
     def flush_batch():
         nonlocal batch, batch_num
         if not batch:
             return
+        # Batch compress all FENs at once
+        fens = [row[0] for row in batch]
+        compressed_fens = dummy_chess.compress_fens_batch(fens)
+        compressed_batch = [
+            (compressed_fens[i], batch[i][1], batch[i][2], batch[i][3])
+            for i in range(len(batch))
+        ]
         df = pl.DataFrame(
-            batch,
+            compressed_batch,
             schema={
                 "fen": pl.Binary,
                 "score": pl.Int64,
@@ -378,7 +383,7 @@ def process_puzzles(
 # =============================================================================
 
 
-def process_eval_row(row: dict) -> tuple[bytes, int, int, int] | None:
+def process_eval_row(row: dict) -> tuple[str, int, int, int] | None:
     """Process single evaluation row from lichess_db_eval.jsonl.zst."""
     try:
         fen = row.get("fen")
@@ -408,8 +413,7 @@ def process_eval_row(row: dict) -> tuple[bytes, int, int, int] | None:
             return None
 
         score = max(-15000, min(15000, score))
-        compressed_fen = dummy_chess.compress_fen(fen)
-        return compressed_fen, score, depth, knodes
+        return fen, score, depth, knodes
     except Exception:
         return None
 
@@ -443,14 +447,21 @@ def process_evals(
     count = 0
     written = 0
     batch_num = 0
-    batch: list[tuple[bytes, int, int, int]] = []
+    batch: list[tuple[str, int, int, int]] = []  # FEN strings, not compressed
 
     def flush_batch():
         nonlocal batch, batch_num
         if not batch:
             return
+        # Batch compress all FENs at once
+        fens = [row[0] for row in batch]
+        compressed_fens = dummy_chess.compress_fens_batch(fens)
+        compressed_batch = [
+            (compressed_fens[i], batch[i][1], batch[i][2], batch[i][3])
+            for i in range(len(batch))
+        ]
         df = pl.DataFrame(
-            batch,
+            compressed_batch,
             schema={
                 "fen": pl.Binary,
                 "score": pl.Int64,
@@ -701,14 +712,15 @@ def process_endgames(
     tablebase = chess.syzygy.Tablebase()
     tablebase.add_directory(tablebase_path)
 
-    results: list[tuple[bytes, int, int, int]] = []
+    # Collect FEN strings first, then batch compress
+    fen_results: list[tuple[str, int, int, int]] = []
     attempts = 0
     max_attempts = n_positions * 1000
 
     pbar = tqdm(total=n_positions, desc="Endgames")
 
     try:
-        while len(results) < n_positions and attempts < max_attempts:
+        while len(fen_results) < n_positions and attempts < max_attempts:
             attempts += 1
 
             board = generate_random_position(config, resolved_max_pieces)
@@ -734,14 +746,27 @@ def process_endgames(
             except Exception:
                 continue
 
-            compressed_fen = dummy_chess.compress_fen(board.fen())
-            results.append((compressed_fen, int(score), TABLEBASE_DEPTH, 0))
+            fen_results.append((board.fen(), int(score), TABLEBASE_DEPTH, 0))
             pbar.update(1)
     finally:
         pbar.close()
         tablebase.close()
 
-    return results
+    # Batch compress all FENs
+    if fen_results:
+        fens = [row[0] for row in fen_results]
+        compressed_fens = dummy_chess.compress_fens_batch(fens)
+        results: list[tuple[bytes, int, int, int]] = [
+            (
+                compressed_fens[i],
+                fen_results[i][1],
+                fen_results[i][2],
+                fen_results[i][3],
+            )
+            for i in range(len(fen_results))
+        ]
+        return results
+    return []
 
 
 # =============================================================================

@@ -953,13 +953,13 @@ def evaluate_fen(
 
 
 def evaluate_fens(
-    fens: list[str], model: NNUE | None = None, model_path: str | None = None
+    fens: list[str | bytes], model: NNUE | None = None, model_path: str | None = None
 ) -> list[float]:
     """
     Evaluate multiple FEN positions using the NNUE model (batched).
 
     Args:
-        fens: List of FEN strings to evaluate
+        fens: List of FEN strings or compressed FEN bytes to evaluate
         model: Pre-loaded NNUE model (optional)
         model_path: Path to .pt model file (used if model is None)
 
@@ -977,8 +977,26 @@ def evaluate_fens(
 
     device = _get_model_device(model)
 
+    # Batch decompress any compressed FENs
+    fen_strs: list[str] = []
+    compressed_indices: list[int] = []
+    compressed_fens: list[bytes] = []
+
+    for i, fen in enumerate(fens):
+        if isinstance(fen, bytes):
+            compressed_indices.append(i)
+            compressed_fens.append(fen)
+            fen_strs.append("")  # placeholder
+        else:
+            fen_strs.append(fen)
+
+    if compressed_fens:
+        decompressed = dummy_chess.decompress_fens_batch(compressed_fens)
+        for i, idx in enumerate(compressed_indices):
+            fen_strs[idx] = decompressed[i]
+
     # Extract features for all positions
-    batch = [get_halfkp_features(fen) for fen in fens]
+    batch = [get_halfkp_features(fen) for fen in fen_strs]
 
     # Collate into batched tensors
     w_all, b_all, w_off, b_off = [], [], [0], [0]
@@ -1013,7 +1031,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "data",
         nargs="+",
-        help="One or more CSV files (will be combined for training)",
+        help="One or more CSV/parquet files (will be combined for training)",
     )
     parser.add_argument("--output", default="network.nnue")
     parser.add_argument("--epochs", type=int, default=30)
@@ -1030,7 +1048,10 @@ if __name__ == "__main__":
         if not Path(path).exists():
             print(f"Error: {path} not found")
             sys.exit(1)
-        sources.append(pl.scan_csv(path))
+        if path.endswith(".parquet"):
+            sources.append(pl.scan_parquet(path))
+        else:
+            sources.append(pl.scan_csv(path))
         print(f"Added: {path}")
 
     # Create train/val datasets with splitting
