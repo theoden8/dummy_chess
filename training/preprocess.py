@@ -284,6 +284,11 @@ def process_puzzles(
     if max_rows:
         lf = lf.head(max_rows)
 
+    # Pre-count total rows for progress bar (streaming to avoid memory issues)
+    total_rows = lf.select(pl.len()).collect(engine="streaming").item()
+    if max_rows:
+        total_rows = min(total_rows, max_rows)
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Create temp directory for batch parquet files
@@ -320,7 +325,7 @@ def process_puzzles(
         batch_num += 1
         batch = []
 
-    pbar = tqdm(desc="Puzzles", unit=" rows")
+    pbar = tqdm(total=total_rows, desc="Puzzles", unit=" rows")
     for df_batch in lf.collect_batches():
         for row in df_batch.iter_rows(named=True):
             if max_rows and count >= max_rows:
