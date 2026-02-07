@@ -255,11 +255,20 @@ def process_puzzle_row(
 
 def process_puzzles(
     input_path: Path,
+    output_path: Path,
     max_rows: int | None,
     stockfish_path: str | None,
     depth: int,
-) -> list[tuple[bytes, int, int, int]]:
-    """Process puzzle data with optional Stockfish evaluation."""
+    batch_size: int = 100000,
+) -> int:
+    """
+    Process puzzle data, streaming to parquet in batches.
+
+    Returns the number of rows written.
+    """
+    import shutil
+    import tempfile
+
     engine = None
     if stockfish_path:
         try:
@@ -277,17 +286,91 @@ def process_puzzles(
     if max_rows:
         lf = lf.head(max_rows)
 
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Create temp directory for batch parquet files
+    tmp_dir = tempfile.mkdtemp(prefix="puzzles_")
+
     print("Processing puzzles...")
-    data: list[tuple[bytes, int, int, int]] = []
-    rows = list(lf.collect().iter_rows(named=True))
-    for row in tqdm(rows, desc="Puzzles"):
-        results = process_puzzle_row(row, engine, depth)
-        data.extend(results)
+    count = 0
+    written = 0
+    batch_num = 0
+    batch: list[tuple[bytes, int, int, int]] = []
+
+    def flush_batch():
+        nonlocal batch, batch_num
+        if not batch:
+            return
+        df = pl.DataFrame(
+            batch,
+            schema={
+                "fen": pl.Binary,
+                "score": pl.Int64,
+                "depth": pl.Int64,
+                "knodes": pl.Int64,
+            },
+            orient="row",
+        )
+        df.write_parquet(f"{tmp_dir}/batch_{batch_num:06d}.parquet")
+        batch_num += 1
+        batch = []
+
+    pbar = tqdm(desc="Puzzles", unit=" rows")
+    for df_batch in lf.collect_batches():
+        for row in df_batch.iter_rows(named=True):
+            if max_rows and count >= max_rows:
+                break
+
+            results = process_puzzle_row(row, engine, depth)
+            batch.extend(results)
+            written += len(results)
+
+            if len(batch) >= batch_size:
+                flush_batch()
+
+            count += 1
+            pbar.update(1)
+
+        if max_rows and count >= max_rows:
+            break
+
+    pbar.close()
+    flush_batch()  # Write remaining
 
     if engine:
         engine.quit()
 
-    return data
+    print(f"Written {written} rows in {batch_num} batches")
+
+    if batch_num == 0:
+        print("No data to write")
+        shutil.rmtree(tmp_dir)
+        return 0
+
+    # Combine batches and write to output
+    print(f"Writing to {output_path}...")
+    lf_out = pl.scan_parquet(f"{tmp_dir}/*.parquet")
+
+    out_str = str(output_path)
+    if out_str.endswith(".parquet") or not any(
+        out_str.endswith(ext) for ext in [".csv", ".csv.gz", ".csv.zst"]
+    ):
+        lf_out.sink_parquet(output_path)
+    else:
+        # CSV requires collect
+        combined = lf_out.collect()
+        if out_str.endswith(".csv.gz"):
+            combined.write_csv(output_path, compression="gzip")
+        elif out_str.endswith(".csv.zst"):
+            combined.write_csv(output_path, compression="zstd")
+        else:
+            combined.write_csv(output_path)
+
+    # Cleanup
+    shutil.rmtree(tmp_dir)
+
+    print(f"Saved {written} rows -> {output_path}")
+    return written
 
 
 # =============================================================================
@@ -787,7 +870,15 @@ def main():
                 "Download: wget https://database.lichess.org/lichess_db_puzzle.csv.zst"
             )
             sys.exit(1)
-        data = process_puzzles(input_path, args.max, args.stockfish, args.depth)
+        # Puzzles handles its own output (streaming)
+        process_puzzles(
+            input_path,
+            Path(args.output),
+            args.max,
+            args.stockfish,
+            args.depth,
+        )
+        return
 
     elif args.source == "evals":
         input_path = Path(args.input)
