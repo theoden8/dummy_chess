@@ -708,16 +708,17 @@ def save_data(
 
     print(f"Saved {len(out_df)} rows -> {output_path}")
 
-    all_scores = [s for _, s, _, _ in data]
-    all_depths = [d for _, _, d, _ in data]
-    print(
-        f"Score stats: min={min(all_scores)}, max={max(all_scores)}, "
-        f"mean={sum(all_scores) / len(all_scores):.0f}"
-    )
-    print(
-        f"Depth stats: min={min(all_depths)}, max={max(all_depths)}, "
-        f"mean={sum(all_depths) / len(all_depths):.0f}"
-    )
+    if data:
+        all_scores = [s for _, s, _, _ in data]
+        all_depths = [d for _, _, d, _ in data]
+        print(
+            f"Score stats: min={min(all_scores)}, max={max(all_scores)}, "
+            f"mean={sum(all_scores) / len(all_scores):.0f}"
+        )
+        print(
+            f"Depth stats: min={min(all_depths)}, max={max(all_depths)}, "
+            f"mean={sum(all_depths) / len(all_depths):.0f}"
+        )
 
 
 # =============================================================================
