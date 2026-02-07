@@ -30,12 +30,12 @@ steps:
       # set up linux
       if test "${IMAGE}" = "debian:stable-slim"; then
         apt-get update -y
-        apt-get install -y wget cmake make pkgconf clang gcc g++ build-essential valgrind libbsd-dev libjemalloc-dev python3 git libzstd-dev libncurses-dev libncursesw5-dev perl stockfish fairy-stockfish
+        apt-get install -y wget cmake make pkgconf clang gcc g++ build-essential valgrind libbsd-dev libjemalloc-dev python3 git libzstd-dev libncurses-dev libncursesw5-dev perl stockfish fairy-stockfish expect
         rm -rf /var/lib/apt/lists/*
         export PATH="$PATH:/usr/games"
       elif test "${IMAGE}" = "ghcr.io/void-linux/void-musl"; then
         xbps-install -Syu
-        xbps-install -Sy wget bash cmake make pkg-config clang gcc base-devel llvm libbsd-devel jemalloc-devel python3 git libzstd-devel ncurses-devel perl stockfish fairy-stockfish
+        xbps-install -Sy wget bash cmake make pkg-config clang gcc base-devel llvm libbsd-devel jemalloc-devel python3 git libzstd-devel ncurses-devel perl stockfish fairy-stockfish expect
         export PATH="$PATH:/usr/games"
       else
         echo "image ${IMAGE}"
@@ -53,6 +53,9 @@ steps:
       # build without PGO
       cmake -B build -DCMAKE_BUILD_TYPE=Release -DOPTION_SUPPORT_PGO=disabled
       cmake --build build
+
+      # UCI tests
+      ./test/run_tests.sh build/dummy_chess_uci
 
       # perft test
       python3 scripts/perft_test.py build

@@ -20,7 +20,7 @@ jobs:
       - name: Install dependencies
         run: |
           apt-get update -y
-          apt-get install -y wget curl cmake make pkgconf clang llvm gcc g++ build-essential valgrind libbsd-dev libjemalloc-dev python3 python3-dev git libzstd-dev libncurses-dev libncursesw5-dev perl stockfish fairy-stockfish
+          apt-get install -y wget curl cmake make pkgconf clang llvm gcc g++ build-essential valgrind libbsd-dev libjemalloc-dev python3 python3-dev git libzstd-dev libncurses-dev libncursesw5-dev perl stockfish fairy-stockfish expect
           rm -rf /var/lib/apt/lists/*
           echo "/usr/games" >> $GITHUB_PATH
 
@@ -64,7 +64,10 @@ jobs:
           cmake -B build -DCMAKE_BUILD_TYPE=Release -DOPTION_SUPPORT_PGO=disabled
           cmake --build build
 
-      - name: Test
+      - name: Test (UCI)
+        run: ./test/run_tests.sh build/dummy_chess_uci
+
+      - name: Test (perft)
         run: python3 scripts/perft_test.py build
 
       - name: Build (with PGO)
@@ -117,7 +120,7 @@ jobs:
             sh -c '
               set -ex
               xbps-install -Syu
-              xbps-install -Sy wget bash cmake make pkg-config clang gcc base-devel llvm libbsd-devel jemalloc-devel python3 git libzstd-devel ncurses-devel perl stockfish fairy-stockfish
+              xbps-install -Sy wget bash cmake make pkg-config clang gcc base-devel llvm libbsd-devel jemalloc-devel python3 git libzstd-devel ncurses-devel perl stockfish fairy-stockfish expect
               export PATH="$PATH:/usr/games"
               if [ "${{ matrix.compiler }}" = "gcc" ]; then
                 export CC=gcc CXX=g++
@@ -126,6 +129,7 @@ jobs:
               fi
               cmake -B build -DCMAKE_BUILD_TYPE=Release -DOPTION_SUPPORT_PGO=disabled
               cmake --build build
+              ./test/run_tests.sh build/dummy_chess_uci
               python3 scripts/perft_test.py build
               rm -rf build
               cmake -B build -DCMAKE_BUILD_TYPE=Release
@@ -149,7 +153,7 @@ jobs:
       - name: Install dependencies
         run: |
           apt-get update -y
-          apt-get install -y wget cmake make pkgconf clang llvm gcc g++ build-essential valgrind libbsd-dev libjemalloc-dev python3 git libzstd-dev libncurses-dev libncursesw5-dev perl stockfish fairy-stockfish
+          apt-get install -y wget cmake make pkgconf clang llvm gcc g++ build-essential valgrind libbsd-dev libjemalloc-dev python3 git libzstd-dev libncurses-dev libncursesw5-dev perl stockfish fairy-stockfish expect
           rm -rf /var/lib/apt/lists/*
           echo "/usr/games" >> $GITHUB_PATH
 
@@ -177,7 +181,10 @@ jobs:
           cmake -B build -DCMAKE_BUILD_TYPE=Release -DOPTION_SUPPORT_PGO=disabled
           cmake --build build
 
-      - name: Test
+      - name: Test (UCI)
+        run: ./test/run_tests.sh build/dummy_chess_uci
+
+      - name: Test (perft)
         run: python3 scripts/perft_test.py build
 
       - name: Build (with PGO)
@@ -213,7 +220,7 @@ jobs:
             sh -c '
               set -ex
               xbps-install -Syu
-              xbps-install -Sy wget bash cmake make pkg-config clang gcc base-devel llvm libbsd-devel jemalloc-devel python3 git libzstd-devel ncurses-devel perl stockfish fairy-stockfish
+              xbps-install -Sy wget bash cmake make pkg-config clang gcc base-devel llvm libbsd-devel jemalloc-devel python3 git libzstd-devel ncurses-devel perl stockfish fairy-stockfish expect
               export PATH="$PATH:/usr/games"
               if [ "${{ matrix.compiler }}" = "gcc" ]; then
                 export CC=gcc CXX=g++
@@ -222,6 +229,7 @@ jobs:
               fi
               cmake -B build -DCMAKE_BUILD_TYPE=Release -DOPTION_SUPPORT_PGO=disabled
               cmake --build build
+              ./test/run_tests.sh build/dummy_chess_uci
               python3 scripts/perft_test.py build
               rm -rf build
               cmake -B build -DCMAKE_BUILD_TYPE=Release
@@ -236,7 +244,7 @@ jobs:
     steps:
       - name: Install dependencies
         run: |
-          brew install cmake make pkg-config libbsd jemalloc python3 git zstd ncurses stockfish fairy-stockfish gsed uv
+          brew install cmake make pkg-config libbsd jemalloc python3 git zstd ncurses stockfish fairy-stockfish gsed uv expect
           brew link zstd jemalloc libbsd stockfish git ncurses fairy-stockfish gsed uv --overwrite -f
 
       - name: Install Rust
@@ -274,7 +282,10 @@ jobs:
           cmake -B build -DCMAKE_BUILD_TYPE=Release -DOPTION_SUPPORT_PGO=disabled -DCMAKE_PREFIX_PATH="$CMAKE_PREFIX_PATH"
           cmake --build build
 
-      - name: Test
+      - name: Test (UCI)
+        run: ./test/run_tests.sh build/dummy_chess_uci
+
+      - name: Test (perft)
         run: python3 scripts/perft_test.py build
 
       - name: Build (with PGO)
@@ -326,7 +337,7 @@ jobs:
         with:
           usesh: true
           prepare: |
-            pkg install -y wget bash gsed cmake gmake pkgconf llvm gcc git python3 zstd ncurses perl5 stockfish
+            pkg install -y wget bash gsed cmake gmake pkgconf llvm gcc git python3 zstd ncurses perl5 stockfish expect
           run: |
             set -ex
             if [ "${{ matrix.compiler }}" = "gcc" ]; then
@@ -337,6 +348,7 @@ jobs:
             export MAKE=gmake
             cmake -B build -DCMAKE_BUILD_TYPE=Release -DOPTION_SUPPORT_PGO=disabled
             cmake --build build
+            ./test/run_tests.sh build/dummy_chess_uci
             PYTHONPATH=scripts python3 -c "import sys; sys.argv=['', 'build']; from perft_test import check_traditional; check_traditional()"
             rm -rf build
             cmake -B build -DCMAKE_BUILD_TYPE=Release
