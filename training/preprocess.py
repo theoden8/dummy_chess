@@ -182,7 +182,11 @@ def material_eval(board: chess.Board) -> int:
     return score
 
 
-def stockfish_eval(board: chess.Board, engine, depth: int = 12) -> tuple[int, int, int]:
+def stockfish_eval(
+    board: chess.Board,
+    engine,
+    depth: int = 12,
+) -> tuple[int, int, int]:
     """Stockfish evaluation. Returns (score_cp, depth, knodes)."""
     info = engine.analyse(board, chess.engine.Limit(depth=depth))
     score = info["score"].white()
@@ -198,33 +202,55 @@ def stockfish_eval(board: chess.Board, engine, depth: int = 12) -> tuple[int, in
 
 def process_puzzle_row(
     row: dict, engine=None, depth: int = 12
-) -> tuple[str, int, int, int] | None:
-    """Process single puzzle row. Returns (fen, score, depth, knodes) or None."""
+) -> list[tuple[str, int, int, int]]:
+    """
+    Process single puzzle row. Returns list of (fen, score, depth, knodes).
+
+    Extracts two positions:
+    1. Starting position (FEN) - before any moves
+    2. After move 1 - the opponent's "mistake" that creates the puzzle
+    """
     try:
         fen = row.get("FEN")
         moves_str = row.get("Moves")
         if not fen or not moves_str:
-            return None
+            return []
 
         moves = moves_str.split()
+        if not moves:
+            return []
+
+        results: list[tuple[str, int, int, int]] = []
+
+        # Position 1: Starting position
         board = chess.Board(fen)
-        for m in moves:
-            move = chess.Move.from_uci(m)
-            if move not in board.legal_moves:
-                return None
-            board.push(move)
+        if engine:
+            score, out_depth, out_knodes = stockfish_eval(board, engine, depth)
+        else:
+            score = material_eval(board)
+            out_depth = 0
+            out_knodes = 0
+        score = max(-15000, min(15000, score))
+        results.append((board.fen(), score, out_depth, out_knodes))
+
+        # Position 2: After move 1 (opponent's mistake)
+        move = chess.Move.from_uci(moves[0])
+        if move not in board.legal_moves:
+            return results  # Return just the starting position
+        board.push(move)
 
         if engine:
             score, out_depth, out_knodes = stockfish_eval(board, engine, depth)
         else:
             score = material_eval(board)
-            out_depth = 0  # Material eval has no search depth
+            out_depth = 0
             out_knodes = 0
-
         score = max(-15000, min(15000, score))
-        return board.fen(), score, out_depth, out_knodes
+        results.append((board.fen(), score, out_depth, out_knodes))
+
+        return results
     except Exception:
-        return None
+        return []
 
 
 def process_puzzles(
@@ -255,9 +281,8 @@ def process_puzzles(
     data: list[tuple[str, int, int, int]] = []
     rows = list(lf.collect().iter_rows(named=True))
     for row in tqdm(rows, desc="Puzzles"):
-        result = process_puzzle_row(row, engine, depth)
-        if result:
-            data.append(result)
+        results = process_puzzle_row(row, engine, depth)
+        data.extend(results)
 
     if engine:
         engine.quit()
@@ -306,15 +331,46 @@ def process_eval_row(row: dict) -> tuple[str, int, int, int] | None:
 
 
 def process_evals(
-    input_path: Path, max_rows: int | None
-) -> list[tuple[str, int, int, int]]:
-    """Process evaluation data in streaming manner."""
+    input_path: Path,
+    output_path: Path,
+    max_rows: int | None,
+    shuffle: bool = True,
+    seed: int = 42,
+    batch_size: int = 1000000,
+) -> int:
+    """
+    Process evaluation data, streaming to parquet in batches.
+
+    Returns the number of rows written.
+    """
+    import shutil
+    import subprocess
+    import tempfile
+
     print(f"Loading {input_path}...")
     lf = pl_scan_ndjson_zstd(input_path)
 
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Create temp directory for batch parquet files
+    tmp_dir = tempfile.mkdtemp(prefix="evals_")
+
     print("Processing evaluations...")
-    data: list[tuple[str, int, int, int]] = []
     count = 0
+    written = 0
+    batch_num = 0
+    batch: list[tuple[str, int, int, int]] = []
+
+    def flush_batch():
+        nonlocal batch, batch_num
+        if not batch:
+            return
+        df = pl.DataFrame(
+            batch, schema=["fen", "score", "depth", "knodes"], orient="row"
+        )
+        df.write_parquet(f"{tmp_dir}/batch_{batch_num:06d}.parquet")
+        batch_num += 1
+        batch = []
 
     pbar = tqdm(desc="Evals", unit=" rows")
     for row in lf.iter_rows():
@@ -323,13 +379,53 @@ def process_evals(
 
         result = process_eval_row(row)
         if result:
-            data.append(result)
+            batch.append(result)
+            written += 1
+
+            if len(batch) >= batch_size:
+                flush_batch()
 
         count += 1
         pbar.update(1)
 
     pbar.close()
-    return data
+    flush_batch()  # Write remaining
+
+    print(f"Written {written} rows in {batch_num} batches")
+
+    if batch_num == 0:
+        print("No data to write")
+        shutil.rmtree(tmp_dir)
+        return 0
+
+    # Combine batches and write to output
+    print(f"Writing to {output_path}...")
+    lf = pl.scan_parquet(f"{tmp_dir}/*.parquet")
+
+    out_str = str(output_path)
+    if out_str.endswith(".parquet") or not any(
+        out_str.endswith(ext) for ext in [".csv", ".csv.gz", ".csv.zst"]
+    ):
+        # Stream directly to parquet without loading into memory
+        lf.sink_parquet(output_path)
+    else:
+        # CSV requires collect (no sink_csv for LazyFrame with glob)
+        combined = lf.collect()
+        if shuffle:
+            print("Shuffling...")
+            combined = combined.sample(fraction=1.0, shuffle=True, seed=seed)
+        if out_str.endswith(".csv.gz"):
+            combined.write_csv(output_path, compression="gzip")
+        elif out_str.endswith(".csv.zst"):
+            combined.write_csv(output_path, compression="zstd")
+        else:
+            combined.write_csv(output_path)
+
+    # Cleanup
+    shutil.rmtree(tmp_dir)
+
+    print(f"Saved {written} rows -> {output_path}")
+    return written
 
 
 # =============================================================================
@@ -567,7 +663,7 @@ def save_data(
     shuffle: bool = True,
     seed: int = 42,
 ):
-    """Save data to a single CSV file with columns: fen, score, depth, knodes."""
+    """Save data to parquet or CSV file with columns: fen, score, depth, knodes."""
     if shuffle:
         random.seed(seed)
         random.shuffle(data)
@@ -578,12 +674,18 @@ def save_data(
         data, schema=["fen", "score", "depth", "knodes"], orient="row"
     )
 
-    if str(output_path).endswith(".gz"):
+    out_str = str(output_path)
+    if out_str.endswith(".parquet"):
+        out_df.write_parquet(output_path)
+    elif out_str.endswith(".csv.gz"):
         out_df.write_csv(output_path, compression="gzip")
-    elif str(output_path).endswith(".zst"):
+    elif out_str.endswith(".csv.zst"):
         out_df.write_csv(output_path, compression="zstd")
-    else:
+    elif out_str.endswith(".csv"):
         out_df.write_csv(output_path)
+    else:
+        # Default to parquet
+        out_df.write_parquet(output_path)
 
     print(f"Saved {len(out_df)} rows -> {output_path}")
 
@@ -645,7 +747,7 @@ def main():
             args.input = "data/lichess_db_eval.jsonl.zst"
 
     if args.output is None:
-        args.output = f"data/{args.source}.csv.gz"
+        args.output = f"data/{args.source}.parquet"
 
     if args.toy:
         if args.source == "puzzles":
@@ -678,7 +780,15 @@ def main():
                 "Download: wget https://database.lichess.org/lichess_db_eval.jsonl.zst"
             )
             sys.exit(1)
-        data = process_evals(input_path, args.max)
+        # Evals handles its own output (streaming)
+        process_evals(
+            input_path,
+            Path(args.output),
+            args.max,
+            shuffle=not args.no_shuffle,
+            seed=args.seed,
+        )
+        return
 
     elif args.source == "endgames":
         if args.max is None:
