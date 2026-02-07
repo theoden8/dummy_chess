@@ -443,6 +443,12 @@ def process_evals(
     print(f"Loading {input_path}...")
     lf = pl_scan_ndjson_zstd(input_path)
 
+    # Pre-count total rows for progress bar (skip if max_rows is set to avoid double scan)
+    total_rows = max_rows
+    if total_rows is None:
+        print("Counting rows...")
+        total_rows = len(lf)
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Create temp directory for batch parquet files
@@ -479,7 +485,7 @@ def process_evals(
         batch_num += 1
         batch = []
 
-    pbar = tqdm(desc="Evals", unit=" rows")
+    pbar = tqdm(total=total_rows, desc="Evals", unit=" rows")
     for row in lf.iter_rows():
         if max_rows and count >= max_rows:
             break
