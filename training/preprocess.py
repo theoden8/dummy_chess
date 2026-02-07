@@ -14,7 +14,9 @@ import argparse
 import io
 import itertools
 import random
+import shutil
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
@@ -264,9 +266,6 @@ def process_puzzles(
 
     Returns the number of rows written.
     """
-    import shutil
-    import tempfile
-
     engine = None
     if stockfish_path:
         try:
@@ -436,10 +435,6 @@ def process_evals(
 
     Returns the number of rows written.
     """
-    import shutil
-    import subprocess
-    import tempfile
-
     print(f"Loading {input_path}...")
     lf = pl_scan_ndjson_zstd(input_path)
 
