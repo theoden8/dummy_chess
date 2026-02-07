@@ -1,0 +1,116 @@
+#!/usr/bin/expect -f
+# Test: Shutdown scenarios - verify engine handles various shutdown conditions
+
+source [file dirname [info script]]/common.tcl
+
+# Test 1: Clean quit after uci
+test_start "Clean quit after uci"
+
+set spawn_id [start_uci]
+uci_send "uci"
+expect "uciok"
+uci_send "quit"
+
+set timeout 5
+expect {
+    eof {
+        test_pass "Clean exit after uci"
+    }
+    timeout {
+        test_fail "Engine did not exit"
+        exit 1
+    }
+}
+catch {wait}
+
+# Test 2: Quit during search - send stop first, then quit
+test_start "Quit during search"
+
+set spawn_id [start_uci]
+uci_send "uci"
+expect "uciok"
+uci_send "isready"
+expect "readyok"
+uci_send "position startpos"
+uci_send "go infinite"
+
+# Let search run briefly
+after 300
+
+# First stop the search, then quit
+uci_send "stop"
+expect -re "bestmove"
+uci_send "quit"
+
+set timeout 5
+expect {
+    eof {
+        test_pass "Clean exit during search"
+    }
+    timeout {
+        test_fail "Engine did not exit during search"
+        exit 1
+    }
+}
+catch {wait}
+
+# Test 3: Multiple isready before quit
+test_start "Multiple isready before quit"
+
+set spawn_id [start_uci]
+uci_send "uci"
+expect "uciok"
+
+uci_send "isready"
+expect "readyok"
+uci_send "isready"
+expect "readyok"
+uci_send "isready"
+expect "readyok"
+
+uci_send "quit"
+set timeout 5
+expect {
+    eof {
+        test_pass "Clean exit after multiple isready"
+    }
+    timeout {
+        test_fail "Engine did not exit"
+        exit 1
+    }
+}
+catch {wait}
+
+# Test 4: ucinewgame followed by quit
+test_start "ucinewgame then quit"
+
+set spawn_id [start_uci]
+uci_send "uci"
+expect "uciok"
+uci_send "isready"
+expect "readyok"
+
+# Set up a game
+uci_send "position startpos moves e2e4 e7e5"
+uci_send "go depth 3"
+expect -re "bestmove"
+
+# New game
+uci_send "ucinewgame"
+uci_send "isready"
+expect "readyok"
+
+uci_send "quit"
+set timeout 5
+expect {
+    eof {
+        test_pass "Clean exit after ucinewgame"
+    }
+    timeout {
+        test_fail "Engine did not exit after ucinewgame"
+        exit 1
+    }
+}
+catch {wait}
+
+exit [test_summary]

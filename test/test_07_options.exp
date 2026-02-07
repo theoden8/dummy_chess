@@ -1,0 +1,95 @@
+#!/usr/bin/expect -f
+# Test: UCI options - verify setoption commands work
+
+source [file dirname [info script]]/common.tcl
+
+test_start "UCI options"
+
+# Start the UCI engine
+start_uci
+
+# Get options list
+test_start "Options reported"
+
+uci_send "uci"
+
+set got_hash_option 0
+set got_uciok 0
+
+expect {
+    -re "option name Hash" {
+        set got_hash_option 1
+        exp_continue
+    }
+    "uciok" {
+        set got_uciok 1
+    }
+    timeout {
+        test_fail "Timeout waiting for uci response"
+        exit 1
+    }
+}
+
+if {$got_hash_option} {
+    test_pass "Hash option reported"
+} else {
+    test_fail "Hash option not found"
+}
+
+# Test setoption
+test_start "setoption Hash"
+
+uci_send "setoption name Hash value 32"
+uci_send "isready"
+
+expect {
+    "readyok" {
+        test_pass "Engine accepted Hash option"
+    }
+    timeout {
+        test_fail "Timeout after setoption"
+        exit 1
+    }
+}
+
+# Verify engine still works after option change
+test_start "Engine works after option change"
+
+uci_send "position startpos"
+uci_send "go depth 3"
+
+expect {
+    -re "bestmove" {
+        test_pass "Engine works after Hash change"
+    }
+    timeout {
+        test_fail "Engine not working after option change"
+    }
+}
+
+# Test invalid option (should not crash)
+test_start "Invalid option handling"
+
+uci_send "setoption name InvalidOption value 123"
+uci_send "isready"
+
+expect {
+    "readyok" {
+        test_pass "Engine survives invalid option"
+    }
+    timeout {
+        test_fail "Engine hung on invalid option"
+        exit 1
+    }
+    eof {
+        test_fail "Engine crashed on invalid option"
+        exit 1
+    }
+}
+
+# Clean quit
+uci_send "quit"
+expect eof
+catch {wait}
+
+exit [test_summary]

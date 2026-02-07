@@ -1,0 +1,99 @@
+#!/usr/bin/expect -f
+# Test: ucinewgame - verify engine properly resets for new game
+
+source [file dirname [info script]]/common.tcl
+
+test_start "ucinewgame functionality"
+
+# Start the UCI engine
+start_uci
+
+# Initialize
+uci_send "uci"
+expect "uciok"
+
+uci_send "isready"
+expect "readyok"
+
+# Play some moves
+test_start "Play initial game"
+uci_send "position startpos moves e2e4 e7e5 g1f3 b8c6"
+uci_send "go depth 4"
+
+set timeout 15
+expect {
+    -re "bestmove\\s+(\\w+)" {
+        set first_game_move $expect_out(1,string)
+        test_pass "First game: got bestmove $first_game_move"
+    }
+    timeout {
+        test_fail "Timeout in first game"
+        exit 1
+    }
+}
+
+# Start new game
+test_start "ucinewgame resets state"
+uci_send "ucinewgame"
+uci_send "isready"
+
+expect {
+    "readyok" {
+        test_pass "Engine ready after ucinewgame"
+    }
+    timeout {
+        test_fail "Engine not ready after ucinewgame"
+        exit 1
+    }
+}
+
+# Verify position is properly reset by using perft on startpos
+test_start "Position reset after ucinewgame"
+uci_send "position startpos"
+uci_send "go perft 1"
+
+expect {
+    -re "Nodes searched:\\s*20" {
+        test_pass "Starting position correct after ucinewgame"
+    }
+    timeout {
+        test_fail "Position not correct after ucinewgame"
+    }
+}
+
+# Play another game
+test_start "Second game works"
+uci_send "position startpos moves d2d4"
+uci_send "go depth 4"
+
+expect {
+    -re "bestmove\\s+(\\w+)" {
+        test_pass "Second game: got bestmove $expect_out(1,string)"
+    }
+    timeout {
+        test_fail "Timeout in second game"
+    }
+}
+
+# Test multiple ucinewgame in succession
+test_start "Multiple ucinewgame commands"
+
+for {set i 0} {$i < 3} {incr i} {
+    uci_send "ucinewgame"
+    uci_send "isready"
+    expect {
+        "readyok" { }
+        timeout {
+            test_fail "Engine not ready after ucinewgame #$i"
+            exit 1
+        }
+    }
+}
+test_pass "Multiple ucinewgame commands handled"
+
+# Clean quit
+uci_send "quit"
+expect eof
+catch {wait}
+
+exit [test_summary]

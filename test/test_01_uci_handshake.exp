@@ -1,0 +1,90 @@
+#!/usr/bin/expect -f
+# Test: UCI handshake - verify basic UCI protocol startup
+
+source [file dirname [info script]]/common.tcl
+
+test_start "UCI handshake"
+
+# Start the UCI engine
+start_uci
+
+# Send uci command and expect proper response
+uci_send "uci"
+
+set got_id_name 0
+set got_id_author 0
+set got_uciok 0
+
+expect {
+    -re "id name" {
+        set got_id_name 1
+        exp_continue
+    }
+    -re "id author" {
+        set got_id_author 1
+        exp_continue
+    }
+    "uciok" {
+        set got_uciok 1
+    }
+    timeout {
+        test_fail "Timeout waiting for uciok"
+        exit 1
+    }
+    eof {
+        test_fail "Process died unexpectedly"
+        exit 1
+    }
+}
+
+if {!$got_id_name} {
+    test_fail "Missing 'id name' response"
+    exit 1
+}
+
+if {!$got_id_author} {
+    test_fail "Missing 'id author' response"
+    exit 1
+}
+
+if {!$got_uciok} {
+    test_fail "Missing 'uciok' response"
+    exit 1
+}
+
+test_pass "Got id name, id author, and uciok"
+
+# Test isready/readyok
+test_start "isready command"
+uci_send "isready"
+
+expect {
+    "readyok" {
+        test_pass "Got readyok"
+    }
+    timeout {
+        test_fail "Timeout waiting for readyok"
+        exit 1
+    }
+    eof {
+        test_fail "Process died unexpectedly"
+        exit 1
+    }
+}
+
+# Clean quit
+test_start "quit command"
+uci_send "quit"
+
+expect {
+    eof {
+        test_pass "Engine exited cleanly"
+    }
+    timeout {
+        test_fail "Engine did not exit after quit"
+        exit 1
+    }
+}
+catch {wait}
+
+exit [test_summary]

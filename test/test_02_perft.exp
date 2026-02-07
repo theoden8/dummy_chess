@@ -1,0 +1,73 @@
+#!/usr/bin/expect -f
+# Test: Perft verification - verify positions are set correctly via perft
+
+source [file dirname [info script]]/common.tcl
+
+# Known perft values from https://www.chessprogramming.org/Perft_Results
+# Format: {fen depth expected_nodes}
+set perft_tests {
+    {"startpos" 1 20}
+    {"startpos" 2 400}
+    {"startpos" 3 8902}
+    {"fen r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq -" 1 48}
+    {"fen r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq -" 2 2039}
+    {"fen 8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - -" 1 14}
+    {"fen 8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - -" 2 191}
+    {"fen rnbq1k1r/pp1Pbppp/2p5/8/2B5/8/PPP1NnPP/RNBQK2R w KQ -" 1 44}
+}
+
+test_start "Perft verification"
+
+# Start the UCI engine
+start_uci
+
+# Initialize
+uci_send "uci"
+expect "uciok"
+
+foreach test $perft_tests {
+    set position [lindex $test 0]
+    set depth [lindex $test 1]
+    set expected [lindex $test 2]
+
+    test_start "perft($depth) on $position"
+
+    # Set position
+    uci_send "position $position"
+
+    # Small delay to ensure position is set
+    after 100
+
+    # Run perft
+    uci_send "go perft $depth"
+
+    set actual -1
+    set timeout 30
+
+    expect {
+        -re "Nodes searched:\\s*(\\d+)" {
+            set actual $expect_out(1,string)
+        }
+        timeout {
+            test_fail "Timeout waiting for perft result"
+            continue
+        }
+        eof {
+            test_fail "Process died unexpectedly"
+            exit 1
+        }
+    }
+
+    if {$actual == $expected} {
+        test_pass "Got $actual nodes (expected $expected)"
+    } else {
+        test_fail "Got $actual nodes, expected $expected"
+    }
+}
+
+# Clean quit
+uci_send "quit"
+expect eof
+catch {wait}
+
+exit [test_summary]

@@ -1,0 +1,133 @@
+#!/usr/bin/expect -f
+# Test: Position changes - verify set_fen works correctly when changing positions
+# This tests the new set_fen functionality that reuses the engine instance
+
+source [file dirname [info script]]/common.tcl
+
+test_start "Position changes with set_fen"
+
+# Start the UCI engine
+start_uci
+
+# Initialize
+uci_send "uci"
+expect "uciok"
+
+uci_send "isready"
+expect "readyok"
+
+# Test 1: Multiple position changes using the same engine instance
+# Each position change should use set_fen internally
+
+test_start "Multiple position changes"
+
+# Starting position - perft(1) = 20
+uci_send "position startpos"
+uci_send "go perft 1"
+expect {
+    -re "Nodes searched:\\s*20" {
+        test_pass "Starting position perft(1) = 20"
+    }
+    timeout {
+        test_fail "Timeout or wrong perft for starting position"
+    }
+}
+
+# Sicilian position (after 1.e4 c5 2.Nf3 Nc6) - perft(1) = 28
+uci_send "position fen r1bqkbnr/pp1ppppp/2n5/2p5/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq -"
+uci_send "go perft 1"
+expect {
+    -re "Nodes searched:\\s*28" {
+        test_pass "Sicilian position perft(1) = 28"
+    }
+    -re "Nodes searched:\\s*(\\d+)" {
+        test_fail "Sicilian position: got $expect_out(1,string), expected 28"
+    }
+    timeout {
+        test_fail "Timeout on Sicilian position"
+    }
+}
+
+# Back to starting position - should still work
+uci_send "position startpos"
+uci_send "go perft 1"
+expect {
+    -re "Nodes searched:\\s*20" {
+        test_pass "Back to starting position perft(1) = 20"
+    }
+    timeout {
+        test_fail "Timeout or wrong perft going back to start"
+    }
+}
+
+# Test 2: Position with moves
+test_start "Position with moves"
+
+uci_send "position startpos moves e2e4 e7e5"
+uci_send "go perft 1"
+expect {
+    -re "Nodes searched:\\s*29" {
+        test_pass "1.e4 e5 position perft(1) = 29"
+    }
+    -re "Nodes searched:\\s*(\\d+)" {
+        test_fail "1.e4 e5 position: got $expect_out(1,string), expected 29"
+    }
+    timeout {
+        test_fail "Timeout on position with moves"
+    }
+}
+
+# Test 3: Rapid position changes (stress test set_fen)
+test_start "Rapid position changes"
+
+set positions {
+    {"fen rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq -" 20}
+    {"fen 8/8/8/8/8/8/8/4K2k w - -" 5}
+    {"fen 4k3/8/8/8/8/8/8/R3K3 w Q -" 16}
+    {"startpos" 20}
+}
+
+foreach pos_data $positions {
+    set pos [lindex $pos_data 0]
+    set expected [lindex $pos_data 1]
+
+    uci_send "position $pos"
+    uci_send "go perft 1"
+
+    expect {
+        -re "Nodes searched:\\s*$expected" {
+            # pass silently for rapid test
+        }
+        -re "Nodes searched:\\s*(\\d+)" {
+            test_fail "Position '$pos': got $expect_out(1,string), expected $expected"
+        }
+        timeout {
+            test_fail "Timeout on rapid position change"
+        }
+    }
+}
+test_pass "All rapid position changes correct"
+
+# Test 4: Verify engine still works after many position changes
+test_start "Engine functional after many changes"
+
+uci_send "position startpos"
+uci_send "go depth 3"
+
+set timeout 10
+expect {
+    -re "bestmove\\s+(\\w+)" {
+        test_pass "Got bestmove $expect_out(1,string) after position changes"
+    }
+    timeout {
+        test_fail "Engine not responding after position changes"
+        exit 1
+    }
+}
+
+# Clean quit
+uci_send "quit"
+expect eof
+catch {wait}
+
+exit [test_summary]

@@ -1,0 +1,85 @@
+#!/usr/bin/expect -f
+# Test: Stop command - verify engine stops thinking when asked
+
+source [file dirname [info script]]/common.tcl
+
+test_start "Stop thinking"
+
+# Start the UCI engine
+start_uci
+
+# Initialize
+uci_send "uci"
+expect "uciok"
+
+uci_send "isready"
+expect "readyok"
+
+# Set starting position
+uci_send "position startpos"
+
+# Start infinite search
+test_start "Infinite search and stop"
+uci_send "go infinite"
+
+# Wait a bit for search to start
+after 500
+
+# Send stop
+uci_send "stop"
+
+# Should get bestmove response
+set timeout 5
+expect {
+    -re "bestmove\\s+\\w+" {
+        test_pass "Got bestmove after stop"
+    }
+    timeout {
+        test_fail "Timeout waiting for bestmove after stop"
+        exit 1
+    }
+    eof {
+        test_fail "Process died unexpectedly"
+        exit 1
+    }
+}
+
+# Verify engine is still responsive after stop
+test_start "Responsive after stop"
+uci_send "isready"
+
+expect {
+    "readyok" {
+        test_pass "Engine still responsive after stop"
+    }
+    timeout {
+        test_fail "Engine not responsive after stop"
+        exit 1
+    }
+}
+
+# Test stop during depth-limited search
+test_start "Stop during depth search"
+uci_send "position startpos moves e2e4"
+uci_send "go depth 20"
+
+# Wait briefly then stop
+after 200
+uci_send "stop"
+
+expect {
+    -re "bestmove\\s+\\w+" {
+        test_pass "Got bestmove after stopping depth search"
+    }
+    timeout {
+        test_fail "Timeout waiting for bestmove"
+        exit 1
+    }
+}
+
+# Clean quit
+uci_send "quit"
+expect eof
+catch {wait}
+
+exit [test_summary]
