@@ -247,6 +247,22 @@ private:
 };
 
 PYBIND11_MODULE(_dummychess, m) {
+  // FEN compression functions
+  m.def("compress_fen", [](const std::string &fenstring) {
+    fen::FEN f = fen::load_from_string(fenstring);
+    std::vector<uint8_t> compressed = fen::compress::compress_fen(f);
+    return py::bytes(reinterpret_cast<const char*>(compressed.data()), compressed.size());
+  }, "Compress a FEN string to bytes");
+
+  m.def("decompress_fen", [](const py::bytes &data) {
+    char *buffer;
+    Py_ssize_t length;
+    PyBytes_AsStringAndSize(data.ptr(), &buffer, &length);
+    std::vector<uint8_t> v(buffer, buffer + length);
+    fen::FEN f = fen::compress::decompress_fen(v);
+    return fen::export_as_string(f);
+  }, "Decompress bytes to a FEN string");
+
   py::enum_<BoardBindings::Status>(m, "Status")
     .value("ONGOING", BoardBindings::Status::ONGOING)
     .value("DRAW", BoardBindings::Status::DRAW)

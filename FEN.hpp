@@ -361,4 +361,160 @@ namespace fen {
   std::string FEN::export_as_string() const {
     return fen::export_as_string(*this);
   }
+
+  // Compressed FEN encoding (nibble-based)
+  // Board: pieces 0x0-0xB, empty runs 0xC + count
+  // Crazyhouse: pocket counts + promoted bitboard
+  namespace compress {
+    constexpr uint8_t NIB_EMPTY = 0xC;
+    constexpr char PIECES[] = "KQRBNPkqrbnp";
+
+    inline uint8_t piece_to_nib(char c) {
+      for(int i = 0; i < 12; ++i) if(PIECES[i] == c) return i;
+      return 0xFF;
+    }
+
+    inline char nib_to_piece(uint8_t n) {
+      return (n < 12) ? PIECES[n] : '\0';
+    }
+
+    inline std::vector<uint8_t> compress_fen(const fen::FEN &f) {
+      std::vector<uint8_t> out;
+
+      // flags byte FIRST (so we can detect crazyhouse when decompressing)
+      uint8_t flags = (f.active_player == BLACK ? 1 : 0)
+                    | (f.chess960 ? 2 : 0)
+                    | (f.crazyhouse ? 4 : 0);
+      out.push_back(flags);
+
+      // encode board (f.board uses spaces for empty squares)
+      std::vector<uint8_t> nibs;
+      size_t i = 0;
+      while(i < f.board.size()) {
+        char c = f.board[i];
+        if(c == ' ') {
+          // count consecutive empty squares
+          uint8_t cnt = 0;
+          while(i < f.board.size() && f.board[i] == ' ' && cnt < 8) {
+            ++cnt;
+            ++i;
+          }
+          nibs.push_back(NIB_EMPTY);
+          nibs.push_back(cnt - 1);  // store 0-7 for 1-8 squares
+        } else {
+          uint8_t n = piece_to_nib(c);
+          if(n != 0xFF) nibs.push_back(n);
+          ++i;
+        }
+      }
+
+      // pack nibbles to bytes
+      for(size_t i = 0; i < nibs.size(); i += 2) {
+        uint8_t hi = nibs[i];
+        uint8_t lo = (i + 1 < nibs.size()) ? nibs[i + 1] : 0xF;
+        out.push_back((hi << 4) | lo);
+      }
+
+      // rest of metadata
+      out.push_back(bitmask::first(f.castlings));
+      out.push_back(bitmask::second(f.castlings));
+      out.push_back(f.enpassant);
+      out.push_back(f.halfmove_clock);
+      out.push_back(f.fullmove & 0xFF);
+      out.push_back((f.fullmove >> 8) & 0xFF);
+
+      // crazyhouse extras
+      if(f.crazyhouse) {
+        // pocket: count each piece type (5 types × 2 colors = 10 nibbles)
+        std::vector<uint8_t> pocket_nibs;
+        for(char pc : {'Q','R','B','N','P','q','r','b','n','p'}) {
+          uint8_t cnt = 0;
+          for(char c : f.subs) if(c == pc) ++cnt;
+          pocket_nibs.push_back(cnt & 0xF);
+        }
+        for(size_t i = 0; i < pocket_nibs.size(); i += 2) {
+          out.push_back((pocket_nibs[i] << 4) | pocket_nibs[i + 1]);
+        }
+        // promoted bitboard (8 bytes)
+        for(int i = 0; i < 8; ++i) {
+          out.push_back((f.crazyhouse_promoted >> (i * 8)) & 0xFF);
+        }
+      }
+
+      return out;
+    }
+
+    inline fen::FEN decompress_fen(const std::vector<uint8_t> &data) {
+      if(data.size() < 8) return {};  // min: 1 flags + 1 board + 6 metadata
+
+      // flags byte is FIRST
+      uint8_t flags = data[0];
+      bool is_crazyhouse = flags & 4;
+
+      // calculate where board data ends and metadata begins
+      // format: [flags 1][board N][castlings 2][enpassant 1][halfmove 1][fullmove 2][pocket 5?][promoted 8?]
+      size_t meta_size = 6 + (is_crazyhouse ? 13 : 0);
+      size_t board_end = data.size() - meta_size;
+
+      // unpack board nibbles (starting from byte 1)
+      std::vector<uint8_t> nibs;
+      for(size_t i = 1; i < board_end; ++i) {
+        nibs.push_back((data[i] >> 4) & 0xF);
+        nibs.push_back(data[i] & 0xF);
+      }
+
+      // decode board (f.board uses spaces for empty squares)
+      std::string board;
+      size_t sq = 0;
+      for(size_t i = 0; i < nibs.size() && sq < 64; ) {
+        if(nibs[i] == NIB_EMPTY && i + 1 < nibs.size()) {
+          uint8_t cnt = nibs[i + 1] + 1;
+          for(uint8_t j = 0; j < cnt; ++j) board += ' ';
+          sq += cnt;
+          i += 2;
+        } else if(nibs[i] < 12) {
+          board += nib_to_piece(nibs[i]);
+          sq++;
+          i++;
+        } else if(nibs[i] == 0xF) {
+          break; // padding
+        } else {
+          i++;
+        }
+      }
+
+      // read metadata (starts at board_end)
+      size_t m = board_end;
+      fen::FEN f = {
+        .active_player = (flags & 1) ? BLACK : WHITE,
+        .board = board,
+        .subs = ""s,
+        .castlings = bitmask::_pos_pair(data[m], data[m + 1]),
+        .enpassant = data[m + 2],
+        .halfmove_clock = data[m + 3],
+        .fullmove = ply_index_t(data[m + 4] | (data[m + 5] << 8)),
+        .chess960 = bool(flags & 2),
+        .crazyhouse = is_crazyhouse,
+        .crazyhouse_promoted = 0,
+      };
+
+      if(is_crazyhouse) {
+        // decode pocket (starts at m + 6)
+        size_t p = m + 6;
+        const char pocket_pieces[] = "QRBNPqrbnp";
+        for(int i = 0; i < 10; i += 2) {
+          uint8_t b = data[p + i/2];
+          uint8_t c1 = (b >> 4) & 0xF, c2 = b & 0xF;
+          for(uint8_t j = 0; j < c1; ++j) f.subs += pocket_pieces[i];
+          for(uint8_t j = 0; j < c2; ++j) f.subs += pocket_pieces[i + 1];
+        }
+        // decode promoted bitboard (starts at p + 5)
+        for(int i = 0; i < 8; ++i) {
+          f.crazyhouse_promoted |= uint64_t(data[p + 5 + i]) << (i * 8);
+        }
+      }
+
+      return f;
+    }
+  } // namespace compress
 } // namespace fen
