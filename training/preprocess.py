@@ -211,49 +211,46 @@ def process_puzzle_row(
     1. Starting position (FEN) - before any moves
     2. After move 1 - the opponent's "mistake" that creates the puzzle
     """
-    try:
-        fen = row.get("FEN")
-        moves_str = row.get("Moves")
-        if not fen or not moves_str:
-            return []
-
-        moves = moves_str.split()
-        if not moves:
-            return []
-
-        results: list[tuple[bytes, int, int, int]] = []
-
-        # Position 1: Starting position
-        board = chess.Board(fen)
-        if engine:
-            score, out_depth, out_knodes = stockfish_eval(board, engine, depth)
-        else:
-            score = material_eval(board)
-            out_depth = 0
-            out_knodes = 0
-        score = max(-15000, min(15000, score))
-        compressed_fen = dummy_chess.compress_fen(board.fen())
-        results.append((compressed_fen, score, out_depth, out_knodes))
-
-        # Position 2: After move 1 (opponent's mistake)
-        move = chess.Move.from_uci(moves[0])
-        if move not in board.legal_moves:
-            return results  # Return just the starting position
-        board.push(move)
-
-        if engine:
-            score, out_depth, out_knodes = stockfish_eval(board, engine, depth)
-        else:
-            score = material_eval(board)
-            out_depth = 0
-            out_knodes = 0
-        score = max(-15000, min(15000, score))
-        compressed_fen = dummy_chess.compress_fen(board.fen())
-        results.append((compressed_fen, score, out_depth, out_knodes))
-
-        return results
-    except Exception:
+    fen = row.get("FEN")
+    moves_str = row.get("Moves")
+    if not fen or not moves_str:
         return []
+
+    moves = moves_str.split()
+    if not moves:
+        return []
+
+    results: list[tuple[bytes, int, int, int]] = []
+
+    # Position 1: Starting position
+    board = chess.Board(fen)
+    if engine:
+        score, out_depth, out_knodes = stockfish_eval(board, engine, depth)
+    else:
+        score = material_eval(board)
+        out_depth = 0
+        out_knodes = 0
+    score = max(-15000, min(15000, score))
+    compressed_fen = dummy_chess.compress_fen(board.fen())
+    results.append((compressed_fen, score, out_depth, out_knodes))
+
+    # Position 2: After move 1 (opponent's mistake)
+    move = chess.Move.from_uci(moves[0])
+    if move not in board.legal_moves:
+        return results  # Return just the starting position
+    board.push(move)
+
+    if engine:
+        score, out_depth, out_knodes = stockfish_eval(board, engine, depth)
+    else:
+        score = material_eval(board)
+        out_depth = 0
+        out_knodes = 0
+    score = max(-15000, min(15000, score))
+    compressed_fen = dummy_chess.compress_fen(board.fen())
+    results.append((compressed_fen, score, out_depth, out_knodes))
+
+    return results
 
 
 def process_puzzles(
