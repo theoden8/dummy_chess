@@ -108,8 +108,10 @@ endfunction()
 function(detect_sanitize_support OUT_VAR)
   # Check if we're on glibc or Apple (sanitizers work well there)
   check_cxx_source_compiles("
+    #if defined(__APPLE__) or defined(__GLIBC__)
+    #if defined(__GLIBC__)
     #include <features.h>
-    #if defined(__GLIBC__) || defined(__APPLE__)
+    #endif
     int main() { return 0; }
     #else
     #error no glibc or apple

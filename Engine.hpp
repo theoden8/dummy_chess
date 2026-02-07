@@ -1578,7 +1578,7 @@ public:
             return score;
           }
         }
-        if(ab_state.initdepth <= depth + 2 + (depth_t(pline.line.size()) / 7) && move_index + 1 != moves_size) {
+        if(ab_state.initdepth <= depth + 2) {
           if(!callback_f(depth, bestscore)) {
             return bestscore;
           }
