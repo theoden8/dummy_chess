@@ -268,7 +268,7 @@ class DataSource:
     A data source with a LazyFrame and optional weight for proportional sampling.
 
     Args:
-        path: Path to CSV file
+        path: Path to CSV or parquet file
         weight: Relative weight for sampling (default 1.0)
         name: Optional name for logging
     """
@@ -283,7 +283,10 @@ class DataSource:
     @property
     def lf(self) -> pl.LazyFrame:
         if self._lf is None:
-            self._lf = pl.scan_csv(self.path)
+            if self.path.endswith(".parquet"):
+                self._lf = pl.scan_parquet(self.path)
+            else:
+                self._lf = pl.scan_csv(self.path)
         return self._lf
 
     def __len__(self) -> int:
@@ -312,16 +315,16 @@ class ProportionalDataset(torch.utils.data.IterableDataset):
 
     Example:
         dataset = ProportionalDataset([
-            DataSource("data/evals.csv.gz", weight=0.7),
-            DataSource("data/puzzles.csv.gz", weight=0.2),
-            DataSource("data/endgames.csv.gz", weight=0.1),
+            DataSource("data/evals.parquet", weight=0.7),
+            DataSource("data/puzzles.parquet", weight=0.2),
+            DataSource("data/endgames.parquet", weight=0.1),
         ], split="train")
 
         # Or with tuples:
         dataset = ProportionalDataset([
-            ("data/evals.csv.gz", 0.7),
-            ("data/puzzles.csv.gz", 0.2),
-            ("data/endgames.csv.gz", 0.1),
+            ("data/evals.parquet", 0.7),
+            ("data/puzzles.parquet", 0.2),
+            ("data/endgames.parquet", 0.1),
         ], split="train")
     """
 
@@ -463,13 +466,13 @@ class LazyFrameDataset(torch.utils.data.IterableDataset):
 
     Example:
         # Single source
-        lf = pl.scan_csv("data/evals.csv.gz")
+        lf = pl.scan_parquet("data/evals.parquet")
         train_ds = LazyFrameDataset(lf, split="train")
         val_ds = LazyFrameDataset(lf, split="val")
 
         # Multiple sources
-        lf1 = pl.scan_csv("data/puzzles.csv.gz")
-        lf2 = pl.scan_csv("data/evals.csv.gz")
+        lf1 = pl.scan_parquet("data/puzzles.parquet")
+        lf2 = pl.scan_parquet("data/evals.parquet")
         dataset = LazyFrameDataset([lf1, lf2], split="train")
     """
 
