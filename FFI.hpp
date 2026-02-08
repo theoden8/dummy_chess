@@ -47,6 +47,29 @@ struct FFI {
   EXPORT static void destroy_fen_ptr(fen::FEN* f) { delete f; }
   EXPORT static std::string* fen_export_as_string(const fen::FEN* f) { return new std::string(f->export_as_string()); }
 
+  // ========== FEN Compression ==========
+  // Compress FEN to bytes, returns heap-allocated vector
+  EXPORT static std::vector<uint8_t>* compress_fen(const fen::FEN* f) {
+    return new std::vector<uint8_t>(fen::compress::compress_fen(*f));
+  }
+  EXPORT static void destroy_compressed_fen(std::vector<uint8_t>* v) { delete v; }
+  EXPORT static const uint8_t* compressed_fen_data(const std::vector<uint8_t>* v) { return v->data(); }
+  EXPORT static size_t compressed_fen_size(const std::vector<uint8_t>* v) { return v->size(); }
+
+  // Decompress bytes to FEN, returns heap-allocated FEN
+  EXPORT static fen::FEN* decompress_fen(const uint8_t* data, size_t len) {
+    std::vector<uint8_t> v(data, data + len);
+    return new fen::FEN(fen::compress::decompress_fen(v));
+  }
+
+  // Get variant flags from compressed FEN (without full decompression)
+  EXPORT static bool is_chess960(const uint8_t* data, size_t len) {
+    return len > 0 && (data[0] & 2);
+  }
+  EXPORT static bool is_crazyhouse(const uint8_t* data, size_t len) {
+    return len > 0 && (data[0] & 4);
+  }
+
   // ========== Board ==========
   EXPORT static fen::FEN* board_export_as_fen(const Board& board) { return new fen::FEN(board.export_as_fen()); }
 

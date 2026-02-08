@@ -80,6 +80,41 @@ impl FEN {
     };
     cpp_str.to_string()
   }
+
+  /// Compress FEN to bytes
+  pub fn compress(&self) -> Vec<u8> {
+    unsafe {
+      let compressed = root::FFI::compress_fen(self.fen);
+      let data = root::FFI::compressed_fen_data(compressed);
+      let size = root::FFI::compressed_fen_size(compressed);
+      let result = std::slice::from_raw_parts(data, size).to_vec();
+      root::FFI::destroy_compressed_fen(compressed);
+      result
+    }
+  }
+
+  /// Decompress bytes to FEN
+  pub fn decompress(data: &[u8]) -> FEN {
+    ensure_initialized();
+    let fen = unsafe { root::FFI::decompress_fen(data.as_ptr(), data.len()) };
+    FEN { fen }
+  }
+
+  /// Get variant from compressed FEN bytes: "standard", "chess960", or "crazyhouse"
+  pub fn variant(data: &[u8]) -> &'static str {
+    if data.is_empty() {
+      return "standard";
+    }
+    unsafe {
+      if root::FFI::is_crazyhouse(data.as_ptr(), data.len()) {
+        "crazyhouse"
+      } else if root::FFI::is_chess960(data.as_ptr(), data.len()) {
+        "chess960"
+      } else {
+        "standard"
+      }
+    }
+  }
 }
 
 impl Drop for FEN {
@@ -399,6 +434,21 @@ mod tests {
     assert!(fen_str.contains("rnbqkbnr"));
     assert!(fen_str.contains("RNBQKBNR"));
     assert!(fen_str.contains("w")); // White to move
+  }
+
+  #[test]
+  fn test_fen_compress_decompress() {
+    let fen = FEN::new(&STARTING_FEN.to_string());
+    let compressed = fen.compress();
+    let decompressed = FEN::decompress(&compressed);
+    assert_eq!(fen.str(), decompressed.str());
+  }
+
+  #[test]
+  fn test_fen_variant_detection() {
+    let fen = FEN::new(&STARTING_FEN.to_string());
+    let compressed = fen.compress();
+    assert_eq!(FEN::variant(&compressed), "standard");
   }
 
   #[test]
