@@ -30,7 +30,11 @@ import tqdm.auto as tqdm
 # Architecture Constants (must match NNUE.hpp)
 # ============================================================================
 
-HALFKP_SIZE = 41024
+# Feature sizes for different architectures
+HALFKP_SIZE = dummy_chess.HALFKP_SIZE  # 41025 (64 king squares * 640 + 1)
+HALFKAV2_SIZE = dummy_chess.HALFKAV2_SIZE  # 7693 (12 king buckets * 640 + 1)
+
+# Common layer sizes
 FT_OUT = 256
 L1_OUT = 32
 L2_OUT = 32
@@ -229,9 +233,28 @@ def get_halfkp_features_np(fen: str | bytes) -> tuple[np.ndarray, np.ndarray, in
 
 
 class NNUE(torch.nn.Module):
-    def __init__(self):
+    """
+    NNUE network supporting both HalfKP and HalfKAv2 architectures.
+
+    Args:
+        arch: "halfkp" (default) or "halfkav2"
+    """
+
+    def __init__(self, arch: str = "halfkp"):
         super().__init__()
-        self.ft = torch.nn.EmbeddingBag(HALFKP_SIZE, FT_OUT, mode="sum", sparse=True)
+        self.arch = arch
+
+        if arch == "halfkp":
+            ft_size = HALFKP_SIZE
+        elif arch == "halfkav2":
+            ft_size = HALFKAV2_SIZE
+        else:
+            raise ValueError(
+                f"Unknown architecture: {arch}. Use 'halfkp' or 'halfkav2'"
+            )
+
+        self.ft_size = ft_size
+        self.ft = torch.nn.EmbeddingBag(ft_size, FT_OUT, mode="sum", sparse=True)
         self.ft_bias = torch.nn.Parameter(torch.zeros(FT_OUT))
         self.l1 = torch.nn.Linear(FT_OUT * 2, L1_OUT)
         self.l2 = torch.nn.Linear(L1_OUT, L2_OUT)
@@ -312,6 +335,7 @@ class LazyFrameDataset(torch.utils.data.IterableDataset):
         split_config: SplitConfig for splitting (uses row ranges, no shuffle)
         chunk_size: Number of rows to process at a time
         flip_augment: If True, yield both original and flipped positions (2x data)
+        arch: Architecture for feature extraction ('halfkp' or 'halfkav2')
 
     Example:
         split_cfg = SplitConfig(val_ratio=0.05, test_ratio=0.05)
@@ -335,6 +359,7 @@ class LazyFrameDataset(torch.utils.data.IterableDataset):
         split_config: SplitConfig | None = None,
         chunk_size: int = 50000,
         flip_augment: bool = False,
+        arch: str = "halfkp",
     ):
         # Normalize to list of (LazyFrame, weight)
         if isinstance(sources, pl.LazyFrame):
@@ -351,8 +376,17 @@ class LazyFrameDataset(torch.utils.data.IterableDataset):
         self.split_config = split_config or SplitConfig()
         self.chunk_size = chunk_size
         self.flip_augment = flip_augment
+        self.arch = arch
         self._len: int | None = None
         self._source_lens: list[int] | None = None
+
+        # Select feature extractor based on architecture
+        if arch == "halfkp":
+            self._get_features = dummy_chess.get_halfkp_features_batch
+        elif arch == "halfkav2":
+            self._get_features = dummy_chess.get_halfkav2_features_batch
+        else:
+            raise ValueError(f"Unknown architecture: {arch}")
 
     def _get_source_lens(self) -> list[int]:
         """Get row counts for each source (cached)."""
@@ -432,9 +466,7 @@ class LazyFrameDataset(torch.utils.data.IterableDataset):
                 fens = batch["fen"].to_list()
                 scores = batch["score"].to_list()
 
-                w_idx, w_off, b_idx, b_off, stm = dummy_chess.get_halfkp_features_batch(
-                    fens, False
-                )
+                w_idx, w_off, b_idx, b_off, stm = self._get_features(fens, False)
 
                 n_samples = len(fens)
                 for i in range(n_samples):
@@ -454,8 +486,8 @@ class LazyFrameDataset(torch.utils.data.IterableDataset):
 
                 # Also add flipped if augmenting
                 if self.flip_augment:
-                    w_idx_f, w_off_f, b_idx_f, b_off_f, stm_f = (
-                        dummy_chess.get_halfkp_features_batch(fens, True)
+                    w_idx_f, w_off_f, b_idx_f, b_off_f, stm_f = self._get_features(
+                        fens, True
                     )
                     for i in range(n_samples):
                         w_start = w_off_f[i]
@@ -529,6 +561,7 @@ class ShuffledParquetDataset(torch.utils.data.IterableDataset):
         buffer_per_group: Samples to buffer from each active group
         flip_augment: If True, yield both original and flipped positions
         seed: Random seed for shuffling (changes each epoch if None)
+        arch: Architecture for feature extraction ('halfkp' or 'halfkav2')
 
     Memory usage: ~num_active_groups * buffer_per_group * 50 bytes
     Default: 8 * 4096 * 50 = ~1.6 MB
@@ -543,6 +576,7 @@ class ShuffledParquetDataset(torch.utils.data.IterableDataset):
         buffer_per_group: int = 4096,
         flip_augment: bool = False,
         seed: int | None = None,
+        arch: str = "halfkp",
     ):
         # Normalize to list of (path, weight)
         if isinstance(paths[0], str):
@@ -556,7 +590,16 @@ class ShuffledParquetDataset(torch.utils.data.IterableDataset):
         self.buffer_per_group = buffer_per_group
         self.flip_augment = flip_augment
         self.seed = seed
+        self.arch = arch
         self._epoch = 0
+
+        # Select feature extractor based on architecture
+        if arch == "halfkp":
+            self._get_features = dummy_chess.get_halfkp_features_batch
+        elif arch == "halfkav2":
+            self._get_features = dummy_chess.get_halfkav2_features_batch
+        else:
+            raise ValueError(f"Unknown architecture: {arch}")
 
         # Cache metadata
         self._metadata: list[tuple[str, int, list[tuple[int, int]]]] | None = None
@@ -675,9 +718,7 @@ class ShuffledParquetDataset(torch.utils.data.IterableDataset):
             scores = df["score"].to_list()
 
             # Extract features
-            w_idx, w_off, b_idx, b_off, stm = dummy_chess.get_halfkp_features_batch(
-                fens, False
-            )
+            w_idx, w_off, b_idx, b_off, stm = self._get_features(fens, False)
 
             n_samples = len(fens)
             for i in range(n_samples):
@@ -697,8 +738,8 @@ class ShuffledParquetDataset(torch.utils.data.IterableDataset):
 
             # Also add flipped if augmenting
             if self.flip_augment:
-                w_idx_f, w_off_f, b_idx_f, b_off_f, stm_f = (
-                    dummy_chess.get_halfkp_features_batch(fens, True)
+                w_idx_f, w_off_f, b_idx_f, b_off_f, stm_f = self._get_features(
+                    fens, True
                 )
                 for i in range(n_samples):
                     w_start = w_off_f[i]
@@ -924,9 +965,11 @@ def train(
     lr: float,
     tracker: Tracker | None = None,
     num_workers: int = 0,
+    arch: str = "halfkp",
 ) -> tuple[NNUE, Tracker]:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
+    print(f"Architecture: {arch}")
 
     is_iterable = isinstance(
         train_dataset, torch.utils.data.IterableDataset
@@ -955,7 +998,7 @@ def train(
         else 0
     )
 
-    model = NNUE().to(device)
+    model = NNUE(arch=arch).to(device)
     if tracker is None:
         tracker = Tracker()
 
@@ -1258,6 +1301,12 @@ if __name__ == "__main__":
         default=4096,
         help="Samples to buffer per active row group",
     )
+    parser.add_argument(
+        "--arch",
+        choices=["halfkp", "halfkav2"],
+        default="halfkp",
+        help="NNUE architecture: halfkp (41K features) or halfkav2 (7.7K features, king buckets)",
+    )
     args = parser.parse_args()
 
     # Validate paths
@@ -1282,6 +1331,7 @@ if __name__ == "__main__":
             num_active_groups=args.num_active_groups,
             buffer_per_group=args.buffer_per_group,
             flip_augment=args.flip_augment,
+            arch=args.arch,
         )
         val_dataset = ShuffledParquetDataset(
             args.data,
@@ -1290,6 +1340,7 @@ if __name__ == "__main__":
             num_active_groups=4,  # Fewer for validation
             buffer_per_group=args.buffer_per_group,
             flip_augment=False,
+            arch=args.arch,
         )
     else:
         # Use sequential dataset (for compatibility)
@@ -1305,16 +1356,24 @@ if __name__ == "__main__":
             split="train",
             split_config=split_config,
             flip_augment=args.flip_augment,
+            arch=args.arch,
         )
         val_dataset = LazyFrameDataset(
             sources,
             split="val",
             split_config=split_config,
             flip_augment=False,
+            arch=args.arch,
         )
 
     print(f"Train: {len(train_dataset)} rows, Val: {len(val_dataset)} rows")
 
     train(
-        train_dataset, val_dataset, args.output, args.epochs, args.batch_size, args.lr
+        train_dataset,
+        val_dataset,
+        args.output,
+        args.epochs,
+        args.batch_size,
+        args.lr,
+        arch=args.arch,
     )

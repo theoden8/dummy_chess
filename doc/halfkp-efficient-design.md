@@ -2,11 +2,20 @@
 
 ## Architecture Overview
 
+### Supported Architectures
+
+| Architecture | Features | Parameters | Description |
+|-------------|----------|------------|-------------|
+| **HalfKP** | 41,025 | ~10.5M | Original, full king square granularity |
+| **HalfKAv2** | 7,693 | ~2.0M | King buckets + horizontal mirroring |
+
 ### Network Topology
 ```
-Perspective 1 (STM):   HalfKP[41024] ─┐
-                                      ├─> Concat[512] -> L1[512->256] -> L2[256->32] -> L3[32->32] -> Out[32->1]
-Perspective 2 (NSTM):  HalfKP[41024] ─┘
+Perspective 1 (STM):   Features[N] ─┐
+                                    ├─> Concat[512] -> L1[512->256] -> L2[256->32] -> L3[32->32] -> Out[32->1]
+Perspective 2 (NSTM):  Features[N] ─┘
+
+Where N = 41,025 (HalfKP) or 7,693 (HalfKAv2)
 ```
 
 ### Key Design Decisions
@@ -154,6 +163,84 @@ inline size_t halfkp_index(bool white_pov, int ksq, int sq, int piece_type, bool
     int piece_index = piece_type * 2 + (piece_white == white_pov ? 0 : 1);
     return oriented_ksq * 641 + piece_index * 64 + oriented_sq + 1;
 }
+```
+
+## HalfKAv2 Architecture
+
+HalfKAv2 reduces the feature space from 41K to 7.7K features using two key techniques:
+
+1. **King Buckets**: Groups strategically similar king positions into 12 buckets instead of 64 squares
+2. **Horizontal Mirroring**: Exploits kingside/queenside symmetry (files e-h mirror to a-d)
+
+### Benefits
+- **Faster training**: ~5x smaller embedding table means faster gradient updates
+- **Better generalization**: Grouping similar king positions reduces overfitting
+- **Lower memory**: Smaller model size for deployment
+
+### King Bucket Layout
+
+The 12 buckets prioritize back-rank granularity where kings typically reside:
+
+```
+Rank 1 (back rank): 4 buckets (0-3) - most granular for castled positions
+  a1 → bucket 0, b1 → bucket 1, c1 → bucket 2, d1 → bucket 3
+  
+Rank 2: 2 buckets (4-5)
+  a2,b2 → bucket 4, c2,d2 → bucket 5
+  
+Rank 3: 2 buckets (6-7)
+  a3,b3 → bucket 6, c3,d3 → bucket 7
+  
+Rank 4: 1 bucket (8)
+Rank 5: 1 bucket (9)
+Rank 6: 1 bucket (10)
+Ranks 7-8: 1 bucket (11) - rare king positions
+```
+
+Files e-h are mirrored to a-d before bucket lookup.
+
+### Feature Index Calculation
+
+```cpp
+constexpr size_t KING_BUCKETS = 12;
+constexpr size_t HALFKAV2_SIZE = KING_BUCKETS * (PIECE_TYPES * PIECE_SQUARES + 1);
+// = 12 * (10 * 64 + 1) = 12 * 641 = 7692 + 1 = 7693
+
+// King bucket table: maps (rank * 4 + file) to bucket for files a-d
+static constexpr int KING_BUCKET[32] = {
+    0, 1, 2, 3,     // Rank 1: buckets 0-3
+    4, 4, 5, 5,     // Rank 2: buckets 4-5
+    6, 6, 7, 7,     // Rank 3: buckets 6-7
+    8, 8, 8, 8,     // Rank 4: bucket 8
+    9, 9, 9, 9,     // Rank 5: bucket 9
+    10, 10, 10, 10, // Rank 6: bucket 10
+    11, 11, 11, 11, // Ranks 7-8: bucket 11
+};
+
+// Get bucket and mirror flag for king square
+inline std::pair<int, bool> get_bucket_and_mirror(int king_sq) {
+    int file = king_sq % 8;
+    int rank = king_sq / 8;
+    bool mirror = (file >= 4);
+    if (mirror) file = 7 - file;  // Mirror e-h to d-a
+    return {KING_BUCKET[rank * 4 + file], mirror};
+}
+
+// Feature index with mirroring
+inline size_t halfkav2_index(int bucket, bool mirror, int piece_sq, int piece_index) {
+    if (mirror) piece_sq ^= 7;  // Mirror file
+    return bucket * 641 + piece_index * 64 + piece_sq + 1;
+}
+```
+
+### Training Usage
+
+```bash
+# Train with HalfKAv2 (smaller, faster)
+uv run python train.py data/evals.parquet --shuffle --arch halfkav2 --epochs 30
+
+# Train with HalfKP (original, more capacity)
+uv run python train.py data/evals.parquet --shuffle --arch halfkp --epochs 30
 ```
 
 ## Clipped ReLU Implementation
@@ -455,6 +542,7 @@ uv run --reinstall-package dummy-chess python -c "import dummy_chess"
 | `--shuffle` | False | Use ShuffledParquetDataset |
 | `--num-active-groups` | 8 | Row groups sampled simultaneously |
 | `--buffer-per-group` | 4096 | Samples buffered per group |
+| `--arch` | `halfkp` | Architecture: `halfkp` (41K features) or `halfkav2` (7.7K features) |
 
 ## TODO
 
