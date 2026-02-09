@@ -8,27 +8,32 @@ Supports three data sources:
 3. endgames: generates random endgame positions using Syzygy tablebases
 
 Outputs a single CSV file with columns: fen, score
+
+STYLE: Do NOT use `from X import Y` - use fully qualified names (e.g. pathlib.Path, not Path)
+STYLE: Do NOT use import aliases (e.g. `import numpy as np`) - use full module names
 """
 
 import argparse
+import dataclasses
+import hashlib
 import io
 import itertools
+import pathlib
 import random
 import shutil
 import sys
 import tempfile
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Iterator
+import typing
 
 import chess
 import chess.engine
 import chess.syzygy
 import dummy_chess
 import orjson
-import polars as pl
-import zstandard as zstd
-import tqdm.auto as tqdm
+import polars
+import pyarrow.parquet
+import tqdm.auto
+import zstandard
 
 
 # =============================================================================
@@ -43,15 +48,15 @@ class LazyNdjsonZstd:
     Uses streaming decompression to stay within memory limits.
     """
 
-    def __init__(self, path: str | Path, batch_size: int = 100000):
-        self._path = Path(path)
+    def __init__(self, path: str, batch_size: int = 100000):
+        self._path = pathlib.Path(path)
         self._batch_size = batch_size
-        self._schema: pl.Schema | None = None
+        self._schema: polars.Schema | None = None
 
     def _open_stream(self) -> tuple:
         """Open zstd decompression stream for reading."""
         f = open(self._path, "rb")
-        dctx = zstd.ZstdDecompressor()
+        dctx = zstandard.ZstdDecompressor()
         reader = dctx.stream_reader(f)
         text = io.TextIOWrapper(reader, encoding="utf-8")
         return (f, reader, text)
@@ -63,7 +68,7 @@ class LazyNdjsonZstd:
         reader.close()
         f.close()
 
-    def _iter_lines(self) -> Iterator[dict]:
+    def _iter_lines(self) -> typing.Iterator[dict]:
         """Iterate over parsed JSON lines."""
         stream_info = self._open_stream()
         try:
@@ -72,20 +77,20 @@ class LazyNdjsonZstd:
         finally:
             self._close_stream(stream_info)
 
-    def collect_schema(self) -> pl.Schema:
+    def collect_schema(self) -> polars.Schema:
         """Get schema from first row."""
         if self._schema is None:
             first = next(self._iter_lines())
-            df = pl.from_dicts([first])
+            df = polars.from_dicts([first])
             self._schema = df.schema
-        return pl.Schema(self._schema)
+        return polars.Schema(self._schema)
 
-    def head(self, n: int = 10) -> pl.DataFrame:
+    def head(self, n: int = 10) -> polars.DataFrame:
         """Collect first n rows."""
         rows = list(itertools.islice(self._iter_lines(), n))
-        return pl.from_dicts(rows)
+        return polars.from_dicts(rows)
 
-    def iter_rows(self) -> Iterator[dict]:
+    def iter_rows(self) -> typing.Iterator[dict]:
         """Iterate over rows as dicts (streaming, memory-efficient)."""
         yield from self._iter_lines()
 
@@ -95,7 +100,7 @@ class LazyNdjsonZstd:
         seed: int | None = None,
         skip: int | None = None,
         max_rows: int | None = None,
-    ) -> pl.DataFrame:
+    ) -> polars.DataFrame:
         """
         Sample n rows from the file.
 
@@ -116,7 +121,7 @@ class LazyNdjsonZstd:
                             break
             finally:
                 self._close_stream(stream_info)
-            return pl.from_dicts(rows)
+            return polars.from_dicts(rows)
 
         # Reservoir sampling
         rng = random.Random(seed)
@@ -133,7 +138,7 @@ class LazyNdjsonZstd:
                         reservoir[j] = row
         finally:
             self._close_stream(stream_info)
-        return pl.from_dicts(reservoir)
+        return polars.from_dicts(reservoir)
 
     def __len__(self) -> int:
         """Count total rows (requires full scan)."""
@@ -147,17 +152,17 @@ class LazyNdjsonZstd:
         return count
 
 
-def pl_scan_ndjson_zstd(path: str | Path, batch_size: int = 100000) -> LazyNdjsonZstd:
+def pl_scan_ndjson_zstd(path: str, batch_size: int = 100000) -> LazyNdjsonZstd:
     """Scan a zstd-compressed NDJSON file."""
     return LazyNdjsonZstd(path, batch_size)
 
 
-def pl_scan_csv_zstd(path: str | Path) -> pl.LazyFrame:
+def pl_scan_csv_zstd(path: str) -> polars.LazyFrame:
     """Scan a zstd-compressed CSV file as a polars LazyFrame."""
     f = open(path, "rb")
-    dctx = zstd.ZstdDecompressor()
+    dctx = zstandard.ZstdDecompressor()
     reader = dctx.stream_reader(f)
-    return pl.scan_csv(reader)
+    return polars.scan_csv(reader)
 
 
 # =============================================================================
@@ -224,8 +229,8 @@ def process_puzzle_row(
 
 
 def process_puzzles(
-    input_path: Path,
-    output_path: Path,
+    input_path: pathlib.Path,
+    output_path: pathlib.Path,
     max_rows: int | None,
     engine_path: str,
     depth: int,
@@ -250,13 +255,13 @@ def process_puzzles(
     if str(input_path).endswith(".zst"):
         lf = pl_scan_csv_zstd(input_path)
     else:
-        lf = pl.scan_csv(input_path)
+        lf = polars.scan_csv(input_path)
 
     if max_rows:
         lf = lf.head(max_rows)
 
     # Pre-count total rows for progress bar (streaming to avoid memory issues)
-    total_rows = lf.select(pl.len()).collect(engine="streaming").item()
+    total_rows = lf.select(polars.len()).collect(engine="streaming").item()
     if max_rows:
         total_rows = min(total_rows, max_rows)
 
@@ -282,13 +287,13 @@ def process_puzzles(
             (compressed_fens[i], batch[i][1], batch[i][2], batch[i][3])
             for i in range(len(batch))
         ]
-        df = pl.DataFrame(
+        df = polars.DataFrame(
             compressed_batch,
             schema={
-                "fen": pl.Binary,
-                "score": pl.Int64,
-                "depth": pl.Int64,
-                "knodes": pl.Int64,
+                "fen": polars.Binary,
+                "score": polars.Int64,
+                "depth": polars.Int64,
+                "knodes": polars.Int64,
             },
             orient="row",
         )
@@ -296,7 +301,7 @@ def process_puzzles(
         batch_num += 1
         batch = []
 
-    pbar = tqdm.tqdm(total=total_rows, desc="Puzzles", unit=" rows")
+    pbar = tqdm.auto.tqdm(total=total_rows, desc="Puzzles", unit=" rows")
     for df_batch in lf.collect_batches():
         for row in df_batch.iter_rows(named=True):
             if max_rows and count >= max_rows:
@@ -330,7 +335,7 @@ def process_puzzles(
 
     # Combine batches and write to output
     print(f"Writing to {output_path}...")
-    lf_out = pl.scan_parquet(f"{tmp_dir}/*.parquet")
+    lf_out = polars.scan_parquet(f"{tmp_dir}/*.parquet")
 
     out_str = str(output_path)
     if out_str.endswith(".parquet") or not any(
@@ -392,8 +397,8 @@ def process_eval_row(row: dict) -> tuple[str, int, int, int] | None:
 
 
 def process_evals(
-    input_path: Path,
-    output_path: Path,
+    input_path: pathlib.Path,
+    output_path: pathlib.Path,
     max_rows: int | None,
     shuffle: bool = True,
     seed: int = 42,
@@ -435,13 +440,13 @@ def process_evals(
             (compressed_fens[i], batch[i][1], batch[i][2], batch[i][3])
             for i in range(len(batch))
         ]
-        df = pl.DataFrame(
+        df = polars.DataFrame(
             compressed_batch,
             schema={
-                "fen": pl.Binary,
-                "score": pl.Int64,
-                "depth": pl.Int64,
-                "knodes": pl.Int64,
+                "fen": polars.Binary,
+                "score": polars.Int64,
+                "depth": polars.Int64,
+                "knodes": polars.Int64,
             },
             orient="row",
         )
@@ -449,7 +454,7 @@ def process_evals(
         batch_num += 1
         batch = []
 
-    pbar = tqdm.tqdm(total=total_rows, desc="Evals", unit=" rows")
+    pbar = tqdm.auto.tqdm(total=total_rows, desc="Evals", unit=" rows")
     for row in lf.iter_rows():
         if max_rows and count >= max_rows:
             break
@@ -477,7 +482,7 @@ def process_evals(
 
     # Combine batches and write to output
     print(f"Writing to {output_path}...")
-    lf = pl.scan_parquet(f"{tmp_dir}/*.parquet")
+    lf = polars.scan_parquet(f"{tmp_dir}/*.parquet")
 
     out_str = str(output_path)
     if out_str.endswith(".parquet") or not any(
@@ -510,14 +515,14 @@ def process_evals(
 # =============================================================================
 
 DEFAULT_TABLEBASE_PATH = str(
-    Path(__file__).parent.parent / "external" / "syzygy" / "src"
+    pathlib.Path(__file__).parent.parent / "external" / "syzygy" / "src"
 )
 
 PIECES = [chess.PAWN, chess.KNIGHT, chess.BISHOP, chess.ROOK, chess.QUEEN]
 PIECES_NO_PAWN = [chess.KNIGHT, chess.BISHOP, chess.ROOK, chess.QUEEN]
 
 
-@dataclass
+@dataclasses.dataclass
 class EndgameConfig:
     """Configuration for endgame generation."""
 
@@ -533,7 +538,7 @@ class EndgameConfig:
 
 def detect_max_pieces(tablebase_path: str) -> int:
     """Detect maximum piece count supported by available tablebases."""
-    tb_path = Path(tablebase_path)
+    tb_path = pathlib.Path(tablebase_path)
     if not tb_path.exists():
         return 3
 
@@ -692,7 +697,7 @@ def process_endgames(
     attempts = 0
     max_attempts = n_positions * 1000
 
-    with tqdm.tqdm(total=n_positions, desc="Endgames") as pbar:
+    with tqdm.auto.tqdm(total=n_positions, desc="Endgames") as pbar:
         while len(fen_results) < n_positions and attempts < max_attempts:
             attempts += 1
 
@@ -740,13 +745,362 @@ def process_endgames(
 
 
 # =============================================================================
+# Parquet shuffling (external sort)
+# =============================================================================
+
+
+def dedupe_parquet(
+    input_path: str,
+    output_path: str | None = None,
+    num_buckets: int = 256,
+    row_group_size: int = 100_000,
+) -> tuple[int, int, int]:
+    """
+    Deduplicate a parquet file based on the 'fen' column.
+
+    Uses external sort approach:
+    1. Hash each FEN, distribute rows to buckets by hash prefix
+    2. For each bucket: load, sort by hash, dedupe, write unique rows
+
+    This keeps memory bounded to ~(total_rows / num_buckets) * row_size.
+
+    Args:
+        input_path: Input parquet file
+        output_path: Output parquet file (None = stats only, no output)
+        num_buckets: Number of temp buckets (more = less RAM per bucket)
+        row_group_size: Rows per output row group
+
+    Returns:
+        Tuple of (total_rows, unique_rows, duplicates_removed)
+
+    RAM usage: ~(total_rows / num_buckets) * row_size
+               With 256 buckets on 354M rows, ~1.4M rows per bucket
+    """
+    import hashlib
+
+    input_path = pathlib.Path(input_path)
+    stats_only = output_path is None
+    if not stats_only:
+        output_path = pathlib.Path(output_path)
+
+    tmp_dir = pathlib.Path(tempfile.mkdtemp(prefix="dedupe_"))
+
+    try:
+        # Phase 1: Distribute rows to buckets by FEN hash
+        print(f"Phase 1: Distributing to {num_buckets} buckets...")
+
+        pf = pyarrow.parquet.ParquetFile(input_path)
+        total_rows = pf.metadata.num_rows
+        num_row_groups = pf.metadata.num_row_groups
+
+        # Bucket buffers
+        bucket_buffers: list[list[tuple[bytes, dict]]] = [
+            [] for _ in range(num_buckets)
+        ]
+        buffer_limit = max(1000, row_group_size // num_buckets)
+
+        def flush_bucket(bucket_idx: int):
+            if not bucket_buffers[bucket_idx]:
+                return
+
+            rows = [row for _, row in bucket_buffers[bucket_idx]]
+            hashes = [h for h, _ in bucket_buffers[bucket_idx]]
+
+            df = polars.DataFrame(rows)
+            df = df.with_columns(polars.Series("_hash", hashes))
+
+            bucket_file = tmp_dir / f"bucket_{bucket_idx:04d}.parquet"
+            if bucket_file.exists():
+                existing = polars.read_parquet(bucket_file)
+                df = polars.concat([existing, df])
+
+            df.write_parquet(bucket_file)
+            bucket_buffers[bucket_idx] = []
+
+        with tqdm.auto.tqdm(
+            total=total_rows, desc="Distributing", unit=" rows"
+        ) as pbar:
+            for rg_idx in range(num_row_groups):
+                table = pf.read_row_group(rg_idx)
+                df = polars.from_arrow(table)
+
+                for row in df.iter_rows(named=True):
+                    fen_bytes = (
+                        row["fen"]
+                        if isinstance(row["fen"], bytes)
+                        else row["fen"].encode()
+                    )
+                    h = hashlib.md5(fen_bytes).digest()
+
+                    bucket_idx = h[0] % num_buckets
+                    bucket_buffers[bucket_idx].append((h, row))
+
+                    if len(bucket_buffers[bucket_idx]) >= buffer_limit:
+                        flush_bucket(bucket_idx)
+
+                pbar.update(len(df))
+
+        for bucket_idx in range(num_buckets):
+            flush_bucket(bucket_idx)
+
+        # Phase 2: Dedupe each bucket, write to output (or just count if stats_only)
+        print("Phase 2: Deduplicating buckets...")
+
+        bucket_files = sorted(tmp_dir.glob("bucket_*.parquet"))
+
+        if not bucket_files:
+            print("No data to dedupe")
+            return 0, 0, 0
+
+        unique_rows = 0
+
+        if stats_only:
+            # Just count unique hashes, don't write output
+            with tqdm.auto.tqdm(
+                total=len(bucket_files), desc="Counting", unit=" buckets"
+            ) as pbar:
+                for bucket_file in bucket_files:
+                    df = polars.read_parquet(bucket_file)
+                    unique_in_bucket = df["_hash"].n_unique()
+                    unique_rows += unique_in_bucket
+                    pbar.update(1)
+        else:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_buffer: list[dict] = []
+
+            first_bucket = polars.read_parquet(bucket_files[0]).drop("_hash")
+            arrow_schema = first_bucket.to_arrow().schema
+
+            with pyarrow.parquet.ParquetWriter(
+                output_path, arrow_schema, compression="zstd"
+            ) as writer:
+
+                def flush_output():
+                    nonlocal output_buffer, unique_rows
+                    if not output_buffer:
+                        return
+                    df = polars.DataFrame(output_buffer)
+                    writer.write_table(df.to_arrow())
+                    unique_rows += len(output_buffer)
+                    output_buffer = []
+
+                with tqdm.auto.tqdm(
+                    total=len(bucket_files), desc="Deduping", unit=" buckets"
+                ) as pbar:
+                    for bucket_file in bucket_files:
+                        df = polars.read_parquet(bucket_file)
+
+                        # Sort by hash, then dedupe by hash (keeps first)
+                        df = df.sort("_hash")
+
+                        seen_hashes: set[bytes] = set()
+                        for row in df.iter_rows(named=True):
+                            h = row["_hash"]
+                            if h not in seen_hashes:
+                                seen_hashes.add(h)
+                                row_copy = {
+                                    k: v for k, v in row.items() if k != "_hash"
+                                }
+                                output_buffer.append(row_copy)
+
+                                if len(output_buffer) >= row_group_size:
+                                    flush_output()
+
+                        pbar.update(1)
+
+                flush_output()
+
+        duplicates = total_rows - unique_rows
+        print(f"Total: {total_rows}, Unique: {unique_rows}, Duplicates: {duplicates}")
+        return total_rows, unique_rows, duplicates
+
+    finally:
+        shutil.rmtree(tmp_dir)
+
+
+def shuffle_parquet(
+    input_path: str,
+    output_path: str,
+    num_buckets: int = 64,
+    row_group_size: int = 100_000,
+    seed: int | None = None,
+) -> int:
+    """
+    Shuffle a parquet file with minimal RAM using two-phase external sort.
+
+    Phase 1: Read input row-group by row-group, assign random keys,
+             distribute rows to N bucket files based on key range.
+    Phase 2: Read each bucket, sort by key, write to output.
+
+    This achieves a true shuffle where any input row can end up anywhere
+    in the output, without loading the entire dataset into memory.
+
+    Args:
+        input_path: Input parquet file
+        output_path: Output parquet file (will be overwritten)
+        num_buckets: Number of temporary bucket files (more = less RAM per bucket)
+        row_group_size: Rows per output row group
+        seed: Random seed for reproducibility
+
+    Returns:
+        Number of rows written
+
+    RAM usage: ~(largest_bucket_size / num_buckets) * row_size
+               With 64 buckets, expect ~1.5% of total data in RAM at peak
+    """
+    input_path = pathlib.Path(input_path)
+    output_path = pathlib.Path(output_path)
+
+    rng = random.Random(seed)
+
+    # Create temp directory for buckets
+    tmp_dir = pathlib.Path(tempfile.mkdtemp(prefix="shuffle_"))
+
+    try:
+        # Phase 1: Distribute rows to buckets based on random key
+        print(f"Phase 1: Distributing to {num_buckets} buckets...")
+
+        pf = pyarrow.parquet.ParquetFile(input_path)
+        total_rows = pf.metadata.num_rows
+        num_row_groups = pf.metadata.num_row_groups
+        schema = pf.schema_arrow
+
+        # Initialize bucket buffers and files
+        bucket_buffers: list[list[tuple[float, dict]]] = [
+            [] for _ in range(num_buckets)
+        ]
+        bucket_counts = [0] * num_buckets
+        buffer_limit = max(
+            1000, row_group_size // num_buckets
+        )  # Flush threshold per bucket
+
+        def flush_bucket(bucket_idx: int):
+            """Write bucket buffer to its temp file."""
+            if not bucket_buffers[bucket_idx]:
+                return
+
+            # Sort by key within this chunk
+            bucket_buffers[bucket_idx].sort(key=lambda x: x[0])
+
+            # Extract rows (without keys)
+            rows = [row for _, row in bucket_buffers[bucket_idx]]
+
+            df = polars.DataFrame(rows)
+
+            # Append to bucket file
+            bucket_file = tmp_dir / f"bucket_{bucket_idx:04d}.parquet"
+            if bucket_file.exists():
+                # Read existing, concatenate, rewrite (not ideal but simple)
+                existing = polars.read_parquet(bucket_file)
+                df = polars.concat([existing, df])
+
+            df.write_parquet(bucket_file)
+            bucket_counts[bucket_idx] += len(bucket_buffers[bucket_idx])
+            bucket_buffers[bucket_idx] = []
+
+        # Process input row groups
+        with tqdm.auto.tqdm(
+            total=total_rows, desc="Distributing", unit=" rows"
+        ) as pbar:
+            for rg_idx in range(num_row_groups):
+                table = pf.read_row_group(rg_idx)
+                df = polars.from_arrow(table)
+
+                for row in df.iter_rows(named=True):
+                    # Assign random key
+                    key = rng.random()
+
+                    # Determine bucket (uniform distribution)
+                    bucket_idx = int(key * num_buckets)
+                    bucket_idx = min(bucket_idx, num_buckets - 1)  # Handle key == 1.0
+
+                    bucket_buffers[bucket_idx].append((key, row))
+
+                    # Flush if buffer full
+                    if len(bucket_buffers[bucket_idx]) >= buffer_limit:
+                        flush_bucket(bucket_idx)
+
+                pbar.update(len(df))
+
+        # Flush remaining buffers
+        for bucket_idx in range(num_buckets):
+            flush_bucket(bucket_idx)
+
+        print(
+            f"  Bucket sizes: min={min(bucket_counts)}, max={max(bucket_counts)}, "
+            f"avg={sum(bucket_counts) // num_buckets}"
+        )
+
+        # Phase 2: Read buckets in order, sort each, write to output
+        print("Phase 2: Merging buckets...")
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Collect all bucket files in order
+        bucket_files = sorted(tmp_dir.glob("bucket_*.parquet"))
+
+        if not bucket_files:
+            print("No data to shuffle")
+            return 0
+
+        # Use sink to stream output
+        written = 0
+        output_buffer: list[dict] = []
+
+        def flush_output(writer):
+            nonlocal output_buffer, written
+            if not output_buffer:
+                return
+
+            df = polars.DataFrame(output_buffer)
+            # Convert to arrow and write
+            writer.write_table(df.to_arrow())
+            written += len(output_buffer)
+            output_buffer = []
+
+        # Create output writer
+        first_bucket = polars.read_parquet(bucket_files[0])
+        arrow_schema = first_bucket.to_arrow().schema
+
+        with pyarrow.parquet.ParquetWriter(
+            output_path, arrow_schema, compression="zstd"
+        ) as writer:
+            with tqdm.auto.tqdm(total=total_rows, desc="Writing", unit=" rows") as pbar:
+                for bucket_file in bucket_files:
+                    # Read bucket
+                    df = polars.read_parquet(bucket_file)
+
+                    if "_sort_key" in df.columns:
+                        df = df.drop("_sort_key")
+
+                    # Add to output buffer
+                    for row in df.iter_rows(named=True):
+                        output_buffer.append(row)
+
+                        if len(output_buffer) >= row_group_size:
+                            flush_output(writer)
+
+                    pbar.update(len(df))
+
+            # Flush remaining
+            flush_output(writer)
+
+        print(f"Shuffled {written} rows -> {output_path}")
+        return written
+
+    finally:
+        # Cleanup temp directory
+        shutil.rmtree(tmp_dir)
+
+
+# =============================================================================
 # Output
 # =============================================================================
 
 
 def save_data(
     data: list[tuple[bytes, int, int, int]],
-    output_path: Path,
+    output_path: pathlib.Path,
     shuffle: bool = True,
     seed: int = 42,
 ):
@@ -757,13 +1111,13 @@ def save_data(
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    out_df = pl.DataFrame(
+    out_df = polars.DataFrame(
         data,
         schema={
-            "fen": pl.Binary,
-            "score": pl.Int64,
-            "depth": pl.Int64,
-            "knodes": pl.Int64,
+            "fen": polars.Binary,
+            "score": polars.Int64,
+            "depth": polars.Int64,
+            "knodes": polars.Int64,
         },
         orient="row",
     )
@@ -805,8 +1159,8 @@ def main():
     parser = argparse.ArgumentParser(description="Preprocess data for NNUE training")
     parser.add_argument(
         "source",
-        choices=["puzzles", "evals", "endgames"],
-        help="Data source: 'puzzles', 'evals', or 'endgames'",
+        choices=["puzzles", "evals", "endgames", "shuffle", "dedupe"],
+        help="Data source: 'puzzles', 'evals', 'endgames', 'shuffle', or 'dedupe'",
     )
     parser.add_argument("-i", "--input", default=None, help="Input file")
     parser.add_argument("-o", "--output", default=None, help="Output file")
@@ -832,6 +1186,22 @@ def main():
         "--no-dtz", action="store_true", help="Use WDL instead of DTZ scoring"
     )
 
+    # Shuffle/dedupe-specific
+    parser.add_argument(
+        "--num-buckets",
+        type=int,
+        default=64,
+        help="Number of temp buckets for shuffle/dedupe (more = less RAM)",
+    )
+    parser.add_argument(
+        "--row-group-size", type=int, default=100_000, help="Rows per output row group"
+    )
+    parser.add_argument(
+        "--stats-only",
+        action="store_true",
+        help="For dedupe: only count duplicates, don't write output",
+    )
+
     args = parser.parse_args()
 
     # Set defaults
@@ -851,14 +1221,14 @@ def main():
             args.max = 10000
         elif args.source == "endgames":
             args.max = 10000
-        output_path = Path(args.output)
+        output_path = pathlib.Path(args.output)
         args.output = str(output_path.parent / f"toy_{output_path.name}")
 
     # Process
     data: list[tuple[bytes, int, int, int]] = []
 
     if args.source == "puzzles":
-        input_path = Path(args.input)
+        input_path = pathlib.Path(args.input)
         if not input_path.exists():
             print(f"Error: {args.input} not found")
             print(
@@ -871,7 +1241,7 @@ def main():
         # Puzzles handles its own output (streaming)
         process_puzzles(
             input_path,
-            Path(args.output),
+            pathlib.Path(args.output),
             args.max,
             args.engine,
             args.depth,
@@ -880,7 +1250,7 @@ def main():
         return
 
     elif args.source == "evals":
-        input_path = Path(args.input)
+        input_path = pathlib.Path(args.input)
         if not input_path.exists():
             print(f"Error: {args.input} not found")
             print(
@@ -890,7 +1260,7 @@ def main():
         # Evals handles its own output (streaming)
         process_evals(
             input_path,
-            Path(args.output),
+            pathlib.Path(args.output),
             args.max,
             shuffle=not args.no_shuffle,
             seed=args.seed,
@@ -909,14 +1279,60 @@ def main():
             not args.no_dtz,
         )
 
-    print(f"Valid: {len(data)}")
+        print(f"Valid: {len(data)}")
 
-    save_data(
-        data,
-        Path(args.output),
-        shuffle=not args.no_shuffle,
-        seed=args.seed,
-    )
+        save_data(
+            data,
+            pathlib.Path(args.output),
+            shuffle=not args.no_shuffle,
+            seed=args.seed,
+        )
+        return
+
+    elif args.source == "shuffle":
+        if args.input is None:
+            print("Error: --input is required for shuffle")
+            sys.exit(1)
+        input_path = pathlib.Path(args.input)
+        if not input_path.exists():
+            print(f"Error: {args.input} not found")
+            sys.exit(1)
+        if args.output is None:
+            # Default: input_shuffled.parquet
+            args.output = str(input_path.parent / f"{input_path.stem}_shuffled.parquet")
+
+        shuffle_parquet(
+            input_path,
+            pathlib.Path(args.output),
+            num_buckets=args.num_buckets,
+            row_group_size=args.row_group_size,
+            seed=args.seed,
+        )
+        return
+
+    elif args.source == "dedupe":
+        if args.input is None:
+            print("Error: --input is required for dedupe")
+            sys.exit(1)
+        input_path = pathlib.Path(args.input)
+        if not input_path.exists():
+            print(f"Error: {args.input} not found")
+            sys.exit(1)
+
+        if args.stats_only:
+            output = None
+        elif args.output is None:
+            output = input_path.parent / f"{input_path.stem}_deduped.parquet"
+        else:
+            output = pathlib.Path(args.output)
+
+        dedupe_parquet(
+            input_path,
+            output,
+            num_buckets=args.num_buckets,
+            row_group_size=args.row_group_size,
+        )
+        return
 
 
 if __name__ == "__main__":

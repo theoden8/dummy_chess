@@ -20,6 +20,7 @@ dependencies = [
     "zstandard>=0.22.0",
     "dummy-chess @ file:///${PROJECT_ROOT}/..",
     "orjson>=3.11.7",
+    "pyarrow>=15.0.0",
 ]
 
 [tool.uv.sources]

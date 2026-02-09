@@ -21,8 +21,9 @@ import dummy_chess
 import numba
 import numpy as np
 import polars as pl
+import pyarrow.parquet
 import torch
-import torch.nn.functional as F
+import torch.nn.functional
 import tqdm.auto as tqdm
 
 # ============================================================================
@@ -242,15 +243,16 @@ class NNUE(torch.nn.Module):
             torch.nn.init.zeros_(m.bias)
 
     def forward(self, w_idx, w_off, b_idx, b_off, stm):
-        w_ft = torch.clamp(self.ft(w_idx, w_off) + self.ft_bias, 0, 1)
-        b_ft = torch.clamp(self.ft(b_idx, b_off) + self.ft_bias, 0, 1)
+        # ReLU during training; clamp to [0,127] happens in quantized C++ inference
+        w_ft = torch.relu(self.ft(w_idx, w_off) + self.ft_bias)
+        b_ft = torch.relu(self.ft(b_idx, b_off) + self.ft_bias)
         ft = torch.where(
             stm.unsqueeze(1) == 0,
             torch.cat([w_ft, b_ft], 1),
             torch.cat([b_ft, w_ft], 1),
         )
-        x = torch.clamp(self.l1(ft), 0, 1)
-        x = torch.clamp(self.l2(x), 0, 1)
+        x = torch.relu(self.l1(ft))
+        x = torch.relu(self.l2(x))
         return self.out(x)
 
 
@@ -512,6 +514,243 @@ class LazyFrameDataset(torch.utils.data.IterableDataset):
                 yield source_buffers[src_idx].pop(0)
 
 
+class ShuffledParquetDataset(torch.utils.data.IterableDataset):
+    """
+    Shuffled streaming dataset using multi-row-group interleaving.
+
+    Maintains multiple "active" row groups and samples randomly from them,
+    providing good shuffling without loading entire dataset into memory.
+
+    Args:
+        paths: List of parquet file paths (or list of (path, weight) tuples)
+        split: Which split to use ('train', 'val', 'test', or None for all)
+        split_config: SplitConfig for splitting
+        num_active_groups: Number of row groups to keep active (more = better shuffle, more RAM)
+        buffer_per_group: Samples to buffer from each active group
+        flip_augment: If True, yield both original and flipped positions
+        seed: Random seed for shuffling (changes each epoch if None)
+
+    Memory usage: ~num_active_groups * buffer_per_group * 50 bytes
+    Default: 8 * 4096 * 50 = ~1.6 MB
+    """
+
+    def __init__(
+        self,
+        paths: list[str] | list[tuple[str, float]],
+        split: str | None = None,
+        split_config: SplitConfig | None = None,
+        num_active_groups: int = 8,
+        buffer_per_group: int = 4096,
+        flip_augment: bool = False,
+        seed: int | None = None,
+    ):
+        # Normalize to list of (path, weight)
+        if isinstance(paths[0], str):
+            self.paths = [(p, 1.0) for p in paths]
+        else:
+            self.paths = list(paths)
+
+        self.split = split
+        self.split_config = split_config or SplitConfig()
+        self.num_active_groups = num_active_groups
+        self.buffer_per_group = buffer_per_group
+        self.flip_augment = flip_augment
+        self.seed = seed
+        self._epoch = 0
+
+        # Cache metadata
+        self._metadata: list[tuple[str, int, list[tuple[int, int]]]] | None = None
+        self._len: int | None = None
+
+    def set_epoch(self, epoch: int):
+        """Set epoch for deterministic shuffling."""
+        self._epoch = epoch
+
+    def _get_metadata(self) -> list[tuple[str, int, list[tuple[int, int]], float]]:
+        """Get row group metadata for all files. Returns [(path, total_rows, [(rg_start, rg_len), ...], weight)]."""
+        if self._metadata is not None:
+            return self._metadata
+
+        self._metadata = []
+        for path, weight in self.paths:
+            pf = pyarrow.parquet.ParquetFile(path)
+            meta = pf.metadata
+
+            row_groups = []
+            offset = 0
+            for i in range(meta.num_row_groups):
+                rg_len = meta.row_group(i).num_rows
+                row_groups.append((offset, rg_len))
+                offset += rg_len
+
+            self._metadata.append((path, offset, row_groups, weight))
+
+        return self._metadata
+
+    def _get_split_row_groups(self) -> list[tuple[str, int, int, float]]:
+        """Get row groups that fall within our split. Returns [(path, rg_start, rg_len, weight), ...]."""
+        metadata = self._get_metadata()
+        result = []
+
+        for path, total_rows, row_groups, weight in metadata:
+            split_start, split_end = self.split_config.get_split_indices(
+                total_rows, self.split
+            )
+
+            for rg_start, rg_len in row_groups:
+                rg_end = rg_start + rg_len
+
+                # Check if row group overlaps with split
+                if rg_end <= split_start or rg_start >= split_end:
+                    continue
+
+                # Clip to split boundaries
+                actual_start = max(rg_start, split_start)
+                actual_end = min(rg_end, split_end)
+                actual_len = actual_end - actual_start
+
+                if actual_len > 0:
+                    result.append((path, actual_start, actual_len, weight))
+
+        return result
+
+    def __len__(self) -> int:
+        if self._len is None:
+            row_groups = self._get_split_row_groups()
+            self._len = sum(rg[2] for rg in row_groups)
+            if self.flip_augment:
+                self._len *= 2
+        return self._len
+
+    def __iter__(self):
+        row_groups = self._get_split_row_groups()
+        if not row_groups:
+            return
+
+        # Shuffle row groups for this epoch
+        rng = random.Random(self.seed if self.seed is not None else self._epoch)
+        row_groups = list(row_groups)
+        rng.shuffle(row_groups)
+
+        # Active group state: {idx: (path, pf, current_offset, end_offset, buffer, weight)}
+        active: dict[int, tuple] = {}
+        next_group_idx = 0
+
+        def fill_active():
+            """Fill active slots up to num_active_groups."""
+            nonlocal next_group_idx
+            while len(active) < self.num_active_groups and next_group_idx < len(
+                row_groups
+            ):
+                path, start, length, weight = row_groups[next_group_idx]
+                pf = pyarrow.parquet.ParquetFile(path)
+                active[next_group_idx] = {
+                    "path": path,
+                    "pf": pf,
+                    "offset": start,
+                    "end": start + length,
+                    "buffer": [],
+                    "weight": weight,
+                }
+                next_group_idx += 1
+
+        def refill_buffer(idx: int) -> bool:
+            """Refill buffer for active group. Returns False if exhausted."""
+            state = active[idx]
+            if state["offset"] >= state["end"]:
+                return False
+
+            # Read a chunk
+            read_len = min(self.buffer_per_group, state["end"] - state["offset"])
+
+            # Use polars for efficient reading with offset
+            df = (
+                pl.scan_parquet(state["path"])
+                .slice(state["offset"], read_len)
+                .collect()
+            )
+            state["offset"] += read_len
+
+            fens = df["fen"].to_list()
+            scores = df["score"].to_list()
+
+            # Extract features
+            w_idx, w_off, b_idx, b_off, stm = dummy_chess.get_halfkp_features_batch(
+                fens, False
+            )
+
+            n_samples = len(fens)
+            for i in range(n_samples):
+                w_start = w_off[i]
+                w_end = w_off[i + 1] if i + 1 < n_samples else len(w_idx)
+                b_start = b_off[i]
+                b_end = b_off[i + 1] if i + 1 < n_samples else len(b_idx)
+
+                state["buffer"].append(
+                    (
+                        w_idx[w_start:w_end].copy(),
+                        b_idx[b_start:b_end].copy(),
+                        int(stm[i]),
+                        float(scores[i]),
+                    )
+                )
+
+            # Also add flipped if augmenting
+            if self.flip_augment:
+                w_idx_f, w_off_f, b_idx_f, b_off_f, stm_f = (
+                    dummy_chess.get_halfkp_features_batch(fens, True)
+                )
+                for i in range(n_samples):
+                    w_start = w_off_f[i]
+                    w_end = w_off_f[i + 1] if i + 1 < n_samples else len(w_idx_f)
+                    b_start = b_off_f[i]
+                    b_end = b_off_f[i + 1] if i + 1 < n_samples else len(b_idx_f)
+
+                    state["buffer"].append(
+                        (
+                            w_idx_f[w_start:w_end].copy(),
+                            b_idx_f[b_start:b_end].copy(),
+                            int(stm_f[i]),
+                            -float(scores[i]),
+                        )
+                    )
+
+            # Shuffle buffer
+            rng.shuffle(state["buffer"])
+            return True
+
+        # Initial fill
+        fill_active()
+        for idx in list(active.keys()):
+            refill_buffer(idx)
+
+        # Yield samples
+        while active:
+            # Pick random active group (weighted)
+            indices = list(active.keys())
+            weights = [active[i]["weight"] for i in indices]
+            total_w = sum(weights)
+            weights = [w / total_w for w in weights]
+
+            idx = rng.choices(indices, weights)[0]
+            state = active[idx]
+
+            # Get sample from buffer
+            if state["buffer"]:
+                yield state["buffer"].pop()
+
+            # Refill if empty
+            if not state["buffer"]:
+                if not refill_buffer(idx):
+                    # This group is exhausted, remove and fill replacement
+                    del active[idx]
+                    fill_active()
+                    for new_idx in list(active.keys()):
+                        if not active[new_idx]["buffer"]:
+                            if not refill_buffer(new_idx):
+                                del active[new_idx]
+
+
 def collate_sparse(batch):
     """Collate sparse HalfKP features into batched tensors."""
     # Pre-compute sizes for numpy pre-allocation
@@ -671,7 +910,7 @@ def evaluate(model, loader, device):
         for batch in loader:
             w_idx, w_off, b_idx, b_off, stm, target = [x.to(device) for x in batch]
             pred = model(w_idx, w_off, b_idx, b_off, stm)
-            total_loss += F.mse_loss(pred, target).item()
+            total_loss += torch.nn.functional.mse_loss(pred, target).item()
             n += 1
     return total_loss / max(n, 1)
 
@@ -684,6 +923,7 @@ def train(
     batch_size: int,
     lr: float,
     tracker: Tracker | None = None,
+    num_workers: int = 0,
 ) -> tuple[NNUE, Tracker]:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
@@ -695,7 +935,7 @@ def train(
         train_dataset,
         batch_size=batch_size,
         collate_fn=collate_sparse,
-        num_workers=0,
+        num_workers=num_workers,
         shuffle=not is_iterable,
     )
     n_train_batches = (len(train_dataset) + batch_size - 1) // batch_size
@@ -704,7 +944,7 @@ def train(
             val_dataset,
             batch_size=batch_size,
             collate_fn=collate_sparse,
-            num_workers=0,
+            num_workers=num_workers,
         )
         if val_dataset is not None
         else None
@@ -753,13 +993,17 @@ def train(
 
             if scaler:
                 with torch.amp.autocast("cuda"):
-                    loss = F.mse_loss(model(w_idx, w_off, b_idx, b_off, stm), target)
+                    loss = torch.nn.functional.mse_loss(
+                        model(w_idx, w_off, b_idx, b_off, stm), target
+                    )
                 scaler.scale(loss).backward()
                 scaler.step(sparse_optimizer)
                 scaler.step(dense_optimizer)
                 scaler.update()
             else:
-                loss = F.mse_loss(model(w_idx, w_off, b_idx, b_off, stm), target)
+                loss = torch.nn.functional.mse_loss(
+                    model(w_idx, w_off, b_idx, b_off, stm), target
+                )
                 loss.backward()
                 sparse_optimizer.step()
                 dense_optimizer.step()
@@ -777,7 +1021,7 @@ def train(
                         x.to(device) for x in batch
                     ]
                     pred = model(w_idx, w_off, b_idx, b_off, stm)
-                    val_loss = F.mse_loss(pred, target).item()
+                    val_loss = torch.nn.functional.mse_loss(pred, target).item()
                     tracker.track("val", "loss", val_loss)
                     pbar.set_postfix(**tracker.postfix)
                     pbar.update(1)
@@ -980,13 +1224,11 @@ def evaluate_fens(
 if __name__ == "__main__":
     import polars as pl
 
-    parser = argparse.ArgumentParser(
-        description="Train NNUE network. Data should be pre-shuffled during preprocessing."
-    )
+    parser = argparse.ArgumentParser(description="Train NNUE network.")
     parser.add_argument(
         "data",
         nargs="+",
-        help="One or more parquet/CSV files (pre-shuffled)",
+        help="One or more parquet files",
     )
     parser.add_argument("--output", default="network.nnue")
     parser.add_argument("--epochs", type=int, default=30)
@@ -999,37 +1241,77 @@ if __name__ == "__main__":
         action="store_true",
         help="Augment data by including flipped positions (2x data, zero mean scores)",
     )
+    parser.add_argument(
+        "--shuffle",
+        action="store_true",
+        help="Use shuffled multi-row-group sampling (recommended for training)",
+    )
+    parser.add_argument(
+        "--num-active-groups",
+        type=int,
+        default=8,
+        help="Number of row groups to sample from simultaneously (more = better shuffle)",
+    )
+    parser.add_argument(
+        "--buffer-per-group",
+        type=int,
+        default=4096,
+        help="Samples to buffer per active row group",
+    )
     args = parser.parse_args()
 
-    # Load all data sources as LazyFrames
-    sources: list[pl.LazyFrame] = []
+    # Validate paths
     for path in args.data:
         if not pathlib.Path(path).exists():
             print(f"Error: {path} not found")
             sys.exit(1)
-        if path.endswith(".parquet"):
-            sources.append(pl.scan_parquet(path))
-        else:
-            sources.append(pl.scan_csv(path))
         print(f"Added: {path}")
 
-    # Create split config and datasets
+    # Create split config
     split_config = SplitConfig(
         val_ratio=args.val_ratio,
         test_ratio=args.test_ratio,
     )
-    train_dataset = LazyFrameDataset(
-        sources,
-        split="train",
-        split_config=split_config,
-        flip_augment=args.flip_augment,
-    )
-    val_dataset = LazyFrameDataset(
-        sources,
-        split="val",
-        split_config=split_config,
-        flip_augment=False,  # No augmentation for validation
-    )
+
+    if args.shuffle:
+        # Use shuffled dataset (recommended for training)
+        train_dataset = ShuffledParquetDataset(
+            args.data,
+            split="train",
+            split_config=split_config,
+            num_active_groups=args.num_active_groups,
+            buffer_per_group=args.buffer_per_group,
+            flip_augment=args.flip_augment,
+        )
+        val_dataset = ShuffledParquetDataset(
+            args.data,
+            split="val",
+            split_config=split_config,
+            num_active_groups=4,  # Fewer for validation
+            buffer_per_group=args.buffer_per_group,
+            flip_augment=False,
+        )
+    else:
+        # Use sequential dataset (for compatibility)
+        sources: list[pl.LazyFrame] = []
+        for path in args.data:
+            if path.endswith(".parquet"):
+                sources.append(pl.scan_parquet(path))
+            else:
+                sources.append(pl.scan_csv(path))
+
+        train_dataset = LazyFrameDataset(
+            sources,
+            split="train",
+            split_config=split_config,
+            flip_augment=args.flip_augment,
+        )
+        val_dataset = LazyFrameDataset(
+            sources,
+            split="val",
+            split_config=split_config,
+            flip_augment=False,
+        )
 
     print(f"Train: {len(train_dataset)} rows, Val: {len(val_dataset)} rows")
 

@@ -238,7 +238,7 @@ preprocess.py (streaming)
 Parquet files (compressed FEN + score)
         |
         v
-LazyFrameDataset (polars streaming)
+ShuffledParquetDataset (row-group interleaving)
         |
         v
 C++ get_halfkp_features_batch()
@@ -254,10 +254,13 @@ PyTorch DataLoader
 - `process_puzzles()`: Lichess puzzles (2 positions per puzzle: start + after move 1)
 - `process_endgames()`: Random endgame positions with tablebase scores
 - All use streaming and batch FEN compression
+- `--engine` / `-e`: UCI engine for evaluation (required for puzzles)
+- `--tablebase`: Path to Syzygy tablebases for endgame positions
 
 **`training/train.py`**
 - `SplitConfig`: Controls train/val/test splits with seed for reproducibility
-- `LazyFrameDataset`: Streams parquet data, extracts features via C++ bindings
+- `ShuffledParquetDataset`: Memory-efficient shuffled streaming (see below)
+- `LazyFrameDataset`: Sequential streaming (legacy, for compatibility)
 - `HalfKPNet`: PyTorch model matching the target architecture
 - Uses `SparseAdam` for HalfKP embeddings, `AdamW` for dense layers
 
@@ -266,27 +269,192 @@ PyTorch DataLoader
 - `compress_fens_batch()` / `decompress_fens_batch()`: Batch compression
 - `get_halfkp_features_batch(fens, flip)`: ~250x faster than Python feature extraction
 
+### ShuffledParquetDataset
+
+Memory-efficient shuffled dataset using multi-row-group interleaving.
+
+**How it works:**
+1. Shuffles row group order each epoch
+2. Maintains N "active" row groups simultaneously
+3. Samples randomly from all active group buffers
+4. When a group is exhausted, replaces with next from shuffled list
+
+**Memory usage formula:**
+```
+RAM = num_active_groups × buffer_per_group × ~50 bytes/sample
+```
+
+| Configuration | Memory |
+|---------------|--------|
+| Default (8 × 4096) | ~1.6 MB |
+| Large (16 × 8192) | ~6.5 MB |
+| Aggressive (32 × 16384) | ~26 MB |
+
+**Constructor:**
+```python
+ShuffledParquetDataset(
+    paths,                    # List of paths OR list of (path, weight) tuples
+    split="train",            # "train", "val", "test", or None for all
+    split_config=SplitConfig(),
+    num_active_groups=8,      # More = better shuffle, more RAM
+    buffer_per_group=4096,    # Samples buffered per group
+    flip_augment=False,       # Include flipped positions (2x data)
+    seed=None,                # Random seed (changes each epoch if None)
+)
+```
+
+**Weighted multi-source training:**
+```python
+# Mix datasets with different weights
+dataset = ShuffledParquetDataset(
+    paths=[
+        ("data/evals.parquet", 1.0),      # Full weight
+        ("data/puzzles.parquet", 2.0),    # 2x sampling rate
+        ("data/endgames.parquet", 0.5),   # 0.5x sampling rate
+    ],
+    split="train",
+    num_active_groups=16,
+)
+```
+
+**From a notebook:**
+```python
+from train import ShuffledParquetDataset, SplitConfig
+import torch
+
+split_config = SplitConfig(val_ratio=0.05, test_ratio=0.05)
+
+train_dataset = ShuffledParquetDataset(
+    paths=[
+        ("data/evals.parquet", 1.0),
+        ("data/puzzles.parquet", 1.5),
+    ],
+    split="train",
+    split_config=split_config,
+    num_active_groups=8,
+    buffer_per_group=4096,
+)
+
+train_loader = torch.utils.data.DataLoader(
+    train_dataset,
+    batch_size=8192,
+    num_workers=0,  # Must be 0 for IterableDataset
+    collate_fn=collate_sparse,
+)
+
+# Training loop
+for epoch in range(30):
+    train_dataset.set_epoch(epoch)  # Reshuffle each epoch
+    for features, targets in train_loader:
+        # train...
+        pass
+```
+
+### Flip Augmentation
+
+Flip augmentation (`--flip-augment`) doubles training data by generating a color-swapped version of each position. This helps the network learn symmetric evaluation.
+
+**What happens when `flip=True`:**
+
+1. **STM (side to move) is inverted**: `stm_flipped = 1 - stm`
+   - White to move (0) becomes Black to move (1)
+   - Black to move (1) becomes White to move (0)
+
+2. **HalfKP features are swapped between perspectives**:
+   - Original: white_features → white accumulator, black_features → black accumulator
+   - Flipped: black_features → white accumulator, white_features → black accumulator
+   
+3. **Score is negated**: `score_flipped = -score`
+   - A position that's +100 for white becomes -100 (i.e., +100 for black)
+
+**Example:**
+```
+Original position: White to move, white is +150cp ahead
+  STM = 0 (white)
+  Score = +150
+  White features: [king on e1 sees rook on a1, ...]
+  Black features: [king on e8 sees rook on a8, ...]
+
+Flipped position: Black to move, black is +150cp ahead  
+  STM = 1 (black)
+  Score = -150
+  White features: [king on e8 sees rook on a8, ...] (was black's view)
+  Black features: [king on e1 sees rook on a1, ...] (was white's view)
+```
+
+**Why this works:**
+- HalfKP features already encode positions from each king's perspective with board flipping (black's view is vertically mirrored)
+- Swapping the feature sets is equivalent to swapping which color "we" are
+- The network learns that `eval(white_view, black_view, white_to_move)` = `-eval(black_view, white_view, black_to_move)`
+
+**Benefits:**
+- 2x training data without additional positions
+- Forces symmetric evaluation (same position evaluated from opposite sides should give opposite scores)
+- Reduces bias toward one color
+
+**Implementation** (in `Bindings.cpp`):
+```cpp
+if (flip) {
+  // Swap white and black features
+  white_indices.push_back(black_feat);
+  black_indices.push_back(white_feat);
+  // STM is also flipped
+  stm[pos_idx] = 1 - stm_val;
+}
+// Caller negates the score: -float(scores[i])
+```
+
 ### Training Features
 
 - **Flip augmentation**: `--flip-augment` yields both original and color-swapped positions (2x data, zero-mean scores)
-- **Memory efficient**: True streaming via `collect_batches()`, no full dataset materialization
+- **Shuffled streaming**: `--shuffle` enables ShuffledParquetDataset (recommended)
+- **Multi-source mixing**: Pass multiple files with weights for balanced training
+- **Memory efficient**: True streaming, configurable RAM budget
 - **Mixed precision**: Optional AMP for faster training on supported GPUs
 
-### Usage
+### CLI Usage
 
 ```bash
 cd training
 
 # Preprocess data
 uv run python preprocess.py evals -n 100000 -o data/evals.parquet
-uv run python preprocess.py puzzles -n 50000 -o data/puzzles.parquet
+uv run python preprocess.py puzzles -e /path/to/stockfish -n 50000 -o data/puzzles.parquet
 
-# Train
-uv run python -m train data/evals.parquet --epochs 10 --batch-size 4096 --flip-augment
+# Train with shuffling (recommended)
+uv run python train.py data/evals.parquet --shuffle --epochs 30 --batch-size 8192
+
+# Train with multiple sources
+uv run python train.py data/evals.parquet data/puzzles.parquet --shuffle --epochs 30
+
+# Tune memory/shuffle tradeoff
+uv run python train.py data/evals.parquet --shuffle \
+    --num-active-groups 16 \
+    --buffer-per-group 8192 \
+    --epochs 30 --batch-size 8192
+
+# With flip augmentation
+uv run python train.py data/evals.parquet --shuffle --flip-augment --epochs 30
 
 # Rebuild C++ module after Bindings.cpp changes
 uv run --reinstall-package dummy-chess python -c "import dummy_chess"
 ```
+
+### CLI Arguments Reference
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `data` | (required) | One or more parquet files |
+| `--output` | `network.nnue` | Output file path |
+| `--epochs` | 30 | Training epochs |
+| `--batch-size` | 8192 | Batch size |
+| `--lr` | 1e-3 | Learning rate |
+| `--val-ratio` | 0.05 | Validation split ratio |
+| `--test-ratio` | 0.05 | Test split ratio |
+| `--flip-augment` | False | Double data with flipped positions |
+| `--shuffle` | False | Use ShuffledParquetDataset |
+| `--num-active-groups` | 8 | Row groups sampled simultaneously |
+| `--buffer-per-group` | 4096 | Samples buffered per group |
 
 ## TODO
 
