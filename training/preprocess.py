@@ -164,26 +164,6 @@ def pl_scan_csv_zstd(path: str | Path) -> pl.LazyFrame:
 # Puzzle processing
 # =============================================================================
 
-PIECE_VALUES = {
-    chess.PAWN: 100,
-    chess.KNIGHT: 320,
-    chess.BISHOP: 330,
-    chess.ROOK: 500,
-    chess.QUEEN: 900,
-    chess.KING: 0,
-}
-
-
-def material_eval(board: chess.Board) -> int:
-    """Simple material count in centipawns."""
-    score = 0
-    for sq in chess.SQUARES:
-        piece = board.piece_at(sq)
-        if piece:
-            val = PIECE_VALUES.get(piece.piece_type, 0)
-            score += val if piece.color == chess.WHITE else -val
-    return score
-
 
 def uci_eval(
     board: chess.Board,
@@ -204,7 +184,7 @@ def uci_eval(
 
 
 def process_puzzle_row(
-    row: dict, engine=None, depth: int = 12
+    row: dict, engine, depth: int = 12
 ) -> list[tuple[str, int, int, int]]:
     """
     Process single puzzle row. Returns list of (fen_str, score, depth, knodes).
@@ -226,12 +206,7 @@ def process_puzzle_row(
 
     # Position 1: Starting position
     board = chess.Board(fen)
-    if engine:
-        score, out_depth, out_knodes = uci_eval(board, engine, depth)
-    else:
-        score = material_eval(board)
-        out_depth = 0
-        out_knodes = 0
+    score, out_depth, out_knodes = uci_eval(board, engine, depth)
     score = max(-15000, min(15000, score))
     results.append((board.fen(), score, out_depth, out_knodes))
 
@@ -241,12 +216,7 @@ def process_puzzle_row(
         return results  # Return just the starting position
     board.push(move)
 
-    if engine:
-        score, out_depth, out_knodes = uci_eval(board, engine, depth)
-    else:
-        score = material_eval(board)
-        out_depth = 0
-        out_knodes = 0
+    score, out_depth, out_knodes = uci_eval(board, engine, depth)
     score = max(-15000, min(15000, score))
     results.append((board.fen(), score, out_depth, out_knodes))
 
@@ -257,22 +227,24 @@ def process_puzzles(
     input_path: Path,
     output_path: Path,
     max_rows: int | None,
-    engine_path: str | None,
+    engine_path: str,
     depth: int,
+    tablebase_path: str | None = None,
     batch_size: int = 100000,
 ) -> int:
     """
     Process puzzle data, streaming to parquet in batches.
 
+    Requires a UCI engine for evaluation.
+
     Returns the number of rows written.
     """
-    engine = None
-    if engine_path:
-        try:
-            engine = chess.engine.SimpleEngine.popen_uci(engine_path)
-            print(f"Using UCI engine: {engine_path} (depth={depth})")
-        except (FileNotFoundError, chess.engine.EngineTerminatedError) as e:
-            print(f"UCI engine failed ({e}), using material eval")
+    engine = chess.engine.SimpleEngine.popen_uci(engine_path)
+    print(f"Using UCI engine: {engine_path} (depth={depth})")
+
+    if tablebase_path:
+        engine.configure({"SyzygyPath": tablebase_path})
+        print(f"Using tablebases: {tablebase_path}")
 
     print(f"Loading {input_path}...")
     if str(input_path).endswith(".zst"):
@@ -893,6 +865,9 @@ def main():
                 "Download: wget https://database.lichess.org/lichess_db_puzzle.csv.zst"
             )
             sys.exit(1)
+        if not args.engine:
+            print("Error: --engine is required for puzzle preprocessing")
+            sys.exit(1)
         # Puzzles handles its own output (streaming)
         process_puzzles(
             input_path,
@@ -900,6 +875,7 @@ def main():
             args.max,
             args.engine,
             args.depth,
+            args.tablebase,
         )
         return
 
