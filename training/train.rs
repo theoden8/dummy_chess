@@ -12,6 +12,7 @@
 //!   # Using config file
 //!   cargo run --release -- --config train.toml
 
+use arrow::array::AsArray;
 use burn::backend::ndarray::{NdArray, NdArrayDevice};
 use burn::backend::wgpu::{Wgpu, WgpuDevice};
 use burn::backend::Autodiff;
@@ -22,18 +23,18 @@ use burn::prelude::*;
 use burn::tensor::Int;
 use clap::{Parser, ValueEnum};
 use indicatif::{ProgressBar, ProgressStyle};
+use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::file::reader::{FileReader, SerializedFileReader};
-use polars::prelude::*;
 
 use serde::Deserialize;
 use std::path::PathBuf;
 
 // ============================================================================
-// Memory Debugging
+// Memory Debugging (only enabled in debug builds)
 // ============================================================================
 
+#[cfg(debug_assertions)]
 fn get_memory_usage_mb() -> f64 {
-    // Read from /proc/self/status on Linux
     if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
         for line in status.lines() {
             if line.starts_with("VmRSS:") {
@@ -51,6 +52,7 @@ fn get_memory_usage_mb() -> f64 {
 
 macro_rules! debug_mem {
     ($msg:expr) => {
+        #[cfg(debug_assertions)]
         eprintln!("[DEBUG MEM] {}: {:.1} MB", $msg, get_memory_usage_mb());
     };
 }
@@ -505,23 +507,9 @@ impl BatchIterator {
             .into_iter()
             .map(|src| {
                 // Use pre-specified row count or read from parquet metadata (cheap)
-                let n = match src.rows {
-                    Some(rows) => {
-                        eprintln!(
-                            "[INFO] Using specified row count {} for {:?}",
-                            rows, src.path
-                        );
-                        rows
-                    }
-                    None => {
-                        let rows = Self::get_row_count_from_metadata(&src.path);
-                        eprintln!(
-                            "[INFO] Read row count {} from metadata for {:?}",
-                            rows, src.path
-                        );
-                        rows
-                    }
-                };
+                let n = src
+                    .rows
+                    .unwrap_or_else(|| Self::get_row_count_from_metadata(&src.path));
                 let (start, end) = split_config.get_split_indices(n, split);
                 SourceInfo {
                     source: src,
@@ -551,20 +539,6 @@ impl BatchIterator {
         let metadata = reader.metadata();
         let row_groups = metadata.row_groups();
         let row_count: i64 = row_groups.iter().map(|rg| rg.num_rows()).sum();
-
-        // Log row group info for debugging
-        eprintln!(
-            "[INFO] {:?}: {} row groups, {} total rows, ~{} rows/group",
-            path,
-            row_groups.len(),
-            row_count,
-            if row_groups.is_empty() {
-                0
-            } else {
-                row_count as usize / row_groups.len()
-            }
-        );
-
         debug_mem!("get_row_count_from_metadata: done");
         row_count as usize
     }
@@ -627,7 +601,7 @@ impl BatchIterator {
         self.current_offset = 0;
     }
 
-    /// Load next batch of samples
+    /// Load next batch of samples using parquet crate directly (true streaming)
     fn next_batch(&mut self) -> Option<Vec<Sample>> {
         while self.current_source < self.source_infos.len() {
             let info = &self.source_infos[self.current_source];
@@ -643,95 +617,222 @@ impl BatchIterator {
             let batch_len = self.batch_size.min(remaining);
 
             debug_mem!(format!(
-                "Before scan_parquet (batch {}, offset {}, len {})",
+                "Before read_batch (batch {}, offset {}, len {})",
                 self.current_offset / self.batch_size,
                 abs_offset,
                 batch_len
             ));
 
-            // Load just this batch using low-memory scan args
-            let scan_args = ScanArgsParquet {
-                n_rows: Some(abs_offset + batch_len), // Read only up to what we need
-                parallel: polars::prelude::ParallelStrategy::None, // Disable parallel to save memory
-                low_memory: true,
-                ..Default::default()
-            };
+            let samples = self.read_batch_direct(&info.source.path, abs_offset, batch_len);
 
-            let df = LazyFrame::scan_parquet(&info.source.path, scan_args)
-                .expect("Failed to scan parquet")
-                .select(&[col("fen"), col("score")]) // Only load columns we need
-                .slice(abs_offset as i64, batch_len as u32)
-                .collect()
-                .expect("Failed to collect batch");
-
-            debug_mem!(format!("After collect (got {} rows)", df.height()));
+            debug_mem!(format!("After read_batch ({} samples)", samples.len()));
 
             self.current_offset += batch_len;
-            let samples = self.extract_samples(&df);
-
-            debug_mem!(format!("After extract_samples ({} samples)", samples.len()));
-
             return Some(samples);
         }
         None
     }
 
-    fn extract_samples(&self, df: &polars::frame::DataFrame) -> Vec<Sample> {
-        let fen_col = df.column("fen").expect("No fen column");
-        let score_col = df.column("score").expect("No score column");
-        let is_binary = matches!(fen_col.dtype(), DataType::Binary);
-        let n = df.height();
+    /// Read batch using Arrow columnar reader - fast column projection
+    fn read_batch_direct(&self, path: &PathBuf, offset: usize, len: usize) -> Vec<Sample> {
+        let file = std::fs::File::open(path).expect("Failed to open parquet file");
 
-        let mut samples = Vec::with_capacity(if self.flip_augment { n * 2 } else { n });
+        // Build Arrow reader with column projection (only fen and score)
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file)
+            .expect("Failed to create reader builder");
 
-        let scores: Vec<f32> = score_col
-            .i64()
-            .map(|s| s.into_iter().map(|v| v.unwrap_or(0) as f32).collect())
-            .unwrap_or_else(|_| vec![0.0; n]);
+        let metadata = builder.metadata().clone();
 
-        if is_binary {
-            let fen_binary = fen_col.binary().expect("Expected binary column");
-            for (j, score) in scores.into_iter().enumerate() {
-                let bytes = fen_binary.get(j).unwrap_or(&[]);
-                let (w, b, stm) = get_halfkp_features_compressed(bytes, false);
-                samples.push(Sample {
-                    w_feats: w,
-                    b_feats: b,
-                    stm,
-                    score,
-                });
+        // Find which row groups contain our data
+        let mut row_groups_to_read = Vec::new();
+        let mut cumulative_rows = 0usize;
 
-                if self.flip_augment {
-                    let (w_f, b_f, stm_f) = get_halfkp_features_compressed(bytes, true);
-                    samples.push(Sample {
-                        w_feats: w_f,
-                        b_feats: b_f,
-                        stm: stm_f,
-                        score: -score,
-                    });
-                }
+        for (rg_idx, rg_meta) in metadata.row_groups().iter().enumerate() {
+            let rg_rows = rg_meta.num_rows() as usize;
+            let rg_start = cumulative_rows;
+            let rg_end = cumulative_rows + rg_rows;
+
+            if rg_end > offset && rg_start < offset + len {
+                row_groups_to_read.push(rg_idx);
             }
-        } else {
-            let fen_str = fen_col.str().expect("Expected string column");
-            for (j, score) in scores.into_iter().enumerate() {
-                let fen = fen_str.get(j).unwrap_or("");
-                let (w, b, stm) = get_halfkp_features(fen, false);
-                samples.push(Sample {
-                    w_feats: w,
-                    b_feats: b,
-                    stm,
-                    score,
-                });
 
-                if self.flip_augment {
-                    let (w_f, b_f, stm_f) = get_halfkp_features(fen, true);
-                    samples.push(Sample {
-                        w_feats: w_f,
-                        b_feats: b_f,
-                        stm: stm_f,
-                        score: -score,
-                    });
+            cumulative_rows += rg_rows;
+            if cumulative_rows >= offset + len {
+                break;
+            }
+        }
+
+        // Reopen file for the reader (builder consumes file)
+        let file = std::fs::File::open(path).expect("Failed to reopen parquet file");
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file)
+            .expect("Failed to create reader builder");
+
+        // Get column indices from the schema
+        let schema = builder.schema().clone();
+        let fen_idx = schema.index_of("fen").expect("No fen column");
+        let score_idx = schema.index_of("score").expect("No score column");
+
+        let mut samples = Vec::with_capacity(if self.flip_augment { len * 2 } else { len });
+
+        if row_groups_to_read.is_empty() {
+            eprintln!(
+                "WARNING: No row groups to read for offset={}, len={}",
+                offset, len
+            );
+            return samples;
+        }
+
+        // Build reader selecting only needed row groups
+        let reader = builder
+            .with_row_groups(row_groups_to_read)
+            .with_batch_size(len.max(1024))
+            .build()
+            .expect("Failed to build reader");
+        let mut rows_skipped = 0usize;
+        let mut rows_collected = 0usize;
+
+        // Calculate how many rows to skip within selected row groups
+        let mut skip_in_first_rg = 0usize;
+        let mut cumulative = 0usize;
+        for rg_meta in metadata.row_groups().iter() {
+            let rg_rows = rg_meta.num_rows() as usize;
+            if cumulative + rg_rows > offset {
+                skip_in_first_rg = offset - cumulative;
+                break;
+            }
+            cumulative += rg_rows;
+        }
+        let rows_to_skip = skip_in_first_rg;
+
+        for batch_result in reader {
+            let batch = batch_result.expect("Failed to read batch");
+            let batch_len = batch.num_rows();
+
+            // Get columns by their actual indices
+            let fen_col = batch.column(fen_idx);
+            let score_col = batch.column(score_idx);
+
+            // Use AsArray trait to handle different array types
+            use arrow::datatypes::DataType;
+
+            for i in 0..batch_len {
+                // Skip rows until we reach offset
+                if rows_skipped < rows_to_skip {
+                    rows_skipped += 1;
+                    continue;
                 }
+
+                // Stop when we have enough
+                if rows_collected >= len {
+                    break;
+                }
+
+                // Get score
+                let score = match score_col.data_type() {
+                    DataType::Int64 => score_col
+                        .as_primitive::<arrow::datatypes::Int64Type>()
+                        .value(i) as f32,
+                    DataType::Int32 => score_col
+                        .as_primitive::<arrow::datatypes::Int32Type>()
+                        .value(i) as f32,
+                    _ => 0.0,
+                };
+
+                // Get fen based on data type
+                match fen_col.data_type() {
+                    DataType::BinaryView => {
+                        let arr = fen_col.as_binary_view();
+                        let bytes = arr.value(i);
+                        let (w, b, stm) = get_halfkp_features_compressed(bytes, false);
+                        samples.push(Sample {
+                            w_feats: w,
+                            b_feats: b,
+                            stm,
+                            score,
+                        });
+                        if self.flip_augment {
+                            let (w_f, b_f, stm_f) = get_halfkp_features_compressed(bytes, true);
+                            samples.push(Sample {
+                                w_feats: w_f,
+                                b_feats: b_f,
+                                stm: stm_f,
+                                score: -score,
+                            });
+                        }
+                    }
+                    DataType::Binary => {
+                        let arr = fen_col.as_binary::<i32>();
+                        let bytes = arr.value(i);
+                        let (w, b, stm) = get_halfkp_features_compressed(bytes, false);
+                        samples.push(Sample {
+                            w_feats: w,
+                            b_feats: b,
+                            stm,
+                            score,
+                        });
+                        if self.flip_augment {
+                            let (w_f, b_f, stm_f) = get_halfkp_features_compressed(bytes, true);
+                            samples.push(Sample {
+                                w_feats: w_f,
+                                b_feats: b_f,
+                                stm: stm_f,
+                                score: -score,
+                            });
+                        }
+                    }
+                    DataType::Utf8View => {
+                        let arr = fen_col.as_string_view();
+                        let fen = arr.value(i);
+                        let (w, b, stm) = get_halfkp_features(fen, false);
+                        samples.push(Sample {
+                            w_feats: w,
+                            b_feats: b,
+                            stm,
+                            score,
+                        });
+                        if self.flip_augment {
+                            let (w_f, b_f, stm_f) = get_halfkp_features(fen, true);
+                            samples.push(Sample {
+                                w_feats: w_f,
+                                b_feats: b_f,
+                                stm: stm_f,
+                                score: -score,
+                            });
+                        }
+                    }
+                    DataType::Utf8 => {
+                        let arr = fen_col.as_string::<i32>();
+                        let fen = arr.value(i);
+                        let (w, b, stm) = get_halfkp_features(fen, false);
+                        samples.push(Sample {
+                            w_feats: w,
+                            b_feats: b,
+                            stm,
+                            score,
+                        });
+                        if self.flip_augment {
+                            let (w_f, b_f, stm_f) = get_halfkp_features(fen, true);
+                            samples.push(Sample {
+                                w_feats: w_f,
+                                b_feats: b_f,
+                                stm: stm_f,
+                                score: -score,
+                            });
+                        }
+                    }
+                    _ => {
+                        eprintln!(
+                            "WARNING: Unknown fen column type: {:?}",
+                            fen_col.data_type()
+                        );
+                    }
+                }
+
+                rows_collected += 1;
+            }
+
+            if rows_collected >= len {
+                break;
             }
         }
 

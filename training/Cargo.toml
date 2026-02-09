@@ -9,8 +9,8 @@ path = "train.rs"
 
 [dependencies]
 burn = { version = "0.16", features = ["train", "wgpu", "ndarray", "autodiff"] }
-polars = { version = "0.46", features = ["parquet", "lazy"] }
-parquet = "53"
+parquet = { version = "53", features = ["arrow"] }
+arrow = "53"
 indicatif = "0.17"
 clap = { version = "4", features = ["derive"] }
 rand = "0.8"

@@ -3,8 +3,8 @@
 Preprocess data for NNUE training.
 
 Supports three data sources:
-1. puzzles: lichess_db_puzzle.csv.zst - uses Stockfish or material eval
-2. evals: lichess_db_eval.jsonl.zst - uses pre-computed Stockfish evals
+1. puzzles: lichess_db_puzzle.csv.zst - uses UCI engine or material eval
+2. evals: lichess_db_eval.jsonl.zst - uses pre-computed engine evals from lichess
 3. endgames: generates random endgame positions using Syzygy tablebases
 
 Outputs a single CSV file with columns: fen, score
@@ -185,12 +185,12 @@ def material_eval(board: chess.Board) -> int:
     return score
 
 
-def stockfish_eval(
+def uci_eval(
     board: chess.Board,
     engine,
     depth: int = 12,
 ) -> tuple[int, int, int]:
-    """Stockfish evaluation. Returns (score_cp, depth, knodes)."""
+    """UCI engine evaluation. Returns (score_cp, depth, knodes)."""
     info = engine.analyse(board, chess.engine.Limit(depth=depth))
     score = info["score"].white()
     if score.is_mate():
@@ -227,7 +227,7 @@ def process_puzzle_row(
     # Position 1: Starting position
     board = chess.Board(fen)
     if engine:
-        score, out_depth, out_knodes = stockfish_eval(board, engine, depth)
+        score, out_depth, out_knodes = uci_eval(board, engine, depth)
     else:
         score = material_eval(board)
         out_depth = 0
@@ -242,7 +242,7 @@ def process_puzzle_row(
     board.push(move)
 
     if engine:
-        score, out_depth, out_knodes = stockfish_eval(board, engine, depth)
+        score, out_depth, out_knodes = uci_eval(board, engine, depth)
     else:
         score = material_eval(board)
         out_depth = 0
@@ -257,7 +257,7 @@ def process_puzzles(
     input_path: Path,
     output_path: Path,
     max_rows: int | None,
-    stockfish_path: str | None,
+    engine_path: str | None,
     depth: int,
     batch_size: int = 100000,
 ) -> int:
@@ -267,12 +267,12 @@ def process_puzzles(
     Returns the number of rows written.
     """
     engine = None
-    if stockfish_path:
+    if engine_path:
         try:
-            engine = chess.engine.SimpleEngine.popen_uci(stockfish_path)
-            print(f"Using Stockfish: {stockfish_path} (depth={depth})")
+            engine = chess.engine.SimpleEngine.popen_uci(engine_path)
+            print(f"Using UCI engine: {engine_path} (depth={depth})")
         except (FileNotFoundError, chess.engine.EngineTerminatedError) as e:
-            print(f"Stockfish failed ({e}), using material eval")
+            print(f"UCI engine failed ({e}), using material eval")
 
     print(f"Loading {input_path}...")
     if str(input_path).endswith(".zst"):
@@ -846,8 +846,8 @@ def main():
     parser.add_argument("--toy", action="store_true", help="Generate toy dataset")
 
     # Puzzle-specific
-    parser.add_argument("-s", "--stockfish", default=None, help="Path to stockfish")
-    parser.add_argument("-d", "--depth", type=int, default=12, help="Stockfish depth")
+    parser.add_argument("-e", "--engine", default=None, help="Path to UCI engine")
+    parser.add_argument("-d", "--depth", type=int, default=12, help="UCI engine depth")
 
     # Endgame-specific
     parser.add_argument(
@@ -898,7 +898,7 @@ def main():
             input_path,
             Path(args.output),
             args.max,
-            args.stockfish,
+            args.engine,
             args.depth,
         )
         return
