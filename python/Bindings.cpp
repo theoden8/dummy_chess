@@ -246,7 +246,8 @@ private:
   }
 };
 
-PYBIND11_MODULE(_dummychess, m) {
+// Register preprocessing functions on a module (used for both main module and submodule)
+void register_preprocess_functions(py::module_ &m) {
   // FEN compression functions
   m.def("compress_fen", [](const std::string &fenstring) {
     fen::FEN f = fen::load_from_string(fenstring);
@@ -582,6 +583,15 @@ PYBIND11_MODULE(_dummychess, m) {
   // Export constants for Python
   m.attr("HALFKP_SIZE") = 64 * 641 + 1;   // 41025
   m.attr("HALFKAV2_SIZE") = 12 * 641 + 1; // 7693
+}
+
+PYBIND11_MODULE(_dummychess, m) {
+  // Create preprocess submodule
+  py::module_ preprocess = m.def_submodule("preprocess", "Preprocessing utilities for NNUE training");
+  register_preprocess_functions(preprocess);
+  
+  // Also register on main module for backward compatibility
+  register_preprocess_functions(m);
 
   py::enum_<BoardBindings::Status>(m, "Status")
     .value("ONGOING", BoardBindings::Status::ONGOING)

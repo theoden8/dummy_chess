@@ -2,12 +2,24 @@
 """
 Preprocess data for NNUE training.
 
-Supports three data sources:
-1. puzzles: lichess_db_puzzle.csv.zst - uses UCI engine or material eval
+Supports five data sources:
+1. puzzles: lichess_db_puzzle.csv.zst - uses UCI engine for evaluation
 2. evals: lichess_db_eval.jsonl.zst - uses pre-computed engine evals from lichess
 3. endgames: generates random endgame positions using Syzygy tablebases
+4. games: lichess game archives (.pgn.zst) - extracts random positions with engine eval
+5. games-all: stream and process all non-blocklisted months from Lichess
 
-Outputs a single CSV file with columns: fen, score
+Also provides utilities:
+- shuffle: memory-efficient parquet shuffling
+- dedupe: memory-efficient deduplication
+
+Outputs parquet files with columns: fen (binary), score, depth, knodes
+
+Usage for games-all (streaming all months):
+    uv run python preprocess.py games-all --use-pgn-evals --after 2020-01
+    uv run python preprocess.py games-all --use-pgn-evals -n 100000
+    uv run python preprocess.py games-all -e stockfish --after 2020-01  # with engine
+    uv run python preprocess.py games-all --list-months
 
 STYLE: Do NOT use `from X import Y` - use fully qualified names (e.g. pathlib.Path, not Path)
 STYLE: Do NOT use import aliases (e.g. `import numpy as np`) - use full module names
@@ -17,6 +29,7 @@ import argparse
 import dataclasses
 import hashlib
 import io
+import json
 import itertools
 import pathlib
 import random
@@ -24,9 +37,12 @@ import shutil
 import sys
 import tempfile
 import typing
+import urllib.error
+import urllib.request
 
 import chess
 import chess.engine
+import chess.pgn
 import chess.syzygy
 import dummy_chess
 import orjson
@@ -34,6 +50,8 @@ import polars
 import pyarrow.parquet
 import tqdm.auto
 import zstandard
+
+import download
 
 
 # =============================================================================
@@ -267,8 +285,9 @@ def process_puzzles(
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Create temp directory for batch parquet files
-    tmp_dir = tempfile.mkdtemp(prefix="puzzles_")
+    # Create temp directory for batch parquet files NEXT TO output (not in /tmp)
+    tmp_dir = output_path.parent / f".{output_path.stem}_tmp"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
 
     print("Processing puzzles...")
     count = 0
@@ -420,8 +439,9 @@ def process_evals(
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Create temp directory for batch parquet files
-    tmp_dir = tempfile.mkdtemp(prefix="evals_")
+    # Create temp directory for batch parquet files NEXT TO output (not in /tmp)
+    tmp_dir = output_path.parent / f".{output_path.stem}_tmp"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
 
     print("Processing evaluations...")
     count = 0
@@ -450,7 +470,8 @@ def process_evals(
             },
             orient="row",
         )
-        df.write_parquet(f"{tmp_dir}/batch_{batch_num:06d}.parquet")
+        # use_pyarrow=True avoids polars dictionary encoding issues
+        df.write_parquet(f"{tmp_dir}/batch_{batch_num:06d}.parquet", use_pyarrow=True)
         batch_num += 1
         batch = []
 
@@ -481,18 +502,29 @@ def process_evals(
         return 0
 
     # Combine batches and write to output
-    print(f"Writing to {output_path}...")
-    lf = polars.scan_parquet(f"{tmp_dir}/*.parquet")
+    print(f"Combining {batch_num} batch files...")
+    batch_files = sorted(tmp_dir.glob("batch_*.parquet"))
 
     out_str = str(output_path)
     if out_str.endswith(".parquet") or not any(
         out_str.endswith(ext) for ext in [".csv", ".csv.gz", ".csv.zst"]
     ):
-        # Stream directly to parquet without loading into memory
-        lf.sink_parquet(output_path)
+        # Stream batches to output parquet file (memory efficient)
+        first_table = pyarrow.parquet.read_table(batch_files[0])
+        with pyarrow.parquet.ParquetWriter(
+            output_path, first_table.schema, compression="zstd"
+        ) as writer:
+            writer.write_table(first_table)
+            del first_table
+            for batch_file in tqdm.auto.tqdm(
+                batch_files[1:], desc="Writing", unit=" batches"
+            ):
+                table = pyarrow.parquet.read_table(batch_file)
+                writer.write_table(table)
+                del table
     else:
-        # CSV requires collect (no sink_csv for LazyFrame with glob)
-        combined = lf.collect(engine="streaming")
+        # CSV output (requires loading into memory for shuffle)
+        combined = polars.concat([polars.read_parquet(f) for f in batch_files])
         if shuffle:
             print("Shuffling...")
             combined = combined.sample(fraction=1.0, shuffle=True, seed=seed)
@@ -675,8 +707,19 @@ def process_endgames(
     max_pieces: int | None = None,
     include_pawns: bool = True,
     use_dtz: bool = True,
+    engine_path: str | None = None,
+    engine_depth: int = 12,
 ) -> list[tuple[bytes, int, int, int]]:
-    """Generate endgame positions with tablebase evaluations."""
+    """
+    Generate endgame positions with evaluations.
+
+    Scoring priority:
+    1. If engine_path provided: use UCI engine evaluation
+    2. If use_dtz=True: use DTZ tablebase scores (falls back to WDL if DTZ unavailable)
+    3. Otherwise: use WDL tablebase scores
+
+    Tablebase is always used to filter positions (only include positions with valid WDL).
+    """
     if tablebase_path is None:
         tablebase_path = DEFAULT_TABLEBASE_PATH
 
@@ -687,45 +730,76 @@ def process_endgames(
     print(f"  Tablebase: {tablebase_path}")
     print(f"  Pieces: {min_pieces}-{resolved_max_pieces}")
     print(f"  Pawns: {'yes' if include_pawns else 'no'}")
-    print(f"  DTZ scoring: {'yes' if use_dtz else 'no'}")
+    if engine_path:
+        print(f"  Scoring: UCI engine ({engine_path}, depth={engine_depth})")
+    elif use_dtz:
+        print(f"  Scoring: DTZ tablebase (fallback to WDL)")
+    else:
+        print(f"  Scoring: WDL tablebase")
 
     tablebase = chess.syzygy.Tablebase()
     tablebase.add_directory(tablebase_path)
+
+    # Start engine if provided
+    engine = None
+    if engine_path:
+        engine = chess.engine.SimpleEngine.popen_uci(engine_path)
+        # Configure engine with tablebase path for better endgame play
+        try:
+            engine.configure({"SyzygyPath": tablebase_path})
+        except chess.engine.EngineError:
+            pass  # Engine may not support Syzygy
 
     # Collect FEN strings first, then batch compress
     fen_results: list[tuple[str, int, int, int]] = []
     attempts = 0
     max_attempts = n_positions * 1000
 
-    with tqdm.auto.tqdm(total=n_positions, desc="Endgames") as pbar:
-        while len(fen_results) < n_positions and attempts < max_attempts:
-            attempts += 1
+    try:
+        with tqdm.auto.tqdm(total=n_positions, desc="Endgames") as pbar:
+            while len(fen_results) < n_positions and attempts < max_attempts:
+                attempts += 1
 
-            board = generate_random_position(config, resolved_max_pieces)
-            if board is None:
-                continue
-
-            try:
-                wdl = tablebase.probe_wdl(board)
-                if wdl is None:
+                board = generate_random_position(config, resolved_max_pieces)
+                if board is None:
                     continue
 
-                if use_dtz:
-                    dtz = tablebase.probe_dtz(board)
-                    if dtz is None:
-                        score = wdl_to_score(wdl, board.turn)
+                try:
+                    # Always check tablebase WDL to filter valid positions
+                    wdl = tablebase.probe_wdl(board)
+                    if wdl is None:
+                        continue
+
+                    # Get score based on configured method
+                    if engine:
+                        # Use UCI engine for scoring
+                        score, depth, knodes = uci_eval(board, engine, engine_depth)
+                    elif use_dtz:
+                        dtz = tablebase.probe_dtz(board)
+                        if dtz is None:
+                            score = wdl_to_score(wdl, board.turn)
+                        else:
+                            score = dtz_to_score(dtz, wdl, board.turn)
+                        depth = TABLEBASE_DEPTH
+                        knodes = 0
                     else:
-                        score = dtz_to_score(dtz, wdl, board.turn)
-                else:
-                    score = wdl_to_score(wdl, board.turn)
+                        score = wdl_to_score(wdl, board.turn)
+                        depth = TABLEBASE_DEPTH
+                        knodes = 0
 
-            except chess.syzygy.MissingTableError:
-                continue
+                except chess.syzygy.MissingTableError:
+                    continue
+                except Exception:
+                    # Engine evaluation can fail on some positions
+                    continue
 
-            fen_results.append((board.fen(), int(score), TABLEBASE_DEPTH, 0))
-            pbar.update(1)
+                fen_results.append((board.fen(), int(score), depth, knodes))
+                pbar.update(1)
 
-    tablebase.close()
+    finally:
+        tablebase.close()
+        if engine:
+            engine.quit()
 
     # Batch compress all FENs
     if fen_results:
@@ -745,6 +819,719 @@ def process_endgames(
 
 
 # =============================================================================
+# Game position extraction (from Lichess PGN archives)
+# =============================================================================
+
+# Months with known data issues - skip entirely
+BLOCKLISTED_MONTHS = frozenset(
+    [
+        "2021-03",  # Datacenter fire, incorrect results
+    ]
+)
+
+# Base URLs for game archives
+LICHESS_STANDARD_URL = (
+    "https://database.lichess.org/standard/lichess_db_standard_rated_{month}.pgn.zst"
+)
+LICHESS_CHESS960_URL = (
+    "https://database.lichess.org/chess960/lichess_db_chess960_rated_{month}.pgn.zst"
+)
+
+
+@dataclasses.dataclass
+class GameExtractionConfig:
+    """Configuration for game position extraction."""
+
+    # Position selection
+    min_ply: int = 10  # Skip opening positions
+    end_margin: int = 5  # Skip positions near game end
+    min_pieces: int = 7  # Skip simple endgames (use tablebases instead)
+
+    # Game filtering
+    min_elo: int | None = None  # Optional rating floor
+    max_elo: int | None = None  # Optional rating ceiling
+    min_game_length: int = 20  # Minimum plies in game
+    skip_bots: bool = True  # Skip games with BOT players
+
+    # Engine settings
+    depth: int = 8  # Stockfish search depth
+
+    # Processing
+    batch_size: int = 10000  # Positions per parquet row group
+
+
+@dataclasses.dataclass
+class GameExtractionProgress:
+    """Checkpoint for resumable game extraction."""
+
+    url_or_path: str  # URL or file path being processed
+    games_processed: int = 0
+    positions_extracted: int = 0
+    bytes_read: int = 0  # For HTTP resume
+
+    def save(self, path: pathlib.Path) -> None:
+        """Save progress to JSON file."""
+        import json
+
+        with open(path, "w") as f:
+            json.dump(dataclasses.asdict(self), f, indent=2)
+
+    @classmethod
+    def load(cls, path: pathlib.Path) -> "GameExtractionProgress":
+        """Load progress from JSON file."""
+        import json
+
+        with open(path) as f:
+            data = json.load(f)
+        # Handle old format
+        if "month" in data:
+            data["url_or_path"] = data.pop("month", "")
+            data.pop("variant", None)
+        return cls(**data)
+
+
+def should_process_game(game: chess.pgn.Game, config: GameExtractionConfig) -> bool:
+    """Check if game should be processed based on headers."""
+    headers = game.headers
+
+    # Skip bot games
+    if config.skip_bots:
+        if headers.get("WhiteTitle") == "BOT" or headers.get("BlackTitle") == "BOT":
+            return False
+
+    # Check ratings
+    try:
+        white_elo = int(headers.get("WhiteElo", "0"))
+        black_elo = int(headers.get("BlackElo", "0"))
+    except ValueError:
+        white_elo = black_elo = 0
+
+    if config.min_elo is not None:
+        if white_elo < config.min_elo or black_elo < config.min_elo:
+            return False
+
+    if config.max_elo is not None:
+        if white_elo > config.max_elo or black_elo > config.max_elo:
+            return False
+
+    return True
+
+
+def parse_eval_comment(comment: str) -> int | None:
+    """
+    Parse [%eval X] from PGN comment.
+
+    Returns centipawn score (from white's perspective) or None if not found.
+    Mate scores are converted to +/- 10000.
+    """
+    import re
+
+    match = re.search(r"\[%eval\s+([^\]]+)\]", comment)
+    if not match:
+        return None
+
+    eval_str = match.group(1).strip()
+
+    # Handle mate scores like "#5" or "#-3"
+    if eval_str.startswith("#"):
+        mate_in = eval_str[1:]
+        try:
+            mate_plies = int(mate_in)
+            return 10000 if mate_plies > 0 else -10000
+        except ValueError:
+            return None
+
+    # Handle centipawn scores
+    try:
+        # Lichess evals are in pawns (e.g., "1.23"), convert to centipawns
+        score = float(eval_str)
+        return int(score * 100)
+    except ValueError:
+        return None
+
+
+def extract_position_from_game(
+    game: chess.pgn.Game,
+    config: GameExtractionConfig,
+    rng: random.Random,
+) -> tuple[str, int] | None:
+    """
+    Extract one random position from a game (for engine evaluation).
+
+    Returns (fen, ply_index) or None if no valid position found.
+    """
+    # Collect valid positions (ply_index, fen)
+    valid_positions: list[tuple[int, str]] = []
+
+    board = game.board()  # Handles Chess960 starting position automatically
+    ply = 0
+    total_plies = len(list(game.mainline_moves()))
+
+    # Check minimum game length
+    if total_plies < config.min_game_length:
+        return None
+
+    for node in game.mainline():
+        # Get position BEFORE this move
+        piece_count = len(board.piece_map())
+
+        if (
+            ply >= config.min_ply
+            and ply < total_plies - config.end_margin
+            and piece_count >= config.min_pieces
+            and not board.is_game_over()
+        ):
+            valid_positions.append((ply, board.fen()))
+
+        # Make the move
+        board.push(node.move)
+        ply += 1
+
+    if not valid_positions:
+        return None
+
+    # Pick random position
+    ply_idx, fen = rng.choice(valid_positions)
+    return fen, ply_idx
+
+
+def extract_position_with_eval(
+    game: chess.pgn.Game,
+    config: GameExtractionConfig,
+    rng: random.Random,
+) -> tuple[str, int, int] | None:
+    """
+    Extract one random position with its PGN eval annotation.
+
+    Returns (fen, score_cp, ply_index) or None if no valid position found.
+    Only considers positions that have [%eval] annotations.
+    """
+    # Collect valid positions (ply_index, fen, score)
+    valid_positions: list[tuple[int, str, int]] = []
+
+    board = game.board()  # Handles Chess960 starting position automatically
+    ply = 0
+    total_plies = len(list(game.mainline_moves()))
+
+    # Check minimum game length
+    if total_plies < config.min_game_length:
+        return None
+
+    for node in game.mainline():
+        # Parse eval from comment
+        comment = node.comment or ""
+        score = parse_eval_comment(comment)
+
+        # Get position BEFORE this move
+        piece_count = len(board.piece_map())
+
+        if (
+            score is not None
+            and ply >= config.min_ply
+            and ply < total_plies - config.end_margin
+            and piece_count >= config.min_pieces
+            and not board.is_game_over()
+        ):
+            valid_positions.append((ply, board.fen(), score))
+
+        # Make the move
+        board.push(node.move)
+        ply += 1
+
+    if not valid_positions:
+        return None
+
+    # Pick random position
+    ply_idx, fen, score = rng.choice(valid_positions)
+    return fen, score, ply_idx
+
+
+def iter_pgn_games(stream: typing.IO[str]) -> typing.Iterator[chess.pgn.Game]:
+    """
+    Iterate over PGN games from a text stream using python-chess.
+
+    Yields chess.pgn.Game objects.
+    """
+    while True:
+        game = chess.pgn.read_game(stream)
+        if game is None:
+            break
+        yield game
+
+
+def process_games_pgn_evals(
+    source: str,  # URL or file path
+    output_path: pathlib.Path,
+    config: GameExtractionConfig,
+    max_positions: int | None = None,
+    seed: int = 42,
+    resume: bool = False,
+    use_torrent: bool = False,
+) -> int:
+    """
+    Process PGN game archive, extracting positions with their PGN [%eval] annotations.
+
+    No engine needed - uses evals already in the PGN from Lichess analysis.
+
+    Supports both HTTP URLs (streaming), BitTorrent (streaming), and local files.
+    Uses batch files for atomic writes and full resumability.
+
+    Args:
+        source: URL (http/https) or local file path to .pgn.zst
+        output_path: Output parquet file
+        config: Extraction configuration
+        max_positions: Maximum positions to extract (None = all)
+        seed: Random seed
+        resume: Whether to resume from checkpoint
+        use_torrent: Use BitTorrent for streaming (appends .torrent to URL)
+
+    Returns:
+        Number of positions extracted
+    """
+    rng = random.Random(seed)
+    is_url = source.startswith("http://") or source.startswith("https://")
+
+    # Progress tracking
+    progress_path = output_path.with_suffix(".progress.json")
+    progress = GameExtractionProgress(url_or_path=source)
+
+    if resume and progress_path.exists():
+        progress = GameExtractionProgress.load(progress_path)
+        if progress.url_or_path != source:
+            print("Warning: Progress file is for different source, starting fresh")
+            progress = GameExtractionProgress(url_or_path=source)
+        else:
+            print(
+                f"Resuming from game {progress.games_processed}, "
+                f"position {progress.positions_extracted}"
+            )
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Parquet schema - no knodes for PGN evals, use placeholder depth
+    arrow_schema = pyarrow.schema(
+        [
+            ("fen", pyarrow.binary()),
+            ("score", pyarrow.int64()),
+            ("depth", pyarrow.int64()),
+            ("knodes", pyarrow.int64()),
+        ]
+    )
+
+    # Use temp directory for batch files (next to output, not /tmp)
+    tmp_dir = output_path.parent / f".{output_path.stem}_tmp"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+
+    # Count existing batches if resuming
+    batch_num = 0
+    if resume:
+        existing_batches = sorted(tmp_dir.glob("batch_*.parquet"))
+        batch_num = len(existing_batches)
+        if batch_num > 0:
+            print(f"Found {batch_num} existing batch files")
+
+    # Batch buffer
+    batch: list[tuple[bytes, int, int, int]] = []
+    positions_extracted = progress.positions_extracted
+    games_processed = progress.games_processed
+    games_with_evals = 0
+
+    def flush_batch() -> None:
+        nonlocal batch, batch_num
+        if not batch:
+            return
+
+        table = pyarrow.table(
+            {
+                "fen": [row[0] for row in batch],
+                "score": [row[1] for row in batch],
+                "depth": [row[2] for row in batch],
+                "knodes": [row[3] for row in batch],
+            },
+            schema=arrow_schema,
+        )
+
+        batch_path = tmp_dir / f"batch_{batch_num:06d}.parquet"
+        pyarrow.parquet.write_table(table, batch_path, compression="zstd")
+        batch_num += 1
+        batch = []
+
+    def save_progress() -> None:
+        progress.games_processed = games_processed
+        progress.positions_extracted = positions_extracted
+        progress.save(progress_path)
+
+    def open_source() -> typing.IO[bytes]:
+        """Open the source (URL or file) as a binary stream."""
+        if is_url and use_torrent:
+            print(f"Streaming via torrent: {source}.torrent")
+            return download.open_torrent_stream(source)
+        elif is_url:
+            print(f"Streaming from {source}...")
+            request = urllib.request.Request(source)
+            # Use 300s timeout - large files (30+ GB) need longer for slow connections
+            return urllib.request.urlopen(request, timeout=300)
+        else:
+            print(f"Processing {source}...")
+            return open(source, "rb")
+
+    print("Extracting positions with PGN evals (no engine needed)")
+
+    try:
+        with open_source() as raw_stream:
+            dctx = zstandard.ZstdDecompressor()
+            with dctx.stream_reader(raw_stream) as reader:
+                text_stream = io.TextIOWrapper(
+                    reader, encoding="utf-8", errors="replace"
+                )
+
+                pbar = tqdm.auto.tqdm(
+                    desc="Games",
+                    unit=" games",
+                    initial=progress.games_processed if resume else 0,
+                )
+
+                for game in iter_pgn_games(text_stream):
+                    games_processed += 1
+                    pbar.update(1)
+
+                    # Skip games if resuming
+                    if resume and games_processed <= progress.games_processed:
+                        continue
+
+                    # Filter game
+                    if not should_process_game(game, config):
+                        continue
+
+                    # Extract position with PGN eval
+                    result = extract_position_with_eval(game, config, rng)
+                    if result is None:
+                        continue
+
+                    fen, score, ply_idx = result
+                    games_with_evals += 1
+
+                    # Compress FEN and add to batch
+                    # Use depth=0 and knodes=0 to indicate PGN eval (not engine)
+                    compressed_fen = dummy_chess.compress_fen(fen)
+                    batch.append((compressed_fen, score, 0, 0))
+                    positions_extracted += 1
+
+                    # Flush batch and save progress periodically
+                    if len(batch) >= config.batch_size:
+                        flush_batch()
+                        save_progress()
+
+                    # Check limit
+                    if max_positions and positions_extracted >= max_positions:
+                        break
+
+                pbar.close()
+
+        # Final flush
+        flush_batch()
+        save_progress()
+
+    except KeyboardInterrupt:
+        print("\nInterrupted! Progress saved. Run with --resume to continue.")
+        flush_batch()
+        save_progress()
+        raise
+
+    except (urllib.error.URLError, OSError) as e:
+        print(f"\nError: {e}")
+        print("Progress saved. Run with --resume to continue.")
+        flush_batch()
+        save_progress()
+        raise
+
+    print(
+        f"Processed {games_processed} games, {games_with_evals} had evals, "
+        f"extracted {positions_extracted} positions"
+    )
+
+    # Combine batch files into final output
+    batch_files = sorted(tmp_dir.glob("batch_*.parquet"))
+    if not batch_files:
+        print("No positions extracted")
+        shutil.rmtree(tmp_dir)
+        return 0
+
+    print(f"Combining {len(batch_files)} batch files...")
+    tables = [pyarrow.parquet.read_table(f) for f in batch_files]
+    combined = pyarrow.concat_tables(tables)
+    pyarrow.parquet.write_table(combined, output_path, compression="zstd")
+
+    # Cleanup
+    shutil.rmtree(tmp_dir)
+    if progress_path.exists():
+        progress_path.unlink()
+
+    print(f"Saved {positions_extracted} positions -> {output_path}")
+    return positions_extracted
+
+
+def process_games(
+    source: str,  # URL or file path
+    output_path: pathlib.Path,
+    engine_path: str,
+    config: GameExtractionConfig,
+    max_positions: int | None = None,
+    seed: int = 42,
+    resume: bool = False,
+    use_torrent: bool = False,
+) -> int:
+    """
+    Process PGN game archive, extracting random positions with engine evaluation.
+
+    Supports both HTTP URLs (streaming), BitTorrent (streaming), and local files.
+    Uses batch files for atomic writes and full resumability.
+
+    Args:
+        source: URL (http/https) or local file path to .pgn.zst
+        output_path: Output parquet file
+        engine_path: Path to Stockfish or other UCI engine
+        config: Extraction configuration
+        max_positions: Maximum positions to extract (None = all)
+        seed: Random seed
+        resume: Whether to resume from checkpoint
+        use_torrent: Use BitTorrent for streaming (appends .torrent to URL)
+
+    Returns:
+        Number of positions extracted
+    """
+    rng = random.Random(seed)
+    is_url = source.startswith("http://") or source.startswith("https://")
+
+    # Progress tracking
+    progress_path = output_path.with_suffix(".progress.json")
+    progress = GameExtractionProgress(url_or_path=source)
+
+    if resume and progress_path.exists():
+        progress = GameExtractionProgress.load(progress_path)
+        if progress.url_or_path != source:
+            print("Warning: Progress file is for different source, starting fresh")
+            progress = GameExtractionProgress(url_or_path=source)
+        else:
+            print(
+                f"Resuming from game {progress.games_processed}, "
+                f"position {progress.positions_extracted}"
+            )
+
+    # Start engine (single-threaded for best per-position performance)
+    engine = chess.engine.SimpleEngine.popen_uci(engine_path)
+    engine.configure({"Threads": 1})
+    print(f"Using UCI engine: {engine_path} (depth={config.depth})")
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Parquet schema
+    arrow_schema = pyarrow.schema(
+        [
+            ("fen", pyarrow.binary()),
+            ("score", pyarrow.int64()),
+            ("depth", pyarrow.int64()),
+            ("knodes", pyarrow.int64()),
+        ]
+    )
+
+    # Use temp directory for batch files (next to output, not /tmp)
+    tmp_dir = output_path.parent / f".{output_path.stem}_tmp"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+
+    # Count existing batches if resuming
+    batch_num = 0
+    if resume:
+        existing_batches = sorted(tmp_dir.glob("batch_*.parquet"))
+        batch_num = len(existing_batches)
+        if batch_num > 0:
+            print(f"Found {batch_num} existing batch files")
+
+    # Batch buffer
+    batch: list[tuple[bytes, int, int, int]] = []
+    positions_extracted = progress.positions_extracted
+    games_processed = progress.games_processed
+
+    def flush_batch() -> None:
+        nonlocal batch, batch_num
+        if not batch:
+            return
+
+        table = pyarrow.table(
+            {
+                "fen": [row[0] for row in batch],
+                "score": [row[1] for row in batch],
+                "depth": [row[2] for row in batch],
+                "knodes": [row[3] for row in batch],
+            },
+            schema=arrow_schema,
+        )
+
+        batch_path = tmp_dir / f"batch_{batch_num:06d}.parquet"
+        pyarrow.parquet.write_table(table, batch_path, compression="zstd")
+        batch_num += 1
+        batch = []
+
+    def save_progress() -> None:
+        progress.games_processed = games_processed
+        progress.positions_extracted = positions_extracted
+        progress.save(progress_path)
+
+    def open_source() -> typing.IO[bytes]:
+        """Open the source (URL or file) as a binary stream."""
+        if is_url and use_torrent:
+            print(f"Streaming via torrent: {source}.torrent")
+            return download.open_torrent_stream(source)
+        elif is_url:
+            print(f"Streaming from {source}...")
+            request = urllib.request.Request(source)
+            # Use 300s timeout - large files (30+ GB) need longer for slow connections
+            return urllib.request.urlopen(request, timeout=300)
+        else:
+            print(f"Processing {source}...")
+            return open(source, "rb")
+
+    try:
+        with open_source() as raw_stream:
+            dctx = zstandard.ZstdDecompressor()
+            with dctx.stream_reader(raw_stream) as reader:
+                text_stream = io.TextIOWrapper(
+                    reader, encoding="utf-8", errors="replace"
+                )
+
+                pbar = tqdm.auto.tqdm(
+                    desc="Games",
+                    unit=" games",
+                    initial=progress.games_processed if resume else 0,
+                )
+
+                for game in iter_pgn_games(text_stream):
+                    games_processed += 1
+                    pbar.update(1)
+
+                    # Skip games if resuming
+                    if resume and games_processed <= progress.games_processed:
+                        continue
+
+                    # Filter game
+                    if not should_process_game(game, config):
+                        continue
+
+                    # Extract position
+                    result = extract_position_from_game(game, config, rng)
+                    if result is None:
+                        continue
+
+                    fen, ply_idx = result
+
+                    # Evaluate with engine
+                    try:
+                        board = chess.Board(fen)
+                        info = engine.analyse(
+                            board, chess.engine.Limit(depth=config.depth)
+                        )
+                        score_obj = info["score"].white()
+                        if score_obj.is_mate():
+                            mate_in = score_obj.mate()
+                            score = 10000 if mate_in > 0 else -10000
+                        else:
+                            score = score_obj.score()
+                            if score is None:
+                                continue
+                        score = max(-15000, min(15000, score))
+                        depth_out = info.get("depth", config.depth)
+                        knodes = info.get("nodes", 0) // 1000
+                    except Exception:
+                        continue
+
+                    # Compress FEN and add to batch
+                    compressed_fen = dummy_chess.compress_fen(fen)
+                    batch.append((compressed_fen, score, depth_out, knodes))
+                    positions_extracted += 1
+
+                    # Flush batch and save progress periodically
+                    if len(batch) >= config.batch_size:
+                        flush_batch()
+                        save_progress()
+
+                    # Check limit
+                    if max_positions and positions_extracted >= max_positions:
+                        break
+
+                pbar.close()
+
+        # Final flush
+        flush_batch()
+        save_progress()
+
+    except KeyboardInterrupt:
+        print("\nInterrupted! Progress saved. Run with --resume to continue.")
+        flush_batch()
+        save_progress()
+        raise
+
+    except (urllib.error.URLError, OSError) as e:
+        print(f"\nError: {e}")
+        print("Progress saved. Run with --resume to continue.")
+        flush_batch()
+        save_progress()
+        raise
+
+    finally:
+        engine.quit()
+
+    print(
+        f"Processed {games_processed} games, extracted {positions_extracted} positions"
+    )
+
+    # Combine batch files into final output
+    batch_files = sorted(tmp_dir.glob("batch_*.parquet"))
+    if not batch_files:
+        print("No positions extracted")
+        shutil.rmtree(tmp_dir)
+        return 0
+
+    print(f"Combining {len(batch_files)} batch files...")
+    tables = [pyarrow.parquet.read_table(f) for f in batch_files]
+    combined = pyarrow.concat_tables(tables)
+    pyarrow.parquet.write_table(combined, output_path, compression="zstd")
+
+    # Cleanup
+    shutil.rmtree(tmp_dir)
+    if progress_path.exists():
+        progress_path.unlink()
+
+    print(f"Saved {positions_extracted} positions -> {output_path}")
+    return positions_extracted
+
+
+def download_month_games(
+    month: str,
+    output_dir: pathlib.Path,
+    variant: str = "standard",
+    use_torrent: bool = False,
+) -> pathlib.Path | None:
+    """
+    Download a month's game archive from Lichess.
+
+    Args:
+        month: Month in YYYY-MM format
+        output_dir: Directory to save the file
+        variant: "standard" or "chess960"
+        use_torrent: Use BitTorrent for download (recommended for large files)
+
+    Returns:
+        Path to downloaded file, or None if failed
+    """
+    return download.download_games_month(
+        month=month,
+        output_dir=output_dir,
+        variant=variant,
+        use_torrent=use_torrent,
+    )
+
+
+# =============================================================================
 # Parquet shuffling (external sort)
 # =============================================================================
 
@@ -754,6 +1541,7 @@ def dedupe_parquet(
     output_path: str | None = None,
     num_buckets: int = 256,
     row_group_size: int = 100_000,
+    resume: bool = False,
 ) -> tuple[int, int, int]:
     """
     Deduplicate a parquet file based on the 'fen' column.
@@ -769,6 +1557,7 @@ def dedupe_parquet(
         output_path: Output parquet file (None = stats only, no output)
         num_buckets: Number of temp buckets (more = less RAM per bucket)
         row_group_size: Rows per output row group
+        resume: Resume from previous interrupted run
 
     Returns:
         Tuple of (total_rows, unique_rows, duplicates_removed)
@@ -783,7 +1572,33 @@ def dedupe_parquet(
     if not stats_only:
         output_path = pathlib.Path(output_path)
 
-    tmp_dir = pathlib.Path(tempfile.mkdtemp(prefix="dedupe_"))
+    # Create temp directory NEXT TO input/output (not in /tmp)
+    if output_path:
+        tmp_dir = output_path.parent / f".{output_path.stem}_dedupe_tmp"
+    else:
+        tmp_dir = input_path.parent / f".{input_path.stem}_dedupe_tmp"
+
+    # Progress file for resume support
+    progress_file = tmp_dir / "_progress.json"
+    processed_row_groups: set[int] = set()
+
+    if resume and tmp_dir.exists() and progress_file.exists():
+        try:
+            with open(progress_file) as f:
+                progress_data = json.load(f)
+            processed_row_groups = set(progress_data.get("processed_row_groups", []))
+            print(f"Resuming: {len(processed_row_groups)} row groups already processed")
+        except Exception as e:
+            print(f"Warning: Could not read progress file: {e}")
+    elif not resume and tmp_dir.exists():
+        # Clean start - remove old temp dir
+        shutil.rmtree(tmp_dir)
+
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+
+    def save_progress(row_groups: set[int]):
+        with open(progress_file, "w") as f:
+            json.dump({"processed_row_groups": list(row_groups)}, f)
 
     try:
         # Phase 1: Distribute rows to buckets by FEN hash
@@ -811,16 +1626,37 @@ def dedupe_parquet(
 
             bucket_file = tmp_dir / f"bucket_{bucket_idx:04d}.parquet"
             if bucket_file.exists():
-                existing = polars.read_parquet(bucket_file)
-                df = polars.concat([existing, df])
+                try:
+                    existing = polars.read_parquet(bucket_file)
+                    df = polars.concat([existing, df])
+                except Exception as e:
+                    # Corrupted bucket file - log and overwrite
+                    print(f"\nWarning: Corrupted bucket {bucket_idx}, rebuilding: {e}")
 
-            df.write_parquet(bucket_file)
+            # Atomic write: write to temp file, then rename
+            tmp_file = tmp_dir / f"bucket_{bucket_idx:04d}.parquet.tmp"
+            df.write_parquet(tmp_file)
+            tmp_file.rename(bucket_file)
             bucket_buffers[bucket_idx] = []
 
+        # Calculate initial progress for resume
+        rows_already_done = 0
+        if resume and processed_row_groups:
+            for rg_idx in processed_row_groups:
+                if rg_idx < num_row_groups:
+                    rows_already_done += pf.metadata.row_group(rg_idx).num_rows
+
         with tqdm.auto.tqdm(
-            total=total_rows, desc="Distributing", unit=" rows"
+            total=total_rows,
+            desc="Distributing",
+            unit=" rows",
+            initial=rows_already_done,
         ) as pbar:
             for rg_idx in range(num_row_groups):
+                # Skip already-processed row groups
+                if rg_idx in processed_row_groups:
+                    continue
+
                 table = pf.read_row_group(rg_idx)
                 df = polars.from_arrow(table)
 
@@ -839,6 +1675,10 @@ def dedupe_parquet(
                         flush_bucket(bucket_idx)
 
                 pbar.update(len(df))
+
+                # Mark row group as processed and save progress
+                processed_row_groups.add(rg_idx)
+                save_progress(processed_row_groups)
 
         for bucket_idx in range(num_buckets):
             flush_bucket(bucket_idx)
@@ -924,6 +1764,7 @@ def shuffle_parquet(
     num_buckets: int = 64,
     row_group_size: int = 100_000,
     seed: int | None = None,
+    resume: bool = False,
 ) -> int:
     """
     Shuffle a parquet file with minimal RAM using two-phase external sort.
@@ -941,6 +1782,7 @@ def shuffle_parquet(
         num_buckets: Number of temporary bucket files (more = less RAM per bucket)
         row_group_size: Rows per output row group
         seed: Random seed for reproducibility
+        resume: Resume from previous interrupted run
 
     Returns:
         Number of rows written
@@ -953,8 +1795,44 @@ def shuffle_parquet(
 
     rng = random.Random(seed)
 
-    # Create temp directory for buckets
-    tmp_dir = pathlib.Path(tempfile.mkdtemp(prefix="shuffle_"))
+    # Create temp directory NEXT TO output (not in /tmp)
+    tmp_dir = output_path.parent / f".{output_path.stem}_shuffle_tmp"
+
+    # Progress file for resume support
+    progress_file = tmp_dir / "_progress.json"
+    processed_row_groups: set[int] = set()
+
+    if resume and tmp_dir.exists() and progress_file.exists():
+        try:
+            with open(progress_file) as f:
+                progress_data = json.load(f)
+            processed_row_groups = set(progress_data.get("processed_row_groups", []))
+            # Restore RNG state to maintain determinism
+            if "rng_state" in progress_data:
+                rng.setstate(
+                    tuple(
+                        tuple(x) if isinstance(x, list) else x
+                        for x in progress_data["rng_state"]
+                    )
+                )
+            print(f"Resuming: {len(processed_row_groups)} row groups already processed")
+        except Exception as e:
+            print(f"Warning: Could not read progress file: {e}")
+    elif not resume and tmp_dir.exists():
+        # Clean start - remove old temp dir
+        shutil.rmtree(tmp_dir)
+
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+
+    def save_progress(row_groups: set[int]):
+        with open(progress_file, "w") as f:
+            json.dump(
+                {
+                    "processed_row_groups": list(row_groups),
+                    "rng_state": rng.getstate(),
+                },
+                f,
+            )
 
     try:
         # Phase 1: Distribute rows to buckets based on random key
@@ -990,19 +1868,39 @@ def shuffle_parquet(
             # Append to bucket file
             bucket_file = tmp_dir / f"bucket_{bucket_idx:04d}.parquet"
             if bucket_file.exists():
-                # Read existing, concatenate, rewrite (not ideal but simple)
-                existing = polars.read_parquet(bucket_file)
-                df = polars.concat([existing, df])
+                try:
+                    existing = polars.read_parquet(bucket_file)
+                    df = polars.concat([existing, df])
+                except Exception as e:
+                    # Corrupted bucket file - log and overwrite
+                    print(f"\nWarning: Corrupted bucket {bucket_idx}, rebuilding: {e}")
 
-            df.write_parquet(bucket_file)
+            # Atomic write: write to temp file, then rename
+            tmp_file = tmp_dir / f"bucket_{bucket_idx:04d}.parquet.tmp"
+            df.write_parquet(tmp_file)
+            tmp_file.rename(bucket_file)
             bucket_counts[bucket_idx] += len(bucket_buffers[bucket_idx])
             bucket_buffers[bucket_idx] = []
 
+        # Calculate initial progress for resume
+        rows_already_done = 0
+        if resume and processed_row_groups:
+            for rg_idx in processed_row_groups:
+                if rg_idx < num_row_groups:
+                    rows_already_done += pf.metadata.row_group(rg_idx).num_rows
+
         # Process input row groups
         with tqdm.auto.tqdm(
-            total=total_rows, desc="Distributing", unit=" rows"
+            total=total_rows,
+            desc="Distributing",
+            unit=" rows",
+            initial=rows_already_done,
         ) as pbar:
             for rg_idx in range(num_row_groups):
+                # Skip already-processed row groups
+                if rg_idx in processed_row_groups:
+                    continue
+
                 table = pf.read_row_group(rg_idx)
                 df = polars.from_arrow(table)
 
@@ -1021,6 +1919,10 @@ def shuffle_parquet(
                         flush_bucket(bucket_idx)
 
                 pbar.update(len(df))
+
+                # Mark row group as processed and save progress
+                processed_row_groups.add(rg_idx)
+                save_progress(processed_row_groups)
 
         # Flush remaining buffers
         for bucket_idx in range(num_buckets):
@@ -1159,8 +2061,16 @@ def main():
     parser = argparse.ArgumentParser(description="Preprocess data for NNUE training")
     parser.add_argument(
         "source",
-        choices=["puzzles", "evals", "endgames", "shuffle", "dedupe"],
-        help="Data source: 'puzzles', 'evals', 'endgames', 'shuffle', or 'dedupe'",
+        choices=[
+            "puzzles",
+            "evals",
+            "endgames",
+            "games",
+            "games-all",
+            "shuffle",
+            "dedupe",
+        ],
+        help="Data source: 'puzzles', 'evals', 'endgames', 'games', 'games-all', 'shuffle', or 'dedupe'",
     )
     parser.add_argument("-i", "--input", default=None, help="Input file")
     parser.add_argument("-o", "--output", default=None, help="Output file")
@@ -1171,9 +2081,9 @@ def main():
     parser.add_argument("--no-shuffle", action="store_true")
     parser.add_argument("--toy", action="store_true", help="Generate toy dataset")
 
-    # Puzzle-specific
+    # Puzzle/games-specific
     parser.add_argument("-e", "--engine", default=None, help="Path to UCI engine")
-    parser.add_argument("-d", "--depth", type=int, default=12, help="UCI engine depth")
+    parser.add_argument("-d", "--depth", type=int, default=8, help="UCI engine depth")
 
     # Endgame-specific
     parser.add_argument(
@@ -1184,6 +2094,79 @@ def main():
     parser.add_argument("--no-pawns", action="store_true")
     parser.add_argument(
         "--no-dtz", action="store_true", help="Use WDL instead of DTZ scoring"
+    )
+
+    # Games-specific
+    parser.add_argument(
+        "--month",
+        default=None,
+        help="Month to download/process (YYYY-MM format, e.g., 2024-01)",
+    )
+    parser.add_argument(
+        "--after",
+        default=None,
+        metavar="YYYY-MM",
+        help="Process months >= this date (for games-all)",
+    )
+    parser.add_argument(
+        "--before",
+        default=None,
+        metavar="YYYY-MM",
+        help="Process months < this date (for games-all)",
+    )
+    parser.add_argument(
+        "--variant",
+        default="standard",
+        choices=["standard", "chess960"],
+        help="Game variant (for games-all)",
+    )
+    parser.add_argument(
+        "--list-months",
+        action="store_true",
+        help="List available months and exit (for games-all)",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Reprocess months even if output exists (for games-all)",
+    )
+    parser.add_argument(
+        "--use-pgn-evals",
+        action="store_true",
+        help="Use [%%eval] annotations from PGN instead of engine (much faster)",
+    )
+    parser.add_argument(
+        "--min-ply",
+        type=int,
+        default=10,
+        help="Skip opening positions before this ply",
+    )
+    parser.add_argument(
+        "--min-elo",
+        type=int,
+        default=None,
+        help="Minimum player rating to include",
+    )
+    parser.add_argument(
+        "--max-elo",
+        type=int,
+        default=None,
+        help="Maximum player rating to include",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume from checkpoint (for games)",
+    )
+    parser.add_argument(
+        "--download-only",
+        action="store_true",
+        help="Only download, don't process (for games)",
+    )
+    parser.add_argument(
+        "--torrent",
+        action="store_true",
+        help="Use BitTorrent for download (recommended for large files)",
     )
 
     # Shuffle/dedupe-specific
@@ -1200,6 +2183,16 @@ def main():
         "--stats-only",
         action="store_true",
         help="For dedupe: only count duplicates, don't write output",
+    )
+    parser.add_argument(
+        "--resume-dedupe",
+        action="store_true",
+        help="Resume interrupted dedupe from checkpoint",
+    )
+    parser.add_argument(
+        "--resume-shuffle",
+        action="store_true",
+        help="Resume interrupted shuffle from checkpoint",
     )
 
     args = parser.parse_args()
@@ -1277,6 +2270,8 @@ def main():
             args.max_pieces,
             not args.no_pawns,
             not args.no_dtz,
+            engine_path=args.engine,
+            engine_depth=args.depth,
         )
 
         print(f"Valid: {len(data)}")
@@ -1287,6 +2282,228 @@ def main():
             shuffle=not args.no_shuffle,
             seed=args.seed,
         )
+        return
+
+    elif args.source == "games":
+        # Determine input source (URL or file path)
+        input_source: str
+        if args.input:
+            input_source = args.input
+            # Check if local file exists (skip check for URLs)
+            if not (
+                input_source.startswith("http://")
+                or input_source.startswith("https://")
+            ):
+                input_path = pathlib.Path(input_source)
+                if not input_path.exists():
+                    print(f"Error: {input_path} not found")
+                    sys.exit(1)
+        elif args.month:
+            # Download the month's games
+            if args.month in BLOCKLISTED_MONTHS:
+                print(f"Error: Month {args.month} is blocklisted due to data issues")
+                print(f"Blocklisted months: {', '.join(sorted(BLOCKLISTED_MONTHS))}")
+                sys.exit(1)
+
+            download_dir = pathlib.Path("data/games")
+            input_path = download_month_games(
+                args.month, download_dir, use_torrent=args.torrent
+            )
+            if input_path is None:
+                sys.exit(1)
+
+            if args.download_only:
+                print(f"Downloaded: {input_path}")
+                return
+            input_source = str(input_path)
+        else:
+            print("Error: --input or --month is required for games")
+            print("Example: --month 2024-01")
+            sys.exit(1)
+
+        # Set output path
+        if args.output is None:
+            if args.month:
+                args.output = f"data/games_{args.month.replace('-', '_')}.parquet"
+            elif input_source.startswith("http"):
+                # Extract filename from URL
+                url_filename = input_source.split("/")[-1].replace(".pgn.zst", "")
+                args.output = f"data/games_{url_filename}.parquet"
+            else:
+                args.output = f"data/games_{pathlib.Path(input_source).stem}.parquet"
+
+        # Build config
+        config = GameExtractionConfig(
+            min_ply=args.min_ply,
+            min_pieces=args.min_pieces if args.min_pieces else 7,
+            min_elo=args.min_elo,
+            max_elo=args.max_elo,
+            depth=args.depth,
+        )
+
+        if args.use_pgn_evals:
+            # Use evals from PGN annotations (no engine needed)
+            process_games_pgn_evals(
+                input_source,
+                pathlib.Path(args.output),
+                config,
+                max_positions=args.max,
+                seed=args.seed,
+                resume=args.resume,
+                use_torrent=args.torrent,
+            )
+        else:
+            # Use engine for evaluation
+            if not args.engine:
+                print("Error: --engine is required (or use --use-pgn-evals)")
+                sys.exit(1)
+            process_games(
+                input_source,
+                pathlib.Path(args.output),
+                args.engine,
+                config,
+                max_positions=args.max,
+                seed=args.seed,
+                resume=args.resume,
+                use_torrent=args.torrent,
+            )
+        return
+
+    elif args.source == "games-all":
+        # Get list of available months
+        games_list = download.get_games_list(args.variant)
+        if not games_list:
+            print("Error: Failed to fetch games list from Lichess")
+            sys.exit(1)
+
+        # List mode (doesn't require engine)
+        if args.list_months:
+            blocklist = download.get_blocklist(args.variant)
+            print(
+                f"\nAvailable {args.variant} game archives ({len(games_list)} months):\n"
+            )
+            for month, url in games_list:
+                status = " [BLOCKLISTED]" if month in blocklist else ""
+                print(f"  {month}{status}")
+            print(f"\nBlocklisted: {', '.join(sorted(blocklist)) or 'none'}")
+            return
+
+        # Engine required unless using PGN evals
+        if not args.use_pgn_evals and not args.engine:
+            print("Error: --engine is required (or use --use-pgn-evals)")
+            sys.exit(1)
+
+        # Filter months
+        blocklist = download.get_blocklist(args.variant)
+        months_to_process = []
+        for month, url in games_list:
+            if month in blocklist:
+                continue
+            if args.after and month < args.after:
+                continue
+            if args.before and month >= args.before:
+                continue
+            months_to_process.append((month, url))
+
+        if not months_to_process:
+            print("No months to process (check --after/--before filters)")
+            sys.exit(0)
+
+        # Sort oldest first for processing
+        months_to_process.sort(key=lambda x: x[0])
+
+        print(f"\nWill process {len(months_to_process)} month(s)")
+        print(f"  Range: {months_to_process[0][0]} to {months_to_process[-1][0]}")
+        if len(months_to_process) <= 10:
+            print(f"  Months: {', '.join(m for m, _ in months_to_process)}")
+
+        # Warn about low-eval months when using PGN evals
+        if args.use_pgn_evals:
+            low_eval_months = [m for m, _ in months_to_process if m < "2015-01"]
+            if low_eval_months:
+                print()
+                print(
+                    "WARNING: Early months (pre-2015) have very few [%eval] annotations."
+                )
+                print("         Consider using --after 2015-01 for better results.")
+                print(f"         Affected: {', '.join(low_eval_months[:5])}", end="")
+                if len(low_eval_months) > 5:
+                    print(f" ... and {len(low_eval_months) - 5} more")
+                else:
+                    print()
+        print()
+
+        # Set output directory
+        output_dir = (
+            pathlib.Path(args.output) if args.output else pathlib.Path("data/games")
+        )
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Build config
+        config = GameExtractionConfig(
+            min_ply=args.min_ply,
+            min_pieces=args.min_pieces if args.min_pieces else 7,
+            min_elo=args.min_elo,
+            max_elo=args.max_elo,
+            depth=args.depth,
+        )
+
+        processed = []
+        failed = []
+
+        for month, url in months_to_process:
+            output_path = output_dir / f"games_{month.replace('-', '_')}.parquet"
+
+            # Skip if output exists (unless --force)
+            if output_path.exists() and not args.force:
+                print(
+                    f"Skipping {month}: {output_path} exists (use --force to reprocess)"
+                )
+                processed.append(month)
+                continue
+
+            print(f"\n{'=' * 60}")
+            print(f"Processing {month} ({args.variant})")
+            print(f"  URL: {url}")
+            if args.torrent:
+                print(f"  Streaming via torrent")
+            print(f"  Output: {output_path}")
+            print()
+
+            try:
+                if args.use_pgn_evals:
+                    process_games_pgn_evals(
+                        source=url,
+                        output_path=output_path,
+                        config=config,
+                        max_positions=args.max,
+                        seed=args.seed,
+                        resume=True,
+                        use_torrent=args.torrent,
+                    )
+                else:
+                    process_games(
+                        source=url,
+                        output_path=output_path,
+                        engine_path=args.engine,
+                        config=config,
+                        max_positions=args.max,
+                        seed=args.seed,
+                        resume=True,
+                        use_torrent=args.torrent,
+                    )
+                processed.append(month)
+            except KeyboardInterrupt:
+                print(f"\nInterrupted during {month}. Progress saved.")
+                raise
+            except Exception as e:
+                print(f"Error processing {month}: {e}")
+                failed.append(month)
+
+        print(f"\n{'=' * 60}")
+        print(f"Processed: {len(processed)}, Failed: {len(failed)}")
+        if failed:
+            print(f"Failed months: {', '.join(failed)}")
         return
 
     elif args.source == "shuffle":
@@ -1307,6 +2524,7 @@ def main():
             num_buckets=args.num_buckets,
             row_group_size=args.row_group_size,
             seed=args.seed,
+            resume=args.resume_shuffle,
         )
         return
 
@@ -1331,6 +2549,7 @@ def main():
             output,
             num_buckets=args.num_buckets,
             row_group_size=args.row_group_size,
+            resume=args.resume_dedupe,
         )
         return
 
