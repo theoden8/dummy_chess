@@ -1,0 +1,4 @@
+[Event "Variations"]
+[Result "1-0"]
+
+1. e4 { [%eval 0.3] } 1... e5 (1... c5 { [%eval 0.4] }) { [%eval 0.25] } 2. Nf3 { [%eval 0.35] } 1-0

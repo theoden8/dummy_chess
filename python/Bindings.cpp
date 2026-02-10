@@ -1,10 +1,12 @@
 #include <chrono>
+#include <regex>
 
 #include <pybind11/pybind11.h>
 #include <pybind11/numpy.h>
 #include <pybind11/stl.h>
 
 #include <Engine.hpp>
+#include <PGN.hpp>
 
 namespace py = pybind11;
 using namespace std::chrono;
@@ -246,7 +248,8 @@ private:
   }
 };
 
-PYBIND11_MODULE(_dummychess, m) {
+// Register preprocessing functions on a module (used for both main module and submodule)
+void register_preprocess_functions(py::module_ &m) {
   // FEN compression functions
   m.def("compress_fen", [](const std::string &fenstring) {
     fen::FEN f = fen::load_from_string(fenstring);
@@ -582,6 +585,105 @@ PYBIND11_MODULE(_dummychess, m) {
   // Export constants for Python
   m.attr("HALFKP_SIZE") = 64 * 641 + 1;   // 41025
   m.attr("HALFKAV2_SIZE") = 12 * 641 + 1; // 7693
+
+  // Parse [%eval X.XX] or [%eval #N] from comment string
+  // Returns score in centipawns, or nullopt if not found
+  auto parse_eval_from_comment = [](const std::string &comment) -> std::optional<int> {
+    // Find [%eval ...]
+    size_t pos = comment.find("[%eval ");
+    if (pos == std::string::npos) return std::nullopt;
+    
+    size_t start = pos + 7;
+    size_t end = comment.find(']', start);
+    if (end == std::string::npos) return std::nullopt;
+    
+    std::string eval_str = comment.substr(start, end - start);
+    
+    // Trim whitespace
+    while (!eval_str.empty() && isspace(eval_str.front())) eval_str.erase(0, 1);
+    while (!eval_str.empty() && isspace(eval_str.back())) eval_str.pop_back();
+    
+    if (eval_str.empty()) return std::nullopt;
+    
+    // Handle mate scores like "#5" or "#-3"
+    if (eval_str[0] == '#') {
+      const char* mate_start = eval_str.c_str() + 1;
+      char* mate_end = nullptr;
+      long mate_in = std::strtol(mate_start, &mate_end, 10);
+      if (mate_end == mate_start) return std::nullopt;  // No digits parsed
+      return (mate_in > 0) ? 10000 : -10000;
+    }
+    
+    // Handle centipawn scores (Lichess gives in pawns like "1.23")
+    const char* score_start = eval_str.c_str();
+    char* score_end = nullptr;
+    double score = std::strtod(score_start, &score_end);
+    if (score_end == score_start) return std::nullopt;  // No digits parsed
+    return static_cast<int>(score * 100);
+  };
+
+  // Parse a single PGN game and extract positions with [%eval] annotations
+  // Returns list of (compressed_fen, score_cp, ply_index) tuples
+  m.def("parse_pgn_with_evals", [parse_eval_from_comment](const std::string &pgn_text) {
+    py::list results;
+    
+    Board board;
+    pgn::PGN pgn(board);
+    
+    pgn.read(pgn_text, true);  // true = store comments
+    
+    // pgn.read() has played all moves, board is at final position
+    // Walk backwards to collect positions with evals
+    // We need (ply_index, compressed_fen, score) for positions BEFORE each move
+    
+    size_t num_moves = pgn.ply.size();
+    if (num_moves == 0) {
+      return results;
+    }
+    
+    // Collect results in reverse order by retracting moves
+    std::vector<std::tuple<int, std::vector<uint8_t>, int>> reversed_results;
+    
+    for (size_t i = num_moves; i > 0; --i) {
+      size_t idx = i - 1;
+      
+      // Retract the move to get position BEFORE this move
+      board.retract_move();
+      
+      // Check if this move has an eval comment
+      if (idx < pgn.comments.size() && !pgn.comments[idx].empty()) {
+        auto score = parse_eval_from_comment(pgn.comments[idx]);
+        if (score.has_value()) {
+          fen::FEN f = board.export_as_fen();
+          std::vector<uint8_t> compressed = fen::compress::compress_fen(f);
+          reversed_results.emplace_back(static_cast<int>(idx), std::move(compressed), score.value());
+        }
+      }
+    }
+    
+    // Reverse to get chronological order
+    for (auto it = reversed_results.rbegin(); it != reversed_results.rend(); ++it) {
+      results.append(py::make_tuple(
+        py::bytes(reinterpret_cast<const char*>(std::get<1>(*it).data()), std::get<1>(*it).size()),
+        std::get<2>(*it),
+        std::get<0>(*it)
+      ));
+    }
+    
+    return results;
+  }, py::arg("pgn_text"),
+  "Parse a PGN game and extract positions with [%eval] annotations. "
+  "Returns list of (compressed_fen, score_cp, ply_index) tuples.");
+
+}
+
+PYBIND11_MODULE(_dummychess, m) {
+  // Create preprocess submodule
+  py::module_ preprocess = m.def_submodule("preprocess", "Preprocessing utilities for NNUE training");
+  register_preprocess_functions(preprocess);
+  
+  // Also register on main module for backward compatibility
+  register_preprocess_functions(m);
 
   py::enum_<BoardBindings::Status>(m, "Status")
     .value("ONGOING", BoardBindings::Status::ONGOING)

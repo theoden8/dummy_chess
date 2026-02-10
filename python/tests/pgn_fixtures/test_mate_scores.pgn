@@ -1,0 +1,4 @@
+[Event "Mate Test"]
+[Result "1-0"]
+
+1. e4 { [%eval 0.3] } 1... e5 { [%eval #-10] } 2. Qh5 { [%eval #3] } 1-0

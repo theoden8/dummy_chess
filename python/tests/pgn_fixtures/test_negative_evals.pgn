@@ -1,0 +1,4 @@
+[Event "Black Advantage"]
+[Result "0-1"]
+
+1. e4 { [%eval -0.5] } 1... e5 { [%eval -0.75] } 0-1
