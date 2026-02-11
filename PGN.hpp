@@ -193,8 +193,6 @@ struct PGN {
 
   // write move, advance board state and determine game-state
   void handle_move(move_t m) {
-    const bool _repetition_is_draw = board.repetition_is_draw;
-    board.repetition_is_draw = false;
     assert(board.check_valid_move(m, false));
     write_move(m);
     board.make_move(m);
@@ -216,7 +214,6 @@ struct PGN {
     } else if(board.is_draw_repetition()) {
       ending = "1/2 - 1/2 (repetitions)";
     }
-    board.repetition_is_draw = _repetition_is_draw;
   }
 
   void handle_move(pos_t i, pos_t j) {
@@ -386,6 +383,9 @@ struct PGN {
 
   // perform move, verify check/mate/capture situation
   EXPORT void read_move(const std::string &s) {
+    // Disable repetition draw during PGN parsing - games can continue past unclaimed draws
+    const bool _repetition_is_draw = board.repetition_is_draw;
+    board.repetition_is_draw = false;
     bool assert_check = false, assert_mate = false;
     const move_t m = read_move_with_flags(s, assert_check, assert_mate);
     handle_move(m);
@@ -397,6 +397,7 @@ struct PGN {
     // Note: ply.back() may differ from s due to disambiguation format
     // e.g. input "R1d2" vs write_move generates "Rd1d2"
     // assert(ply.back() == s);
+    board.repetition_is_draw = _repetition_is_draw;
   }
 
   // read PGN
