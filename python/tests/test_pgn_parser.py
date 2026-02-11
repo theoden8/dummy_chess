@@ -5,7 +5,16 @@ Test C++ PGN parser against python-chess for correctness.
 
 import chess.pgn
 import io
+import pathlib
 import dummy_chess
+
+# Path to PGN fixtures directory
+FIXTURES_DIR = pathlib.Path(__file__).parent / "pgn_fixtures"
+
+
+def load_fixture(name: str) -> str:
+    """Load a PGN fixture file."""
+    return (FIXTURES_DIR / name).read_text()
 
 
 def test_variant_detection():
@@ -122,111 +131,27 @@ def test_comments_preserved():
     return True
 
 
-# Regression test PGNs - games that previously caused parser failures
-REGRESSION_PGNS = [
-    # Game with exd3 en passant that was incorrectly blocked by horizontal pin check
-    # The horizontal pin check didn't verify king was on the same rank as the pawns,
-    # so it incorrectly blocked a valid vertical-file en passant capture
-    """[Event "Rated Classical game"]
-[Site "https://lichess.org/wn8uhw1u"]
-[White "ryryry"]
-[Black "Magucho"]
-[Result "1-0"]
-[UTCDate "2013.06.29"]
-[UTCTime "06:50:12"]
-[WhiteElo "1781"]
-[BlackElo "1722"]
-[WhiteRatingDiff "+9"]
-[BlackRatingDiff "-9"]
-[ECO "C31"]
-[Opening "King's Gambit, Falkbeer Countergambit, Blackburne Attack"]
-[TimeControl "600+0"]
-[Termination "Normal"]
-
-1. e4 e5 2. f4 d5 3. Nf3 dxe4 4. Nxe5 Nf6 5. Bc4 Qe7 6. Bxf7+ Kd8 7. Bb3 Be6 8. O-O Bxb3 9. axb3 Nd5 10. c4 Nxf4 11. Rxf4 Qxe5 12. d4 exd3 13. Qxd3+ Qd6 14. Rd4 1-0""",
-    # Game with Re1e4 - full square disambiguation (triggered ply.back() != s assertion)
-    # The parser generates "R1e4" but input was "Re1e4"
-    # Also has 3-fold repetition before final checkmate (moves 62-67)
-    """[Event "Rated Blitz game"]
-[Site "https://lichess.org/2cj9hphe"]
-[White "tiggran"]
-[Black "barriosgb2"]
-[Result "1-0"]
-[UTCDate "2012.12.31"]
-[UTCTime "23:08:52"]
-[WhiteElo "1533"]
-[BlackElo "1712"]
-[ECO "B10"]
-[Opening "Caro-Kann Defense"]
-[TimeControl "300+0"]
-[Termination "Normal"]
-
-1. e4 c6 2. Nf3 d5 3. exd5 cxd5 4. d4 Nc6 5. Nc3 e6 6. Be2 Bd6 7. O-O Nf6 8. Bg5 O-O 9. Qd2 Be7 10. Rfe1 Qc7 11. Bf4 Qd7 12. Bb5 a6 13. Ba4 b5 14. Bb3 Qa7 15. Nh4 Qd7 16. Bh6 gxh6 17. Qxh6 Ne4 18. Nxe4 dxe4 19. Rxe4 f5 20. Rxe6 Kh8 21. Nxf5 Rxf5 22. Rae1 Bf8 23. Qh3 Rg5 24. Re1e4 Qg7 25. g3 Bxe6 26. Bxe6 Re8 27. d5 Ne5 28. f4 Nf3+ 29. Kh1 Rg6 30. f5 Rg5 31. Kg2 Nd4 32. c3 Nxe6 33. dxe6 Bd6 34. g4 Qf6 35. Qd3 Bb8 36. Qd7 Qh6 37. e7 Qxh2+ 38. Kf3 Qg3+ 39. Ke2 Qg2+ 40. Kd1 Qxe4 41. Qxe8+ Rg8 42. Qf7 Qxg4+ 43. Kc2 Qg2+ 44. Kb3 a5 45. e8=Q a4+ 46. Ka3 Bd6+ 47. b4 axb3+ 48. Kxb3 Rxe8 49. Qxe8+ Kg7 50. Qd7+ Kh6 51. Qxd6+ Kg5 52. f6 Qf3 53. Qe5+ Kg6 54. Qxb5 Qxf6 55. a4 Qe6+ 56. Ka3 Qd6+ 57. Qb4 Qd3 58. a5 h5 59. Qb6+ Kg5 60. Qc5+ Kg4 61. Kb4 Qb1+ 62. Kc4 Qa2+ 63. Kd3 Qb1+ 64. Kc4 Qa2+ 65. Kd4 Qd2+ 66. Kc4 Qa2+ 67. Kb5 Qb3+ 68. Qb4+ Qxb4+ 69. Kxb4 h4 70. a6 h3 71. a7 h2 72. a8=Q h1=B 73. Qxh1 Kf4 74. c4 Kg3 75. Qe1+ Kf3 76. Qd2 Ke4 77. Qc3 Kf4 78. Qd3 Ke5 79. c5 Ke6 80. c6 Ke5 81. c7 Ke6 82. Qd4 Ke7 83. c8=Q Kf7 84. Qd6 Kg7 85. Qcc7+ Kg8 86. Qdd8# 1-0""",
-    # Game with checkmate on the 50th move (100 half-moves) - checkmate takes precedence over 50-move draw
-    """[Event "Rated Bullet game"]
-[Site "https://lichess.org/49iz7ttf"]
-[White "silverbrutus"]
-[Black "458"]
-[Result "0-1"]
-[UTCDate "2013.04.18"]
-[UTCTime "01:16:15"]
-[WhiteElo "1569"]
-[BlackElo "1545"]
-[WhiteRatingDiff "-13"]
-[BlackRatingDiff "+13"]
-[ECO "B06"]
-[Opening "Modern Defense"]
-[TimeControl "0+1"]
-[Termination "Normal"]
-
-1. e4 g6 2. f4 b6 3. Nf3 Bb7 4. Bc4 Bg7 5. Nc3 e6 6. d4 a6 7. O-O b5 8. Bb3 b4 9. Ne2 a5 10. e5 a4 11. Nh4 axb3 12. cxb3 g5 13. fxg5 f6 14. gxf6 Bxf6 15. exf6 Qxf6 16. Ng3 Qxh4 17. Bh6 Qxh6 18. Rf3 Bxf3 19. Qxf3 Qf6 20. Rf1 Qxf3 21. Rxf3 Nc6 22. Ne4 Nxd4 23. Nf6+ Nxf6 24. Rxf6 Ke7 25. Rh6 Rhg8 26. Kf2 Raf8+ 27. Ke3 Nf5+ 28. Kd3 Nxh6 29. Kc4 d5+ 30. Kxb4 Rxg2 31. Kb5 Rxb2 32. a4 Rxb3+ 33. Kc6 Rh3 34. Kxc7 Rxh2 35. a5 Ra2 36. a6 e5 37. a7 d4 38. a8=Q Rfxa8 39. Kc6 e4 40. Kc5 d3 41. Kc4 e3 42. Kd4 Rd8+ 43. Kxe3 d2 44. Kf4 d1=Q 45. Kg5 Qh1 46. Kf4 Rg2 47. Kf3 Rf8+ 48. Ke3 Kd8 49. Ke4 Kc8 50. Kd4 Kb7 51. Kd5 Ka8 52. Ke5 Ra2 53. Ke6 Ra1 54. Kd6 Ng4 55. Ke6 h5 56. Ke7 h4 57. Kd6 h3 58. Kc5 h2 59. Kd4 Qg1+ 60. Kc4 h1=Q 61. Kd3 Qh8 62. Ke4 Kb7 63. Kd5 Qgh1+ 64. Kc4 Rfa8 65. Kc5 Nf2 66. Kb4 Nd1 67. Kc4 Kc7 68. Kc5 Kd7 69. Kb5 Ke7 70. Kb4 Kf6 71. Kc4 Ke6 72. Kd3 Kf5 73. Kc4 Kg4 74. Kb4 Kf3 75. Kb5 Kg2 76. Kc6 Kf1+ 77. Kd6 Kg1 78. Ke6 Kg2 79. Kf5 Kh2 80. Ke6 Kh3 81. Ke7 Kh4 82. Kd7 Kh5 83. Kd6 Kh6 84. Kc5 Kh7 85. Kc4 Kg8 86. Kc5 Kf8 87. Kc4 Ke8 88. Kc5 Kd8 89. Kc4 Kc8 90. Kc5 Kb8 91. Kc4 Ka7 92. Kc5 Ka6 93. Kc4 Ka5 94. Kc5 Ka4 95. Kc4 Ka3 96. Kc5 Ka2 97. Kc4 Kb1 98. Kc5 Kc1 99. Kc4 Nb2+ 100. Kc5 Kd1 101. Kb6 Ke1 102. Kc5 Kf1 103. Kb5 Kg1 104. Kc5 Kg2 105. Kb5 Nd1 106. Kc5 Rc1+ 107. Kb5 Kf3 108. Kb4 Ke4 109. Kb5 Kd3 110. Kb4 Qb8# 0-1""",
-]
+def get_regression_pgns() -> list[str]:
+    """Load regression test PGNs from fixtures."""
+    return [
+        load_fixture("regression_enpassant_horizontal_pin.pgn"),
+        load_fixture("regression_re1e4_disambiguation.pgn"),
+        load_fixture("regression_50move_checkmate.pgn"),
+    ]
 
 
-# Test PGN games with various features
-TEST_PGNS = [
-    # Basic game with evals
-    """[Event "Test"]
-[Result "1-0"]
-
-1. e4 { [%eval 0.3] } 1... e5 { [%eval 0.25] } 2. Nf3 { [%eval 0.35] } 2... Nc6 { [%eval 0.3] } 1-0""",
-    # Game with mate scores
-    """[Event "Mate Test"]
-[Result "1-0"]
-
-1. e4 { [%eval 0.3] } 1... e5 { [%eval #-10] } 2. Qh5 { [%eval #3] } 1-0""",
-    # Game with clock annotations
-    """[Event "Blitz"]
-[Result "1-0"]
-
-1. d4 { [%eval 0.2] [%clk 0:03:00] } 1... d5 { [%eval 0.3] [%clk 0:02:58] } 2. c4 { [%eval 0.25] [%clk 0:02:55] } 1-0""",
-    # Game with variations (should be skipped)
-    """[Event "Variations"]
-[Result "1-0"]
-
-1. e4 { [%eval 0.3] } 1... e5 (1... c5 { [%eval 0.4] }) { [%eval 0.25] } 2. Nf3 { [%eval 0.35] } 1-0""",
-    # Game with NAGs
-    """[Event "NAGs"]
-[Result "1-0"]
-
-1. e4! { [%eval 0.3] } 1... e5?! { [%eval 0.4] } 2. Nf3!! { [%eval 0.35] } 1-0""",
-    # Chess960 / FEN start position
-    """[Event "From Position"]
-[FEN "r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3"]
-[Result "1-0"]
-
-3. Bb5 { [%eval 0.5] } 3... a6 { [%eval 0.45] } 1-0""",
-    # Negative evals
-    """[Event "Black Advantage"]
-[Result "0-1"]
-
-1. e4 { [%eval -0.5] } 1... e5 { [%eval -0.75] } 0-1""",
-    # Deep eval decimals
-    """[Event "Precise"]
-[Result "1/2-1/2"]
-
-1. e4 { [%eval 0.17] } 1... e5 { [%eval 0.23] } 1/2-1/2""",
-]
+def get_test_pgns() -> list[str]:
+    """Load test PGNs from fixtures."""
+    return [
+        load_fixture("test_basic_evals.pgn"),
+        load_fixture("test_mate_scores.pgn"),
+        load_fixture("test_clock_annotations.pgn"),
+        load_fixture("test_variations.pgn"),
+        load_fixture("test_nags.pgn"),
+        load_fixture("test_from_position.pgn"),
+        load_fixture("test_negative_evals.pgn"),
+        load_fixture("test_precise_evals.pgn"),
+    ]
 
 
 def parse_with_python_chess(pgn_text: str) -> list[tuple[str, int, int]]:
@@ -300,7 +225,7 @@ def test_pgn_parser():
 
     all_passed = True
 
-    for i, pgn_text in enumerate(TEST_PGNS):
+    for i, pgn_text in enumerate(get_test_pgns()):
         # Get event name for display
         event = "Unknown"
         for line in pgn_text.split("\n"):
@@ -367,7 +292,7 @@ def test_regression_pgns():
 
     all_passed = True
 
-    for i, pgn_text in enumerate(REGRESSION_PGNS):
+    for i, pgn_text in enumerate(get_regression_pgns()):
         # Get event/site for display
         event = "Unknown"
         site = ""

@@ -1,0 +1,17 @@
+[Event "Rated Classical game"]
+[Site "https://lichess.org/wn8uhw1u"]
+[White "ryryry"]
+[Black "Magucho"]
+[Result "1-0"]
+[UTCDate "2013.06.29"]
+[UTCTime "06:50:12"]
+[WhiteElo "1781"]
+[BlackElo "1722"]
+[WhiteRatingDiff "+9"]
+[BlackRatingDiff "-9"]
+[ECO "C31"]
+[Opening "King's Gambit, Falkbeer Countergambit, Blackburne Attack"]
+[TimeControl "600+0"]
+[Termination "Normal"]
+
+1. e4 e5 2. f4 d5 3. Nf3 dxe4 4. Nxe5 Nf6 5. Bc4 Qe7 6. Bxf7+ Kd8 7. Bb3 Be6 8. O-O Bxb3 9. axb3 Nd5 10. c4 Nxf4 11. Rxf4 Qxe5 12. d4 exd3 13. Qxd3+ Qd6 14. Rd4 1-0

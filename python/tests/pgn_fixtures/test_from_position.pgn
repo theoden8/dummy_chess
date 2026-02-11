@@ -1,0 +1,5 @@
+[Event "From Position"]
+[FEN "r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3"]
+[Result "1-0"]
+
+3. Bb5 { [%eval 0.5] } 3... a6 { [%eval 0.45] } 1-0
