@@ -383,9 +383,11 @@ struct PGN {
 
   // perform move, verify check/mate/capture situation
   EXPORT void read_move(const std::string &s) {
-    // Disable repetition draw during PGN parsing - games can continue past unclaimed draws
+    // Disable draw claims during PGN parsing - games can continue past unclaimed draws
     const bool _repetition_is_draw = board.repetition_is_draw;
+    const bool _halfmoves_is_draw = board.halfmoves_is_draw;
     board.repetition_is_draw = false;
+    board.halfmoves_is_draw = false;
     bool assert_check = false, assert_mate = false;
     const move_t m = read_move_with_flags(s, assert_check, assert_mate);
     handle_move(m);
@@ -398,6 +400,7 @@ struct PGN {
     // e.g. input "R1d2" vs write_move generates "Rd1d2"
     // assert(ply.back() == s);
     board.repetition_is_draw = _repetition_is_draw;
+    board.halfmoves_is_draw = _halfmoves_is_draw;
   }
 
   // read PGN

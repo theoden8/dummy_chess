@@ -32,9 +32,12 @@ public:
   const bool crazyhouse = false;
 
   // whether 3-fold repetition is treated as a terminal draw
-  // Set to false for engine search (repetition is path-dependent)
-  // Set to true for PGN parsing (games can continue past unclaimed draws)
+  // Set to false for PGN parsing (games can continue past unclaimed draws)
   bool repetition_is_draw = true;
+
+  // whether 50-move rule is treated as a terminal draw
+  // Set to false for PGN parsing (games can continue past unclaimed draws)
+  bool halfmoves_is_draw = true;
 
   // cheap abstractions, pieces[Piece::piece_index(PAWN, BLACK)]
   static constexpr std::array<Piece, board::NO_PIECE_INDICES+1>  pieces = {
@@ -1188,15 +1191,16 @@ public:
   // sub-routines to evaluate game state: draw, mate, etc
   // 50-halfmoves-draw
   EXPORT INLINE bool is_draw_halfmoves() const {
-    return get_halfmoves() == 100;// && !is_checkmate();
+    return halfmoves_is_draw && get_halfmoves() >= 100;
   }
 
   EXPORT INLINE bool is_checkmate() const {
     const COLOR c = activePlayer();
+    // Not in check - can't be checkmate
     if(state.checkline[c] == bitmask::full || (state.attacks[pos_king[c]] & ~bits[c] & ~get_attack_mask(enemy_of(c)))) {
       return false;
     }
-    return !is_draw() && !can_move();
+    return !can_move();
   }
 
   // in crazyhouse, can still drop moves when no normal moves are available
