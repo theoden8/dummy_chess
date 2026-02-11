@@ -17,6 +17,7 @@ struct PGN {
   Board &board;
   size_t cur_ply = 0;
   EXPORT std::vector<std::string> ply;
+  EXPORT std::vector<std::string> comments;  // Comment after each move (may contain [%eval])
   std::string ending = "";
 
   EXPORT explicit PGN(Board &board):
@@ -185,6 +186,7 @@ struct PGN {
     }
     ++cur_ply;
     ply.emplace_back(p);
+    comments.emplace_back("");  // Empty comment placeholder
   }
 
   INLINE void write_move(move_t m) {
@@ -403,37 +405,107 @@ struct PGN {
     board.halfmoves_is_draw = _halfmoves_is_draw;
   }
 
-  // read PGN
-  void read(const std::string &s) {
+  // Parse a header line like [Tag "Value"], return the value for given tag or empty
+  static std::string parse_header(const std::string &header, const std::string &tag) {
+    size_t tag_pos = header.find(tag + " \"");
+    if (tag_pos == std::string::npos) return "";
+    size_t val_start = header.find('"', tag_pos) + 1;
+    size_t val_end = header.find('"', val_start);
+    if (val_start == 0 || val_end == std::string::npos) return "";
+    return header.substr(val_start, val_end - val_start);
+  }
+
+  // read PGN with headers and comments
+  // If store_comments is true, stores comments in the comments vector
+  void read(const std::string &s, bool store_comments = false) {
     size_t i = 0;
+    bool in_moves = false;  // Have we seen any moves yet?
+    
     while(i < s.length()) {
-      //std::string sss = std::format("{}", s[i]);
       if(isspace(s[i])) {
         ++i;
         continue;
       } else if(s[i] == '[') {
-        i = s.find("]", i + 1) + 1;
-        if(i == std::string::npos)break;
+        // Header tag
+        size_t end = s.find("]", i + 1);
+        if(end == std::string::npos) break;
+        
+        if (!in_moves) {
+          // Parse FEN header if present
+          std::string header = s.substr(i + 1, end - i - 1);
+          std::string fen_str = parse_header(header, "FEN");
+          if (!fen_str.empty()) {
+            startfen = fen::load_from_string(fen_str);
+            board.set_fen(startfen);
+          }
+        }
+        i = end + 1;
         continue;
       } else if(s[i] == '{') {
-        i = s.find("}", i + 1) + 1;
-        if(i == std::string::npos)break;
+        // Comment
+        size_t end = s.find("}", i + 1);
+        if(end == std::string::npos) break;
+        
+        if (store_comments && !comments.empty()) {
+          // Append to last move's comment
+          std::string comment = s.substr(i + 1, end - i - 1);
+          if (!comments.back().empty()) comments.back() += " ";
+          comments.back() += comment;
+        }
+        i = end + 1;
         continue;
       } else if(s[i] == '(') {
-        i = s.find(")", i + 1) + 1;
-        if(i == std::string::npos)break;
+        // Variation - skip with proper nesting
+        int depth = 1;
+        ++i;
+        while(i < s.length() && depth > 0) {
+          if(s[i] == '(') depth++;
+          else if(s[i] == ')') depth--;
+          ++i;
+        }
+        continue;
+      } else if(s[i] == '$') {
+        // NAG - skip
+        ++i;
+        while(i < s.length() && isdigit(s[i])) ++i;
         continue;
       } else if(index("0123456789.", s[i]) != nullptr) {
+        // Move number or result - skip digits and dots
+        // But check for game result first
+        if (s.substr(i, 3) == "1-0" || s.substr(i, 3) == "0-1") {
+          break;  // Game over
+        }
+        if (s.substr(i, 7) == "1/2-1/2") {
+          break;  // Draw
+        }
+        ++i;
+        continue;
+      } else if(s[i] == '*') {
+        // Unfinished game
+        break;
+      }
+      
+      // Find end of move token
+      size_t j = i;
+      while(j < s.length() && !isspace(s[j]) && s[j] != '{' && s[j] != '(' && s[j] != '$') {
+        ++j;
+      }
+      if(j == i) {
         ++i;
         continue;
       }
-      size_t j = s.find(" ", i);
-      if(j == std::string::npos) {
-        break;
+      
+      std::string ss = s.substr(i, j - i);
+      
+      // Strip annotations like ! ? !! ?? !? ?!
+      while(!ss.empty() && (ss.back() == '!' || ss.back() == '?')) {
+        ss.pop_back();
       }
-      const std::string ss = s.substr(i, j-i);
-      //printf("new read: <%s>\n", ss.c_str());
-      read_move(ss);
+      
+      if(!ss.empty() && ss != "1-0" && ss != "0-1" && ss != "1/2-1/2" && ss != "*") {
+        read_move(ss);
+        in_moves = true;
+      }
       i = j;
     }
   }
@@ -443,6 +515,7 @@ struct PGN {
       board.retract_move();
       --cur_ply;
       ply.pop_back();
+      if (!comments.empty()) comments.pop_back();
       ending = ""s;
     }
   }
