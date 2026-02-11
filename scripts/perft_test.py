@@ -107,6 +107,7 @@ def check_traditional() -> None:
     compare_outputs(depth=5, fen='8/kp4P1/p3K3/4P3/3p1P2/4nr2/8/8 w - - 1 55')
     compare_outputs(depth=4, fen='q2k2q1/2nqn2b/1n1P1n1b/2rnr2Q/1NQ1QN1Q/3Q3B/2RQR2B/Q2K2Q1 w - -')
     compare_outputs(depth=4, fen='rn1k1b1r/ppp3pp/8/4q3/2PPpR2/1P6/1P4PP/RNBQ2K1 b - d3 0 12')
+    compare_outputs(depth=4, fen='8/3b4/1k6/5Pp1/6K1/8/8/8 w - - 0 1')
 
 
 def check_chess960() -> None:
