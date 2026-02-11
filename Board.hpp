@@ -1427,6 +1427,7 @@ public:
     const pos_t r = (c == WHITE) ? -1+5 : -1+4;
     if(
         state.checkline[c] != bitmask::full
+        || board::_y(pos_king[c]) != r
         || !(piece::rank_mask(r) & bits[ec] & bits_slid_orth))
     {
       return;
