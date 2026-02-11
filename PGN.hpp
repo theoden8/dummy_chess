@@ -368,7 +368,7 @@ struct PGN {
       }
       piece_bitboard_t filtered = 0x00;
       bitmask::foreach(from_positions, [&](pos_t from_pos) mutable noexcept -> void {
-        if(board.state.moves[from_pos] & piece::pos_mask(move_to)) {
+        if(board.state.moves[from_pos] & piece::pos_mask(move_to & board::MOVEMASK)) {
           filtered |= piece::pos_mask(from_pos);
         }
       });
