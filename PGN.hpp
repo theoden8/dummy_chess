@@ -194,7 +194,7 @@ struct PGN {
   // write move, advance board state and determine game-state
   void handle_move(move_t m) {
     const bool _repetition_is_draw = board.repetition_is_draw;
-    board.repetition_draw = false;
+    board.repetition_is_draw = false;
     assert(board.check_valid_move(m, false));
     write_move(m);
     board.make_move(m);
