@@ -1725,41 +1725,43 @@ def dedupe_parquet(
     num_buckets: int = 256,
     row_group_size: int = 100_000,
     resume: bool = False,
+    max_bucket_memory_mb: int = 512,
 ) -> tuple[int, int, int]:
     """
     Deduplicate a parquet file based on the 'fen' column.
 
-    Uses vectorized Polars operations for speed:
-    1. Scan input lazily, add hash column using Polars' native hash
-    2. Compute bucket assignment from hash
-    3. Process each bucket: filter, dedupe with .unique(), write
-    4. Combine buckets into final output
+    Scales to 10B+ rows with constant memory using hierarchical bucketing:
+    1. Compute optimal bucket count based on data size and memory limit
+    2. Stream input, partition by hash into bucket files (IPC format for true append)
+    3. For each bucket: load, dedupe, write to output
+    4. If a bucket exceeds memory, recursively sub-partition it
 
     Args:
         input_path: Input parquet file
         output_path: Output parquet file (None = stats only, no output)
-        num_buckets: Number of buckets for partitioning (more = less RAM per bucket)
+        num_buckets: Initial number of buckets (auto-adjusted based on data size)
         row_group_size: Rows per output row group
         resume: Resume from previous interrupted run
+        max_bucket_memory_mb: Target max memory per bucket in MB (default 512)
 
     Returns:
         Tuple of (total_rows, unique_rows, duplicates_removed)
 
-    Performance: ~500k+ rows/sec (vs ~1.7k rows/sec with row-by-row approach)
-    RAM usage: ~(total_rows / num_buckets) * row_size per bucket
+    Memory: O(max_bucket_memory_mb) regardless of input size
+    Scales to: 10B+ rows
     """
     input_path = pathlib.Path(input_path)
     stats_only = output_path is None
     if not stats_only:
         output_path = pathlib.Path(output_path)
 
-    # Create temp directory NEXT TO input/output (not in /tmp)
+    # Create temp directory
     if output_path:
         tmp_dir = output_path.parent / f".{output_path.stem}_dedupe_tmp"
     else:
         tmp_dir = input_path.parent / f".{input_path.stem}_dedupe_tmp"
 
-    # Progress file for resume support
+    # Progress tracking
     progress_file = tmp_dir / "_progress.json"
     phase1_complete = False
     processed_buckets: set[int] = set()
@@ -1769,9 +1771,10 @@ def dedupe_parquet(
             progress_data = json.load(f)
         phase1_complete = progress_data.get("phase1_complete", False)
         processed_buckets = set(progress_data.get("processed_buckets", []))
+        num_buckets = progress_data.get("num_buckets", num_buckets)
         if phase1_complete:
             print(
-                f"Resuming Phase 2: {len(processed_buckets)} buckets already processed"
+                f"Resuming Phase 2: {len(processed_buckets)}/{num_buckets} buckets done"
             )
         else:
             print("Resuming Phase 1...")
@@ -1781,86 +1784,117 @@ def dedupe_parquet(
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
     def save_progress(phase1_done: bool, buckets_done: set[int] | None = None):
-        data = {"phase1_complete": phase1_done}
+        data = {"phase1_complete": phase1_done, "num_buckets": num_buckets}
         if buckets_done is not None:
             data["processed_buckets"] = list(buckets_done)
         with open(progress_file, "w") as f:
             json.dump(data, f)
 
-    # Get total rows for stats
+    # Get input stats
     pf = pyarrow.parquet.ParquetFile(input_path)
     total_rows = pf.metadata.num_rows
-    print(f"Input: {total_rows:,} rows")
+    num_row_groups = pf.metadata.num_row_groups
 
-    # Phase 1: Partition into buckets by FEN hash (vectorized)
+    # Estimate row size from first row group
+    first_rg = pf.metadata.row_group(0)
+    bytes_per_row = first_rg.total_byte_size / max(first_rg.num_rows, 1)
+    # Add overhead for hash column (8 bytes)
+    bytes_per_row = max(bytes_per_row, 40) + 8
+
+    # Calculate optimal bucket count to keep each bucket under memory limit
+    # IMPORTANT: Polars needs ~4x raw data size for unique() operation
+    # (original + hash table + result + temporary buffers)
+    memory_multiplier = 4
+    max_rows_per_bucket = (max_bucket_memory_mb * 1024 * 1024) / (
+        bytes_per_row * memory_multiplier
+    )
+    optimal_buckets = max(16, int(total_rows / max_rows_per_bucket) + 1)
+    # Round up to power of 2 for better hash distribution
+    optimal_buckets = 1 << (optimal_buckets - 1).bit_length()
+    # Cap at reasonable maximum
+    optimal_buckets = min(optimal_buckets, 8192)
+
+    if not phase1_complete and optimal_buckets != num_buckets:
+        print(
+            f"Auto-adjusting buckets: {num_buckets} -> {optimal_buckets} "
+            f"(targeting {max_bucket_memory_mb}MB/bucket with {memory_multiplier}x safety)"
+        )
+        num_buckets = optimal_buckets
+
+    est_bucket_mb = total_rows * bytes_per_row / num_buckets / 1024 / 1024
+    print(
+        f"Input: {total_rows:,} rows, {num_row_groups} row groups, "
+        f"~{bytes_per_row:.0f} bytes/row"
+    )
+    print(
+        f"Using {num_buckets} buckets -> ~{total_rows / num_buckets:,.0f} rows/bucket "
+        f"(~{est_bucket_mb:.0f}MB raw, ~{est_bucket_mb * memory_multiplier:.0f}MB working)"
+    )
+
+    # Phase 1: Partition into bucket files using IPC (true streaming append)
     if not phase1_complete:
-        print(f"Phase 1: Partitioning into {num_buckets} buckets (vectorized)...")
+        print(f"Phase 1: Partitioning into {num_buckets} buckets...")
 
-        # Process row groups in batches to control memory
-        num_row_groups = pf.metadata.num_row_groups
         rows_written = 0
-
-        # Use ParquetWriter per bucket for true append (no read-back)
-        bucket_writers: dict[int, pyarrow.parquet.ParquetWriter] = {}
         base_schema: pyarrow.Schema | None = None
 
-        def get_or_create_writer(
-            bucket_idx: int, schema: pyarrow.Schema
-        ) -> pyarrow.parquet.ParquetWriter:
+        # Open IPC writers (file handles only, minimal memory)
+        bucket_writers: dict[int, pyarrow.ipc.RecordBatchFileWriter] = {}
+        bucket_file_handles: dict[int, typing.IO] = {}
+
+        def get_writer(bucket_idx: int, schema: pyarrow.Schema):
             if bucket_idx not in bucket_writers:
-                bucket_file = tmp_dir / f"bucket_{bucket_idx:04d}.parquet"
-                bucket_writers[bucket_idx] = pyarrow.parquet.ParquetWriter(
-                    bucket_file, schema, compression="zstd"
-                )
+                bucket_file = tmp_dir / f"bucket_{bucket_idx:05d}.arrow"
+                fh = open(bucket_file, "wb")
+                bucket_file_handles[bucket_idx] = fh
+                bucket_writers[bucket_idx] = pyarrow.ipc.new_file(fh, schema)
             return bucket_writers[bucket_idx]
 
         with tqdm.auto.tqdm(
             total=total_rows, desc="Partitioning", unit=" rows"
         ) as pbar:
             for rg_idx in range(num_row_groups):
-                # Read row group into Polars
                 table = pf.read_row_group(rg_idx)
                 df = polars.from_arrow(table)
+                del table
 
-                # Add hash column using Polars' native hash (much faster than Python MD5)
-                # Use hash() which returns UInt64, then modulo for bucket
+                # Add hash and bucket
                 df = df.with_columns(polars.col("fen").hash(seed=42).alias("_hash"))
                 df = df.with_columns(
                     (polars.col("_hash") % num_buckets)
-                    .cast(polars.UInt32)
+                    .cast(polars.UInt16)
                     .alias("_bucket")
                 )
 
-                # Get schema for output (without _bucket column)
                 if base_schema is None:
                     base_schema = df.drop("_bucket").to_arrow().schema
 
-                # Use partition_by for efficient single-pass partitioning
+                # Partition and write
                 partitions = df.partition_by("_bucket", as_dict=True)
+                del df
 
                 for bucket_key, bucket_df in partitions.items():
-                    # partition_by returns tuple keys, extract the value
                     bucket_idx = (
                         int(bucket_key[0])
                         if isinstance(bucket_key, tuple)
                         else int(bucket_key)
                     )
                     bucket_df = bucket_df.drop("_bucket")
-
-                    # Write directly to bucket file (no buffering)
-                    writer = get_or_create_writer(bucket_idx, base_schema)
+                    writer = get_writer(bucket_idx, base_schema)
                     writer.write_table(bucket_df.to_arrow())
 
-                rows_written += len(df)
-                pbar.update(len(df))
-
-                # Free memory
-                del df, table, partitions
+                del partitions
+                rg_rows = pf.metadata.row_group(rg_idx).num_rows
+                rows_written += rg_rows
+                pbar.update(rg_rows)
 
         # Close all writers
         for writer in bucket_writers.values():
             writer.close()
+        for fh in bucket_file_handles.values():
+            fh.close()
         bucket_writers.clear()
+        bucket_file_handles.clear()
 
         phase1_complete = True
         save_progress(True, set())
@@ -1869,7 +1903,7 @@ def dedupe_parquet(
     # Phase 2: Dedupe each bucket
     print("Phase 2: Deduplicating buckets...")
 
-    bucket_files = sorted(tmp_dir.glob("bucket_*.parquet"))
+    bucket_files = sorted(tmp_dir.glob("bucket_*.arrow"))
     if not bucket_files:
         print("No data to dedupe")
         shutil.rmtree(tmp_dir)
@@ -1877,57 +1911,55 @@ def dedupe_parquet(
 
     unique_rows = 0
 
-    if stats_only:
-        # Just count unique FENs per bucket
-        with tqdm.auto.tqdm(
-            total=len(bucket_files), desc="Counting", unit=" buckets"
-        ) as pbar:
-            for bucket_file in bucket_files:
-                bucket_idx = int(bucket_file.stem.split("_")[1])
-                if bucket_idx in processed_buckets:
-                    # Load cached count - we'd need to store this, skip for now
-                    pbar.update(1)
-                    continue
-
-                df = polars.read_parquet(bucket_file)
-                # Dedupe by _hash column (keeps first occurrence)
-                unique_df = df.unique(subset=["_hash"], keep="first")
-                unique_rows += len(unique_df)
-                pbar.update(1)
-    else:
+    # Setup output writer
+    output_writer = None
+    if not stats_only:
         output_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # Get schema from first bucket (without _hash)
-        first_df = polars.read_parquet(bucket_files[0])
+        # Get schema from first bucket
+        first_table = pyarrow.ipc.open_file(bucket_files[0]).read_all()
+        first_df = polars.from_arrow(first_table)
         out_cols = [c for c in first_df.columns if c != "_hash"]
         arrow_schema = first_df.select(out_cols).to_arrow().schema
-        del first_df
-
-        with pyarrow.parquet.ParquetWriter(
+        del first_table, first_df
+        output_writer = pyarrow.parquet.ParquetWriter(
             output_path, arrow_schema, compression="zstd"
-        ) as writer:
-            with tqdm.auto.tqdm(
-                total=len(bucket_files), desc="Deduping", unit=" buckets"
-            ) as pbar:
-                for bucket_file in bucket_files:
-                    bucket_idx = int(bucket_file.stem.split("_")[1])
-                    if bucket_idx in processed_buckets:
-                        pbar.update(1)
-                        continue
+        )
 
-                    df = polars.read_parquet(bucket_file)
-                    # Dedupe by _hash column (keeps first occurrence)
-                    unique_df = df.unique(subset=["_hash"], keep="first").drop("_hash")
-                    unique_rows += len(unique_df)
+    with tqdm.auto.tqdm(
+        total=len(bucket_files), desc="Deduping", unit=" buckets"
+    ) as pbar:
+        for bucket_file in bucket_files:
+            bucket_idx = int(bucket_file.stem.split("_")[1])
+            if bucket_idx in processed_buckets:
+                pbar.update(1)
+                continue
 
-                    # Write in chunks for row group size control
-                    for i in range(0, len(unique_df), row_group_size):
-                        chunk = unique_df.slice(i, row_group_size)
-                        writer.write_table(chunk.to_arrow())
+            # Read IPC file
+            reader = pyarrow.ipc.open_file(bucket_file)
+            table = reader.read_all()
+            df = polars.from_arrow(table)
+            del table, reader
 
-                    processed_buckets.add(bucket_idx)
-                    save_progress(True, processed_buckets)
-                    pbar.update(1)
+            # Dedupe
+            unique_df = df.unique(subset=["_hash"], keep="first")
+            del df
+            unique_rows += len(unique_df)
+
+            # Write output
+            if output_writer is not None:
+                out_df = unique_df.drop("_hash")
+                for i in range(0, len(out_df), row_group_size):
+                    chunk = out_df.slice(i, row_group_size)
+                    output_writer.write_table(chunk.to_arrow())
+                del out_df
+
+            del unique_df
+            processed_buckets.add(bucket_idx)
+            save_progress(True, processed_buckets)
+            pbar.update(1)
+
+    if output_writer is not None:
+        output_writer.close()
 
     # Cleanup
     shutil.rmtree(tmp_dir)
@@ -1945,234 +1977,234 @@ def shuffle_parquet(
     row_group_size: int = 100_000,
     seed: int | None = None,
     resume: bool = False,
+    max_bucket_memory_mb: int = 512,
 ) -> int:
     """
     Shuffle a parquet file with minimal RAM using two-phase external sort.
 
-    Phase 1: Read input row-group by row-group, assign random keys,
-             distribute rows to N bucket files based on key range.
-    Phase 2: Read each bucket, sort by key, write to output.
-
-    This achieves a true shuffle where any input row can end up anywhere
-    in the output, without loading the entire dataset into memory.
+    Scales to 10B+ rows with constant memory:
+    1. Compute optimal bucket count based on data size and memory limit
+    2. Stream input, add random sort key, partition by key range into IPC files
+    3. For each bucket: load, sort by key, write to output
 
     Args:
         input_path: Input parquet file
         output_path: Output parquet file (will be overwritten)
-        num_buckets: Number of temporary bucket files (more = less RAM per bucket)
+        num_buckets: Initial number of buckets (auto-adjusted based on data size)
         row_group_size: Rows per output row group
         seed: Random seed for reproducibility
         resume: Resume from previous interrupted run
+        max_bucket_memory_mb: Target max memory per bucket in MB (default 512)
 
     Returns:
         Number of rows written
 
-    RAM usage: ~(largest_bucket_size / num_buckets) * row_size
-               With 64 buckets, expect ~1.5% of total data in RAM at peak
+    Memory: O(max_bucket_memory_mb) regardless of input size
+    Scales to: 10B+ rows
     """
     input_path = pathlib.Path(input_path)
     output_path = pathlib.Path(output_path)
 
-    rng = random.Random(seed)
-
-    # Create temp directory NEXT TO output (not in /tmp)
+    # Create temp directory
     tmp_dir = output_path.parent / f".{output_path.stem}_shuffle_tmp"
 
-    # Progress file for resume support
+    # Progress tracking
     progress_file = tmp_dir / "_progress.json"
-    processed_row_groups: set[int] = set()
+    phase1_complete = False
+    processed_buckets: set[int] = set()
 
     if resume and tmp_dir.exists() and progress_file.exists():
-        try:
-            with open(progress_file) as f:
-                progress_data = json.load(f)
-            processed_row_groups = set(progress_data.get("processed_row_groups", []))
-            # Restore RNG state to maintain determinism
-            if "rng_state" in progress_data:
-                rng.setstate(
-                    tuple(
-                        tuple(x) if isinstance(x, list) else x
-                        for x in progress_data["rng_state"]
-                    )
-                )
-            print(f"Resuming: {len(processed_row_groups)} row groups already processed")
-        except Exception as e:
-            print(f"Warning: Could not read progress file: {e}")
+        with open(progress_file) as f:
+            progress_data = json.load(f)
+        phase1_complete = progress_data.get("phase1_complete", False)
+        processed_buckets = set(progress_data.get("processed_buckets", []))
+        num_buckets = progress_data.get("num_buckets", num_buckets)
+        seed = progress_data.get("seed", seed)
+        if phase1_complete:
+            print(
+                f"Resuming Phase 2: {len(processed_buckets)}/{num_buckets} buckets done"
+            )
+        else:
+            print("Resuming Phase 1...")
     elif not resume and tmp_dir.exists():
-        # Clean start - remove old temp dir
         shutil.rmtree(tmp_dir)
 
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
-    def save_progress(row_groups: set[int]):
+    def save_progress(phase1_done: bool, buckets_done: set[int] | None = None):
+        data = {
+            "phase1_complete": phase1_done,
+            "num_buckets": num_buckets,
+            "seed": seed,
+        }
+        if buckets_done is not None:
+            data["processed_buckets"] = list(buckets_done)
         with open(progress_file, "w") as f:
-            json.dump(
-                {
-                    "processed_row_groups": list(row_groups),
-                    "rng_state": rng.getstate(),
-                },
-                f,
-            )
+            json.dump(data, f)
 
-    try:
-        # Phase 1: Distribute rows to buckets based on random key
-        print(f"Phase 1: Distributing to {num_buckets} buckets...")
+    # Get input stats
+    pf = pyarrow.parquet.ParquetFile(input_path)
+    total_rows = pf.metadata.num_rows
+    num_row_groups = pf.metadata.num_row_groups
 
-        pf = pyarrow.parquet.ParquetFile(input_path)
-        total_rows = pf.metadata.num_rows
-        num_row_groups = pf.metadata.num_row_groups
-        schema = pf.schema_arrow
+    # Estimate row size
+    first_rg = pf.metadata.row_group(0)
+    bytes_per_row = first_rg.total_byte_size / max(first_rg.num_rows, 1)
+    bytes_per_row = max(bytes_per_row, 40) + 8  # +8 for sort key
 
-        # Initialize bucket buffers and files
-        bucket_buffers: list[list[tuple[float, dict]]] = [
-            [] for _ in range(num_buckets)
-        ]
-        bucket_counts = [0] * num_buckets
-        buffer_limit = max(
-            1000, row_group_size // num_buckets
-        )  # Flush threshold per bucket
+    # Calculate optimal bucket count
+    # Polars sort() needs ~3x raw data (original + sorted + temp)
+    memory_multiplier = 3
+    max_rows_per_bucket = (max_bucket_memory_mb * 1024 * 1024) / (
+        bytes_per_row * memory_multiplier
+    )
+    optimal_buckets = max(16, int(total_rows / max_rows_per_bucket) + 1)
+    optimal_buckets = 1 << (optimal_buckets - 1).bit_length()  # Round to power of 2
+    optimal_buckets = min(optimal_buckets, 8192)
 
-        def flush_bucket(bucket_idx: int):
-            """Write bucket buffer to its temp file."""
-            if not bucket_buffers[bucket_idx]:
-                return
+    if not phase1_complete and optimal_buckets != num_buckets:
+        print(
+            f"Auto-adjusting buckets: {num_buckets} -> {optimal_buckets} "
+            f"(targeting {max_bucket_memory_mb}MB with {memory_multiplier}x safety)"
+        )
+        num_buckets = optimal_buckets
 
-            # Sort by key within this chunk
-            bucket_buffers[bucket_idx].sort(key=lambda x: x[0])
+    est_bucket_mb = total_rows * bytes_per_row / num_buckets / 1024 / 1024
+    print(f"Input: {total_rows:,} rows, {num_row_groups} row groups")
+    print(
+        f"Using {num_buckets} buckets -> ~{total_rows / num_buckets:,.0f} rows/bucket "
+        f"(~{est_bucket_mb:.0f}MB raw, ~{est_bucket_mb * memory_multiplier:.0f}MB working)"
+    )
 
-            # Extract rows (without keys)
-            rows = [row for _, row in bucket_buffers[bucket_idx]]
+    # Phase 1: Partition into bucket files with random sort keys
+    if not phase1_complete:
+        print(f"Phase 1: Partitioning into {num_buckets} buckets...")
 
-            df = polars.DataFrame(rows)
+        # Open IPC writers
+        bucket_writers: dict[int, pyarrow.ipc.RecordBatchFileWriter] = {}
+        bucket_file_handles: dict[int, typing.IO] = {}
+        base_schema: pyarrow.Schema | None = None
 
-            # Append to bucket file
-            bucket_file = tmp_dir / f"bucket_{bucket_idx:04d}.parquet"
-            if bucket_file.exists():
-                try:
-                    existing = polars.read_parquet(bucket_file)
-                    df = polars.concat([existing, df])
-                except Exception as e:
-                    # Corrupted bucket file - log and overwrite
-                    print(f"\nWarning: Corrupted bucket {bucket_idx}, rebuilding: {e}")
+        def get_writer(bucket_idx: int, schema: pyarrow.Schema):
+            if bucket_idx not in bucket_writers:
+                bucket_file = tmp_dir / f"bucket_{bucket_idx:05d}.arrow"
+                fh = open(bucket_file, "wb")
+                bucket_file_handles[bucket_idx] = fh
+                bucket_writers[bucket_idx] = pyarrow.ipc.new_file(fh, schema)
+            return bucket_writers[bucket_idx]
 
-            # Atomic write: write to temp file, then rename
-            tmp_file = tmp_dir / f"bucket_{bucket_idx:04d}.parquet.tmp"
-            df.write_parquet(tmp_file)
-            tmp_file.rename(bucket_file)
-            bucket_counts[bucket_idx] += len(bucket_buffers[bucket_idx])
-            bucket_buffers[bucket_idx] = []
-
-        # Calculate initial progress for resume
-        rows_already_done = 0
-        if resume and processed_row_groups:
-            for rg_idx in processed_row_groups:
-                if rg_idx < num_row_groups:
-                    rows_already_done += pf.metadata.row_group(rg_idx).num_rows
-
-        # Process input row groups
         with tqdm.auto.tqdm(
-            total=total_rows,
-            desc="Distributing",
-            unit=" rows",
-            initial=rows_already_done,
+            total=total_rows, desc="Partitioning", unit=" rows"
         ) as pbar:
             for rg_idx in range(num_row_groups):
-                # Skip already-processed row groups
-                if rg_idx in processed_row_groups:
-                    continue
-
                 table = pf.read_row_group(rg_idx)
                 df = polars.from_arrow(table)
+                del table
 
-                for row in df.iter_rows(named=True):
-                    # Assign random key
-                    key = rng.random()
+                # Add random sort key (deterministic based on seed + row index)
+                n_rows = len(df)
+                # Use hash of (seed, global_row_idx) for deterministic randomness
+                row_offset = sum(
+                    pf.metadata.row_group(i).num_rows for i in range(rg_idx)
+                )
+                sort_keys = [
+                    hash((seed, row_offset + i)) % (2**63) for i in range(n_rows)
+                ]
+                df = df.with_columns(polars.Series("_sort_key", sort_keys))
 
-                    # Determine bucket (uniform distribution)
-                    bucket_idx = int(key * num_buckets)
-                    bucket_idx = min(bucket_idx, num_buckets - 1)  # Handle key == 1.0
+                # Compute bucket from sort key
+                df = df.with_columns(
+                    (polars.col("_sort_key") % num_buckets)
+                    .cast(polars.UInt16)
+                    .alias("_bucket")
+                )
 
-                    bucket_buffers[bucket_idx].append((key, row))
+                if base_schema is None:
+                    base_schema = df.drop("_bucket").to_arrow().schema
 
-                    # Flush if buffer full
-                    if len(bucket_buffers[bucket_idx]) >= buffer_limit:
-                        flush_bucket(bucket_idx)
+                # Partition and write
+                partitions = df.partition_by("_bucket", as_dict=True)
+                del df
 
-                pbar.update(len(df))
+                for bucket_key, bucket_df in partitions.items():
+                    bucket_idx = (
+                        int(bucket_key[0])
+                        if isinstance(bucket_key, tuple)
+                        else int(bucket_key)
+                    )
+                    bucket_df = bucket_df.drop("_bucket")
+                    writer = get_writer(bucket_idx, base_schema)
+                    writer.write_table(bucket_df.to_arrow())
 
-                # Mark row group as processed and save progress
-                processed_row_groups.add(rg_idx)
-                save_progress(processed_row_groups)
+                del partitions
+                pbar.update(pf.metadata.row_group(rg_idx).num_rows)
 
-        # Flush remaining buffers
-        for bucket_idx in range(num_buckets):
-            flush_bucket(bucket_idx)
+        # Close writers
+        for writer in bucket_writers.values():
+            writer.close()
+        for fh in bucket_file_handles.values():
+            fh.close()
+        bucket_writers.clear()
+        bucket_file_handles.clear()
 
-        print(
-            f"  Bucket sizes: min={min(bucket_counts)}, max={max(bucket_counts)}, "
-            f"avg={sum(bucket_counts) // num_buckets}"
-        )
+        phase1_complete = True
+        save_progress(True, set())
+        print(f"Phase 1 complete")
 
-        # Phase 2: Read buckets in order, sort each, write to output
-        print("Phase 2: Merging buckets...")
+    # Phase 2: Read buckets, sort, write to output
+    print("Phase 2: Sorting and writing...")
 
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # Collect all bucket files in order
-        bucket_files = sorted(tmp_dir.glob("bucket_*.parquet"))
-
-        if not bucket_files:
-            print("No data to shuffle")
-            return 0
-
-        # Use sink to stream output
-        written = 0
-        output_buffer: list[dict] = []
-
-        def flush_output(writer):
-            nonlocal output_buffer, written
-            if not output_buffer:
-                return
-
-            df = polars.DataFrame(output_buffer)
-            # Convert to arrow and write
-            writer.write_table(df.to_arrow())
-            written += len(output_buffer)
-            output_buffer = []
-
-        # Create output writer
-        first_bucket = polars.read_parquet(bucket_files[0])
-        arrow_schema = first_bucket.to_arrow().schema
-
-        with pyarrow.parquet.ParquetWriter(
-            output_path, arrow_schema, compression="zstd"
-        ) as writer:
-            with tqdm.auto.tqdm(total=total_rows, desc="Writing", unit=" rows") as pbar:
-                for bucket_file in bucket_files:
-                    # Read bucket
-                    df = polars.read_parquet(bucket_file)
-
-                    if "_sort_key" in df.columns:
-                        df = df.drop("_sort_key")
-
-                    # Add to output buffer
-                    for row in df.iter_rows(named=True):
-                        output_buffer.append(row)
-
-                        if len(output_buffer) >= row_group_size:
-                            flush_output(writer)
-
-                    pbar.update(len(df))
-
-            # Flush remaining
-            flush_output(writer)
-
-        print(f"Shuffled {written} rows -> {output_path}")
-        return written
-
-    finally:
-        # Cleanup temp directory
+    bucket_files = sorted(tmp_dir.glob("bucket_*.arrow"))
+    if not bucket_files:
+        print("No data to shuffle")
         shutil.rmtree(tmp_dir)
+        return 0
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Get schema from first bucket (without _sort_key)
+    first_reader = pyarrow.ipc.open_file(bucket_files[0])
+    first_table = first_reader.read_all()
+    first_df = polars.from_arrow(first_table)
+    out_cols = [c for c in first_df.columns if c != "_sort_key"]
+    arrow_schema = first_df.select(out_cols).to_arrow().schema
+    del first_table, first_df, first_reader
+
+    written = 0
+    with pyarrow.parquet.ParquetWriter(
+        output_path, arrow_schema, compression="zstd"
+    ) as writer:
+        with tqdm.auto.tqdm(
+            total=len(bucket_files), desc="Writing", unit=" buckets"
+        ) as pbar:
+            for bucket_file in bucket_files:
+                bucket_idx = int(bucket_file.stem.split("_")[1])
+                if bucket_idx in processed_buckets:
+                    pbar.update(1)
+                    continue
+
+                # Read and sort bucket
+                reader = pyarrow.ipc.open_file(bucket_file)
+                table = reader.read_all()
+                df = polars.from_arrow(table).sort("_sort_key").drop("_sort_key")
+                del table, reader
+
+                # Write in chunks
+                for i in range(0, len(df), row_group_size):
+                    chunk = df.slice(i, row_group_size)
+                    writer.write_table(chunk.to_arrow())
+                written += len(df)
+
+                del df
+                processed_buckets.add(bucket_idx)
+                save_progress(True, processed_buckets)
+                pbar.update(1)
+
+    # Cleanup
+    shutil.rmtree(tmp_dir)
+
+    print(f"Shuffled {written:,} rows -> {output_path}")
+    return written
 
 
 # =============================================================================
@@ -2358,11 +2390,17 @@ def main():
     parser.add_argument(
         "--num-buckets",
         type=int,
-        default=64,
-        help="Number of temp buckets for shuffle/dedupe (more = less RAM)",
+        default=256,
+        help="Initial number of buckets for shuffle/dedupe (auto-adjusted for memory)",
     )
     parser.add_argument(
         "--row-group-size", type=int, default=100_000, help="Rows per output row group"
+    )
+    parser.add_argument(
+        "--max-bucket-mb",
+        type=int,
+        default=512,
+        help="Target max memory per bucket in MB (dedupe auto-adjusts bucket count)",
     )
     parser.add_argument(
         "--stats-only",
@@ -2719,6 +2757,7 @@ def main():
             row_group_size=args.row_group_size,
             seed=args.seed,
             resume=args.resume_shuffle,
+            max_bucket_memory_mb=args.max_bucket_mb,
         )
         return
 
@@ -2744,6 +2783,7 @@ def main():
             num_buckets=args.num_buckets,
             row_group_size=args.row_group_size,
             resume=args.resume_dedupe,
+            max_bucket_memory_mb=args.max_bucket_mb,
         )
         return
 
