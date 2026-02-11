@@ -31,6 +31,11 @@ public:
   // general crazyhouse-specific variables
   const bool crazyhouse = false;
 
+  // whether 3-fold repetition is treated as a terminal draw
+  // Set to false for engine search (repetition is path-dependent)
+  // Set to true for PGN parsing (games can continue past unclaimed draws)
+  bool repetition_is_draw = true;
+
   // cheap abstractions, pieces[Piece::piece_index(PAWN, BLACK)]
   static constexpr std::array<Piece, board::NO_PIECE_INDICES+1>  pieces = {
     Piece(PAWN, WHITE), Piece(PAWN, BLACK),
@@ -1283,7 +1288,7 @@ public:
   }
 
   INLINE bool is_draw_repetition() const {
-    return state_hist_repetitions <= self.get_current_ply();
+    return repetition_is_draw && state_hist_repetitions <= self.get_current_ply();
   }
 
   INLINE bool can_skip_genmoves() const {
