@@ -194,8 +194,15 @@ struct PGN {
   }
 
   // write move, advance board state and determine game-state
-  void handle_move(move_t m) {
-    assert(board.check_valid_move(m, false));
+  // Returns false if move is invalid (corrupted PGN)
+  // If strict=true, asserts instead of returning false
+  bool handle_move(move_t m, bool strict=false) {
+    if (!board.check_valid_move(m, false)) {
+      if (strict) {
+        assert(false && "Invalid move in PGN");
+      }
+      return false;
+    }
     write_move(m);
     board.make_move(m);
     const COLOR c = board.activePlayer();
@@ -216,10 +223,11 @@ struct PGN {
     } else if(board.is_draw_repetition()) {
       ending = "1/2 - 1/2 (repetitions)";
     }
+    return true;
   }
 
-  void handle_move(pos_t i, pos_t j) {
-    handle_move(bitmask::_pos_pair(i, j));
+  bool handle_move(pos_t i, pos_t j, bool strict=false) {
+    return handle_move(bitmask::_pos_pair(i, j), strict);
   }
 
   void handle_line(MoveLine &mline) {
@@ -384,7 +392,9 @@ struct PGN {
   }
 
   // perform move, verify check/mate/capture situation
-  EXPORT void read_move(const std::string &s) {
+  // Returns false if move is invalid (corrupted PGN)
+  // If strict=true, asserts instead of returning false
+  EXPORT bool read_move(const std::string &s, bool strict=false) {
     // Disable draw claims during PGN parsing - games can continue past unclaimed draws
     const bool _repetition_is_draw = board.repetition_is_draw;
     const bool _halfmoves_is_draw = board.halfmoves_is_draw;
@@ -392,17 +402,36 @@ struct PGN {
     board.halfmoves_is_draw = false;
     bool assert_check = false, assert_mate = false;
     const move_t m = read_move_with_flags(s, assert_check, assert_mate);
-    handle_move(m);
+    if (!handle_move(m, strict)) {
+      board.repetition_is_draw = _repetition_is_draw;
+      board.halfmoves_is_draw = _halfmoves_is_draw;
+      return false;
+    }
     const COLOR c = board.activePlayer();
     const bool check_verified = (board.state.checkline[c] != bitmask::full);
-    assert((assert_check && check_verified) || (!assert_check && !check_verified));
+    // If PGN claims check/mate, verify it's true (return false if not)
+    if (assert_check && !check_verified) {
+      if (strict) {
+        assert(false && "PGN claims check but position is not in check");
+      }
+      board.repetition_is_draw = _repetition_is_draw;
+      board.halfmoves_is_draw = _halfmoves_is_draw;
+      return false;
+    }
     const bool mate_verified = board.is_checkmate();
-    assert((assert_mate && mate_verified) || (!assert_mate && !mate_verified));
+    if (assert_mate && !mate_verified) {
+      if (strict) {
+        assert(false && "PGN claims checkmate but position is not checkmate");
+      }
+      board.repetition_is_draw = _repetition_is_draw;
+      board.halfmoves_is_draw = _halfmoves_is_draw;
+      return false;
+    }
     // Note: ply.back() may differ from s due to disambiguation format
     // e.g. input "R1d2" vs write_move generates "Rd1d2"
-    // assert(ply.back() == s);
     board.repetition_is_draw = _repetition_is_draw;
     board.halfmoves_is_draw = _halfmoves_is_draw;
+    return true;
   }
 
   // Parse a header line like [Tag "Value"], return the value for given tag or empty
@@ -417,7 +446,9 @@ struct PGN {
 
   // read PGN with headers and comments
   // If store_comments is true, stores comments in the comments vector
-  void read(const std::string &s, bool store_comments = false) {
+  // Returns false if PGN contains invalid moves (corrupted game)
+  // If strict=true, asserts instead of returning false
+  bool read(const std::string &s, bool store_comments=false, bool strict=false) {
     size_t i = 0;
     bool in_moves = false;  // Have we seen any moves yet?
     
@@ -503,11 +534,14 @@ struct PGN {
       }
       
       if(!ss.empty() && ss != "1-0" && ss != "0-1" && ss != "1/2-1/2" && ss != "*") {
-        read_move(ss);
+        if (!read_move(ss, strict)) {
+          return false;  // Invalid move - corrupted PGN
+        }
         in_moves = true;
       }
       i = j;
     }
+    return true;
   }
 
   void retract_move() {
