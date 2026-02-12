@@ -34,3 +34,4 @@ tempfile
 /sync
 /build
 .cache/
+training/bench_*.py

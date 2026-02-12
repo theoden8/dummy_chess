@@ -26,6 +26,7 @@ import io
 import pathlib
 import re
 import socket
+import subprocess
 import sys
 import tempfile
 import time
@@ -1186,8 +1187,6 @@ Datasets:
                 sys.exit(1)
 
             print(f"\nProcessing {len(downloaded)} file(s)...")
-            import subprocess
-
             for month, path in downloaded:
                 output = args.output_dir / f"games_{month.replace('-', '_')}.parquet"
                 cmd = [

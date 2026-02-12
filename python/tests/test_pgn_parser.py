@@ -3,9 +3,12 @@
 Test C++ PGN parser against python-chess for correctness.
 """
 
-import chess.pgn
 import io
 import pathlib
+import re
+import sys
+
+import chess.pgn
 import dummy_chess
 
 # Path to PGN fixtures directory
@@ -168,8 +171,6 @@ def parse_with_python_chess(pgn_text: str) -> list[tuple[str, int, int]]:
         comment = node.comment or ""
 
         # Parse [%eval X] from comment
-        import re
-
         match = re.search(r"\[%eval\s+([^\]]+)\]", comment)
         if match:
             eval_str = match.group(1).strip()
@@ -319,8 +320,6 @@ def test_regression_pgns():
 
 
 if __name__ == "__main__":
-    import sys
-
     failed = False
 
     # Run all tests

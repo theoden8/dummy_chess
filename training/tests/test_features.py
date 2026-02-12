@@ -5,6 +5,9 @@ Tests the numba-optimized feature extraction against a reference
 implementation using python-chess.
 """
 
+import concurrent.futures
+import time
+
 import chess
 import numpy as np
 import pytest
@@ -199,8 +202,6 @@ class TestThreadSafety:
 
     def test_concurrent_extraction(self):
         """Test that concurrent feature extraction works correctly."""
-        import concurrent.futures
-
         fens = [fen for fen, _ in TEST_FENS]
         n_iterations = 100
 
@@ -230,8 +231,6 @@ class TestPerformance:
     @pytest.mark.benchmark
     def test_benchmark_feature_extraction(self):
         """Benchmark feature extraction speed."""
-        import time
-
         fen = "r1bqkb1r/pppp1ppp/2n2n2/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4"
         n_iterations = 10000
 

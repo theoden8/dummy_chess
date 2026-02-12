@@ -2,6 +2,12 @@
 //!
 //! Architecture: HalfKP(41024) -> 256x2 -> 32 -> 32 -> 1
 //!
+//! Performance optimizations:
+//! - Parallel batch loading with rayon
+//! - Prefetching batches while GPU trains
+//! - WDL sigmoid loss for better convergence
+//! - Batched feature extraction
+//!
 //! Usage:
 //!   # Single source
 //!   cargo run --release -- data/evals.parquet --epochs 30 --batch-size 8192
@@ -25,9 +31,11 @@ use clap::{Parser, ValueEnum};
 use indicatif::{ProgressBar, ProgressStyle};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::file::reader::{FileReader, SerializedFileReader};
+use rayon::prelude::*;
 
 use serde::Deserialize;
 use std::path::PathBuf;
+use std::sync::mpsc;
 
 // ============================================================================
 // Memory Debugging (only enabled in debug builds)
@@ -66,6 +74,9 @@ const FT_OUT: usize = 256;
 const L1_OUT: usize = 32;
 const L2_OUT: usize = 32;
 
+/// Sigmoid scaling factor for WDL loss (Stockfish uses 410)
+const SIGMOID_SCALE: f32 = 400.0;
+
 // ============================================================================
 // Config File Support
 // ============================================================================
@@ -82,6 +93,7 @@ const L2_OUT: usize = 32;
 /// test_ratio = 0.05
 /// flip_augment = false
 /// backend = "gpu"
+/// prefetch = 4
 ///
 /// [[sources]]
 /// path = "data/evals.parquet"
@@ -114,6 +126,10 @@ struct TrainConfig {
     flip_augment: bool,
     #[serde(default = "default_backend")]
     backend: String,
+    #[serde(default = "default_prefetch")]
+    prefetch: usize,
+    #[serde(default)]
+    quiet: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -146,6 +162,9 @@ fn default_test_ratio() -> f64 {
 }
 fn default_backend() -> String {
     "gpu".to_string()
+}
+fn default_prefetch() -> usize {
+    4
 }
 fn default_weight() -> f64 {
     1.0
@@ -595,12 +614,6 @@ impl BatchIterator {
         (self.total_samples() + self.batch_size - 1) / self.batch_size
     }
 
-    /// Reset for new epoch
-    fn reset(&mut self) {
-        self.current_source = 0;
-        self.current_offset = 0;
-    }
-
     /// Load next batch of samples using parquet crate directly (true streaming)
     fn next_batch(&mut self) -> Option<Vec<Sample>> {
         while self.current_source < self.source_infos.len() {
@@ -634,6 +647,7 @@ impl BatchIterator {
     }
 
     /// Read batch using Arrow columnar reader - fast column projection
+    /// Uses rayon for parallel feature extraction
     fn read_batch_direct(&self, path: &PathBuf, offset: usize, len: usize) -> Vec<Sample> {
         let file = std::fs::File::open(path).expect("Failed to open parquet file");
 
@@ -662,6 +676,14 @@ impl BatchIterator {
             }
         }
 
+        if row_groups_to_read.is_empty() {
+            eprintln!(
+                "WARNING: No row groups to read for offset={}, len={}",
+                offset, len
+            );
+            return Vec::new();
+        }
+
         // Reopen file for the reader (builder consumes file)
         let file = std::fs::File::open(path).expect("Failed to reopen parquet file");
         let builder = ParquetRecordBatchReaderBuilder::try_new(file)
@@ -672,24 +694,12 @@ impl BatchIterator {
         let fen_idx = schema.index_of("fen").expect("No fen column");
         let score_idx = schema.index_of("score").expect("No score column");
 
-        let mut samples = Vec::with_capacity(if self.flip_augment { len * 2 } else { len });
-
-        if row_groups_to_read.is_empty() {
-            eprintln!(
-                "WARNING: No row groups to read for offset={}, len={}",
-                offset, len
-            );
-            return samples;
-        }
-
         // Build reader selecting only needed row groups
         let reader = builder
             .with_row_groups(row_groups_to_read)
             .with_batch_size(len.max(1024))
             .build()
             .expect("Failed to build reader");
-        let mut rows_skipped = 0usize;
-        let mut rows_collected = 0usize;
 
         // Calculate how many rows to skip within selected row groups
         let mut skip_in_first_rg = 0usize;
@@ -704,30 +714,29 @@ impl BatchIterator {
         }
         let rows_to_skip = skip_in_first_rg;
 
+        // First pass: collect raw data (FEN bytes/strings and scores)
+        let mut raw_data: Vec<(RawFen, f32)> = Vec::with_capacity(len);
+        let mut rows_skipped = 0usize;
+
         for batch_result in reader {
             let batch = batch_result.expect("Failed to read batch");
             let batch_len = batch.num_rows();
 
-            // Get columns by their actual indices
             let fen_col = batch.column(fen_idx);
             let score_col = batch.column(score_idx);
 
-            // Use AsArray trait to handle different array types
             use arrow::datatypes::DataType;
 
             for i in 0..batch_len {
-                // Skip rows until we reach offset
                 if rows_skipped < rows_to_skip {
                     rows_skipped += 1;
                     continue;
                 }
 
-                // Stop when we have enough
-                if rows_collected >= len {
+                if raw_data.len() >= len {
                     break;
                 }
 
-                // Get score
                 let score = match score_col.data_type() {
                     DataType::Int64 => score_col
                         .as_primitive::<arrow::datatypes::Int64Type>()
@@ -738,106 +747,72 @@ impl BatchIterator {
                     _ => 0.0,
                 };
 
-                // Get fen based on data type
-                match fen_col.data_type() {
+                let raw_fen = match fen_col.data_type() {
                     DataType::BinaryView => {
-                        let arr = fen_col.as_binary_view();
-                        let bytes = arr.value(i);
-                        let (w, b, stm) = get_halfkp_features_compressed(bytes, false);
-                        samples.push(Sample {
-                            w_feats: w,
-                            b_feats: b,
-                            stm,
-                            score,
-                        });
-                        if self.flip_augment {
-                            let (w_f, b_f, stm_f) = get_halfkp_features_compressed(bytes, true);
-                            samples.push(Sample {
-                                w_feats: w_f,
-                                b_feats: b_f,
-                                stm: stm_f,
-                                score: -score,
-                            });
-                        }
+                        RawFen::Bytes(fen_col.as_binary_view().value(i).to_vec())
                     }
                     DataType::Binary => {
-                        let arr = fen_col.as_binary::<i32>();
-                        let bytes = arr.value(i);
-                        let (w, b, stm) = get_halfkp_features_compressed(bytes, false);
-                        samples.push(Sample {
-                            w_feats: w,
-                            b_feats: b,
-                            stm,
-                            score,
-                        });
-                        if self.flip_augment {
-                            let (w_f, b_f, stm_f) = get_halfkp_features_compressed(bytes, true);
-                            samples.push(Sample {
-                                w_feats: w_f,
-                                b_feats: b_f,
-                                stm: stm_f,
-                                score: -score,
-                            });
-                        }
+                        RawFen::Bytes(fen_col.as_binary::<i32>().value(i).to_vec())
                     }
                     DataType::Utf8View => {
-                        let arr = fen_col.as_string_view();
-                        let fen = arr.value(i);
-                        let (w, b, stm) = get_halfkp_features(fen, false);
-                        samples.push(Sample {
-                            w_feats: w,
-                            b_feats: b,
-                            stm,
-                            score,
-                        });
-                        if self.flip_augment {
-                            let (w_f, b_f, stm_f) = get_halfkp_features(fen, true);
-                            samples.push(Sample {
-                                w_feats: w_f,
-                                b_feats: b_f,
-                                stm: stm_f,
-                                score: -score,
-                            });
-                        }
+                        RawFen::String(fen_col.as_string_view().value(i).to_string())
                     }
                     DataType::Utf8 => {
-                        let arr = fen_col.as_string::<i32>();
-                        let fen = arr.value(i);
-                        let (w, b, stm) = get_halfkp_features(fen, false);
-                        samples.push(Sample {
-                            w_feats: w,
-                            b_feats: b,
-                            stm,
-                            score,
-                        });
-                        if self.flip_augment {
-                            let (w_f, b_f, stm_f) = get_halfkp_features(fen, true);
-                            samples.push(Sample {
-                                w_feats: w_f,
-                                b_feats: b_f,
-                                stm: stm_f,
-                                score: -score,
-                            });
-                        }
+                        RawFen::String(fen_col.as_string::<i32>().value(i).to_string())
                     }
-                    _ => {
-                        eprintln!(
-                            "WARNING: Unknown fen column type: {:?}",
-                            fen_col.data_type()
-                        );
-                    }
-                }
+                    _ => continue,
+                };
 
-                rows_collected += 1;
+                raw_data.push((raw_fen, score));
             }
 
-            if rows_collected >= len {
+            if raw_data.len() >= len {
                 break;
             }
         }
 
+        // Second pass: parallel feature extraction using rayon
+        let flip_augment = self.flip_augment;
+        let samples: Vec<Sample> = raw_data
+            .par_iter()
+            .flat_map(|(raw_fen, score)| {
+                let (w, b, stm) = match raw_fen {
+                    RawFen::Bytes(bytes) => get_halfkp_features_compressed(bytes, false),
+                    RawFen::String(fen) => get_halfkp_features(fen, false),
+                };
+
+                let mut result = vec![Sample {
+                    w_feats: w,
+                    b_feats: b,
+                    stm,
+                    score: *score,
+                }];
+
+                if flip_augment {
+                    let (w_f, b_f, stm_f) = match raw_fen {
+                        RawFen::Bytes(bytes) => get_halfkp_features_compressed(bytes, true),
+                        RawFen::String(fen) => get_halfkp_features(fen, true),
+                    };
+                    result.push(Sample {
+                        w_feats: w_f,
+                        b_feats: b_f,
+                        stm: stm_f,
+                        score: -*score,
+                    });
+                }
+
+                result
+            })
+            .collect();
+
         samples
     }
+}
+
+/// Raw FEN data before feature extraction
+enum RawFen {
+    Bytes(Vec<u8>),
+    String(String),
 }
 
 fn collate_batch<B: Backend>(
@@ -896,6 +871,20 @@ fn collate_batch<B: Backend>(
 }
 
 // ============================================================================
+// Loss Functions
+// ============================================================================
+
+/// WDL-style loss using sigmoid scaling.
+/// Converts both prediction and target to win probabilities using sigmoid,
+/// then computes MSE. This naturally handles the wide score range (-15000 to +15000).
+fn wdl_loss<B: Backend>(pred: Tensor<B, 2>, target: Tensor<B, 2>) -> Tensor<B, 1> {
+    use burn::tensor::activation::sigmoid;
+    let pred_prob = sigmoid(pred / SIGMOID_SCALE);
+    let target_prob = sigmoid(target / SIGMOID_SCALE);
+    (pred_prob - target_prob).powf_scalar(2.0).mean()
+}
+
+// ============================================================================
 // Training
 // ============================================================================
 
@@ -908,6 +897,39 @@ enum BackendType {
 type GpuBackend = Autodiff<Wgpu>;
 type CpuBackend = Autodiff<NdArray>;
 
+/// Prefetching batch iterator that loads batches in a background thread
+struct PrefetchingIterator {
+    receiver: mpsc::Receiver<Vec<Sample>>,
+    _handle: std::thread::JoinHandle<()>,
+}
+
+impl PrefetchingIterator {
+    fn new(mut batch_iter: BatchIterator, prefetch_count: usize) -> Self {
+        let (sender, receiver) = mpsc::sync_channel(prefetch_count);
+
+        let handle = std::thread::spawn(move || {
+            while let Some(batch) = batch_iter.next_batch() {
+                if sender.send(batch).is_err() {
+                    break; // Receiver dropped
+                }
+            }
+        });
+
+        Self {
+            receiver,
+            _handle: handle,
+        }
+    }
+}
+
+impl Iterator for PrefetchingIterator {
+    type Item = Vec<Sample>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.receiver.recv().ok()
+    }
+}
+
 fn train_with_backend<B: burn::tensor::backend::AutodiffBackend>(
     sources: Vec<DataSource>,
     output: PathBuf,
@@ -916,42 +938,42 @@ fn train_with_backend<B: burn::tensor::backend::AutodiffBackend>(
     lr: f64,
     split_config: SplitConfig,
     flip_augment: bool,
+    prefetch: usize,
+    quiet: bool,
     device: B::Device,
 ) where
     B::InnerBackend: burn::tensor::backend::Backend<Device = B::Device>,
 {
     println!("Device: {:?}", device);
+    println!("Prefetch: {} batches", prefetch);
     debug_mem!("Start of train_with_backend");
 
-    // Create streaming iterators (no data loaded yet)
-    // Note: Data should be pre-shuffled during preprocessing for best results
-    let mut train_iter = BatchIterator::new(
+    // Get total counts first (lightweight metadata read)
+    let train_iter_info = BatchIterator::new(
         sources.clone(),
         "train",
         &split_config,
         batch_size,
         flip_augment,
     );
-    debug_mem!("After creating train_iter");
-
-    let mut val_iter = BatchIterator::new(
-        sources,
+    let val_iter_info = BatchIterator::new(
+        sources.clone(),
         "val",
         &split_config,
         batch_size,
-        false, // no flip for validation
+        false,
     );
-    debug_mem!("After creating val_iter");
 
-    let n_train_samples = train_iter.total_samples();
-    let n_val_samples = val_iter.total_samples();
-    let n_train_batches = train_iter.total_batches();
-    let n_val_batches = val_iter.total_batches();
+    let n_train_samples = train_iter_info.total_samples();
+    let n_val_samples = val_iter_info.total_samples();
+    let n_train_batches = train_iter_info.total_batches();
+    let n_val_batches = val_iter_info.total_batches();
 
     println!(
         "Train: {} samples ({} batches), Val: {} samples ({} batches)",
         n_train_samples, n_train_batches, n_val_samples, n_val_batches
     );
+    println!("Using WDL loss with scale={}", SIGMOID_SCALE);
 
     debug_mem!("Before creating model");
     let model: NNUE<B> = NNUE::new(&device);
@@ -964,41 +986,49 @@ fn train_with_backend<B: burn::tensor::backend::AutodiffBackend>(
 
     let total = (n_train_batches + n_val_batches) * epochs;
 
-    let pb = ProgressBar::new(total as u64);
-    pb.set_style(
-        ProgressStyle::default_bar()
-            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta}) {msg}")
-            .unwrap()
-            .progress_chars("#>-"),
-    );
+    // Create progress bar (hidden if quiet)
+    let pb = if quiet {
+        ProgressBar::hidden()
+    } else {
+        let pb = ProgressBar::new(total as u64);
+        pb.set_style(
+            ProgressStyle::default_bar()
+                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta}) {msg}")
+                .unwrap()
+                .progress_chars("#>-"),
+        );
+        pb
+    };
 
     let mut best_val = f32::INFINITY;
     let mut model = model;
 
     for epoch in 0..epochs {
-        // Reset iterators for new epoch
-        train_iter.reset();
-        val_iter.reset();
+        let epoch_start = std::time::Instant::now();
 
-        // Training - stream batches from disk
+        // Create fresh iterators with prefetching for each epoch
+        let train_iter = BatchIterator::new(
+            sources.clone(),
+            "train",
+            &split_config,
+            batch_size,
+            flip_augment,
+        );
+        let train_prefetch = PrefetchingIterator::new(train_iter, prefetch);
+
+        // Training - stream batches with prefetching
         let mut train_loss = 0.0f32;
         let mut train_batch_count = 0;
         debug_mem!(format!("Epoch {} start training", epoch + 1));
 
-        while let Some(batch) = train_iter.next_batch() {
-            debug_mem!(format!(
-                "Train batch {} - after next_batch",
-                train_batch_count
-            ));
-
+        for batch in train_prefetch {
             let (w_idx, w_mask, b_idx, b_mask, stm, target) = collate_batch::<B>(&batch, &device);
-            debug_mem!(format!("Train batch {} - after collate", train_batch_count));
 
             // Drop batch early to free memory
             drop(batch);
 
             let pred = model.forward(w_idx, w_mask, b_idx, b_mask, stm);
-            let loss = (pred - target).powf_scalar(2.0).mean();
+            let loss = wdl_loss(pred, target);
 
             let grads = loss.backward();
             let grads = GradientsParams::from_grads(grads, &model);
@@ -1006,46 +1036,67 @@ fn train_with_backend<B: burn::tensor::backend::AutodiffBackend>(
 
             train_loss += loss.into_scalar().elem::<f32>();
             train_batch_count += 1;
-
-            debug_mem!(format!(
-                "Train batch {} - end of iteration",
-                train_batch_count
-            ));
             pb.inc(1);
         }
         train_loss /= train_batch_count.max(1) as f32;
 
-        // Validation - stream batches from disk
+        // Validation with prefetching
+        let val_iter = BatchIterator::new(
+            sources.clone(),
+            "val",
+            &split_config,
+            batch_size,
+            false,
+        );
+        let val_prefetch = PrefetchingIterator::new(val_iter, prefetch);
+
         let mut val_loss = 0.0f32;
         let mut val_batch_count = 0;
         let model_valid = model.valid();
-        while let Some(batch) = val_iter.next_batch() {
+
+        for batch in val_prefetch {
             let (w_idx, w_mask, b_idx, b_mask, stm, target) =
                 collate_batch::<B::InnerBackend>(&batch, &device);
             let pred = model_valid.forward(w_idx, w_mask, b_idx, b_mask, stm);
-            let loss = (pred - target).powf_scalar(2.0).mean();
+            let loss = wdl_loss(pred, target);
             val_loss += loss.into_scalar().elem::<f32>();
             val_batch_count += 1;
             pb.inc(1);
         }
         val_loss /= val_batch_count.max(1) as f32;
 
-        pb.set_message(format!(
-            "epoch {}/{} train={:.1} val={:.1}",
-            epoch + 1,
-            epochs,
-            train_loss,
-            val_loss
-        ));
+        let epoch_elapsed = epoch_start.elapsed();
+
+        if quiet {
+            println!(
+                "Epoch {}/{}: train_loss={:.6}, val_loss={:.6}, time={:.1}s",
+                epoch + 1,
+                epochs,
+                train_loss,
+                val_loss,
+                epoch_elapsed.as_secs_f32()
+            );
+        } else {
+            pb.set_message(format!(
+                "epoch {}/{} train={:.4} val={:.4}",
+                epoch + 1,
+                epochs,
+                train_loss,
+                val_loss
+            ));
+        }
 
         if val_loss < best_val {
             best_val = val_loss;
-            println!("\nNew best val={:.1}, saving to {:?}", val_loss, output);
+            if !quiet {
+                println!("\nNew best val={:.4}, saving to {:?}", val_loss, output);
+            }
             // TODO: save model in NNUE format
         }
     }
 
     pb.finish_with_message("Done");
+    println!("Training complete. Best val_loss={:.6}", best_val);
 }
 
 // ============================================================================
@@ -1109,13 +1160,21 @@ struct Args {
     /// Backend to use for training
     #[arg(long, value_enum, default_value_t = BackendType::Gpu)]
     backend: BackendType,
+
+    /// Number of batches to prefetch in background thread
+    #[arg(long, default_value_t = 4)]
+    prefetch: usize,
+
+    /// Suppress progress bar, only print epoch summaries
+    #[arg(long)]
+    quiet: bool,
 }
 
 fn main() {
     let args = Args::parse();
 
     // Load from config file or CLI args
-    let (sources, output, epochs, batch_size, lr, val_ratio, test_ratio, flip_augment, backend) =
+    let (sources, output, epochs, batch_size, lr, val_ratio, test_ratio, flip_augment, backend, prefetch, quiet) =
         if let Some(config_path) = &args.config {
             let config = TrainConfig::load(config_path).unwrap_or_else(|e| {
                 eprintln!("Error: {}", e);
@@ -1132,6 +1191,8 @@ fn main() {
                 config.test_ratio,
                 config.flip_augment,
                 backend,
+                config.prefetch,
+                config.quiet,
             )
         } else {
             if args.data.is_empty() {
@@ -1148,6 +1209,8 @@ fn main() {
                 args.test_ratio,
                 args.flip_augment,
                 args.backend,
+                args.prefetch,
+                args.quiet,
             )
         };
 
@@ -1164,6 +1227,7 @@ fn main() {
     println!("  Test ratio: {}", test_ratio);
     println!("  Flip augment: {}", flip_augment);
     println!("  Backend: {:?}", backend);
+    println!("  Prefetch: {}", prefetch);
 
     let split_config = SplitConfig::new(val_ratio, test_ratio);
 
@@ -1177,6 +1241,8 @@ fn main() {
                 lr,
                 split_config,
                 flip_augment,
+                prefetch,
+                quiet,
                 WgpuDevice::default(),
             );
         }
@@ -1189,6 +1255,8 @@ fn main() {
                 lr,
                 split_config,
                 flip_augment,
+                prefetch,
+                quiet,
                 NdArrayDevice::Cpu,
             );
         }

@@ -9,6 +9,11 @@ uv sync --reinstall-package dummy-chess
 
 ## Quick Start
 
+**IMPORTANT:** Always run with 8GB memory limit to prevent OOM:
+```bash
+ulimit -v 8388608
+```
+
 ```bash
 cd training
 
@@ -19,10 +24,10 @@ zstd -d lichess_db_puzzle.csv.zst
 cd ..
 
 # 2. Preprocess
-uv run python preprocess_puzzles.py -n 1000000  # 1M positions
+ulimit -v 8388608 && uv run python preprocess.py ...
 
 # 3. Train
-uv run python train.py --epochs 30 --batch-size 8192
+ulimit -v 8388608 && uv run python train.py --epochs 30 --batch-size 8192
 
 # 4. Deploy
 cp network.nnue ../

@@ -6,7 +6,9 @@
 #include <pybind11/stl.h>
 
 #include <Engine.hpp>
+#include <NNUE.hpp>
 #include <PGN.hpp>
+#include <tbconfig.h>
 
 namespace py = pybind11;
 using namespace std::chrono;
@@ -168,14 +170,18 @@ public:
     return engine.perft(Engine::depth_t(depth));
   }
 
-  std::tuple<MoveBindings, double> get_fixed_depth_move(int depth) {
+  py::object get_fixed_depth_move(int depth) {
     init_abstorage_scope();
     Engine::iddfs_state idstate;
     const Engine::depth_t d = Engine::depth_t(depth);
     move_t bestmove = engine.start_thinking(d, idstate);
-    return std::make_tuple(
+
+    py::object namedtuple = py::module_::import("collections").attr("namedtuple");
+    py::object SearchResult = namedtuple("SearchResult", py::make_tuple("move", "score", "nodes"));
+    return SearchResult(
         MoveBindings(engine.as_board(), bestmove),
-        float(idstate.eval) / Engine::MATERIAL_PAWN
+        double(float(idstate.eval) / Engine::MATERIAL_PAWN),
+        engine.nodes_searched
     );
   }
 
@@ -230,6 +236,22 @@ public:
 
     double evaluate() {
         return float(engine.evaluate()) / Engine::MATERIAL_PAWN;
+    }
+
+    static bool set_tb_path(const std::string &path) {
+        // Free existing tablebases to avoid memory leak
+        if (TB_LARGEST > 0) {
+            tb::free();
+        }
+        return tb::init(path);
+    }
+
+    static void free_tb() {
+        tb::free();
+    }
+
+    static int tb_max_pieces() {
+        return TB_LARGEST;
     }
 
 private:
@@ -315,272 +337,173 @@ void register_preprocess_functions(py::module_ &m) {
     return result;
   }, "Get variant names from batch of compressed FENs. Returns list of 'standard', 'chess960', or 'crazyhouse'.");
 
-  // HalfKP feature extraction from compressed FEN bytes
-  // Returns (white_indices, white_offsets, black_indices, black_offsets, stm)
-  // where indices are flat arrays and offsets mark boundaries for each position
-  // If flip=true, swaps white/black perspectives and flips STM (caller should negate scores)
-  m.def("get_halfkp_features_batch", [](const std::vector<py::bytes> &data_list, bool flip) {
-    const size_t n_positions = data_list.size();
-    
-    // Pre-allocate with estimated sizes (max 30 pieces per position)
-    std::vector<int32_t> white_indices;
-    std::vector<int32_t> black_indices;
-    std::vector<int64_t> white_offsets(n_positions);
-    std::vector<int64_t> black_offsets(n_positions);
-    std::vector<int64_t> stm(n_positions);
-    
-    white_indices.reserve(n_positions * 16);
-    black_indices.reserve(n_positions * 16);
-    
-    for (size_t pos_idx = 0; pos_idx < n_positions; ++pos_idx) {
-      // Record offsets
-      white_offsets[pos_idx] = static_cast<int64_t>(white_indices.size());
-      black_offsets[pos_idx] = static_cast<int64_t>(black_indices.size());
-      
-      // Decompress FEN
-      char *buffer;
-      Py_ssize_t length;
-      PyBytes_AsStringAndSize(data_list[pos_idx].ptr(), &buffer, &length);
-      std::vector<uint8_t> v(buffer, buffer + length);
-      fen::FEN f = fen::compress::decompress_fen(v);
-      
-      // Set side to move (0 = white, 1 = black), flip if requested
-      int64_t stm_val = (f.active_player == WHITE) ? 0 : 1;
-      stm[pos_idx] = flip ? (1 - stm_val) : stm_val;
-      
-      // Parse board string to find pieces and king positions
-      int wk = -1, bk = -1;
-      std::vector<std::tuple<int, int, bool>> pieces; // (square, piece_type, is_white)
-      
-      int sq = 56; // Start at a8 (rank 8, file a)
-      for (char c : f.board) {
-        if (sq < 0) break;
-        
-        int piece_type = -1;
-        bool is_white = false;
-        
-        switch (c) {
-          case 'P': piece_type = 0; is_white = true; break;
-          case 'N': piece_type = 1; is_white = true; break;
-          case 'B': piece_type = 2; is_white = true; break;
-          case 'R': piece_type = 3; is_white = true; break;
-          case 'Q': piece_type = 4; is_white = true; break;
-          case 'K': wk = sq; break;
-          case 'p': piece_type = 0; is_white = false; break;
-          case 'n': piece_type = 1; is_white = false; break;
-          case 'b': piece_type = 2; is_white = false; break;
-          case 'r': piece_type = 3; is_white = false; break;
-          case 'q': piece_type = 4; is_white = false; break;
-          case 'k': bk = sq; break;
-          case ' ': break; // empty square
-          default: break;
-        }
-        
-        if (piece_type >= 0) {
-          pieces.emplace_back(sq, piece_type, is_white);
-        }
-        
-        // Move to next square (row by row, left to right)
-        sq++;
-        if (sq % 8 == 0) {
-          sq -= 16; // Move to start of previous rank
-        }
-      }
-      
-      // Compute HalfKP features for each piece
-      for (const auto& [piece_sq, pt, is_white] : pieces) {
-        // White perspective: friend=0, enemy=1
-        int w_idx = is_white ? 0 : 1;
-        // Black perspective: friend=0, enemy=1 (inverted)
-        int b_idx = is_white ? 1 : 0;
-        
-        // Feature index formula: king_sq * 641 + piece_index * 64 + piece_sq + 1
-        // piece_index = piece_type * 2 + color_offset
-        int32_t white_feat = wk * 641 + (pt * 2 + w_idx) * 64 + piece_sq + 1;
-        int32_t black_feat = (63 - bk) * 641 + (pt * 2 + b_idx) * 64 + (63 - piece_sq) + 1;
-        
-        if (flip) {
-          // Swap white and black features
-          white_indices.push_back(black_feat);
-          black_indices.push_back(white_feat);
-        } else {
-          white_indices.push_back(white_feat);
-          black_indices.push_back(black_feat);
-        }
-      }
-    }
-    
-    // Convert to numpy arrays
-    auto white_idx_arr = py::array_t<int32_t>(white_indices.size());
-    auto black_idx_arr = py::array_t<int32_t>(black_indices.size());
-    auto white_off_arr = py::array_t<int64_t>(n_positions);
-    auto black_off_arr = py::array_t<int64_t>(n_positions);
-    auto stm_arr = py::array_t<int64_t>(n_positions);
-    
-    std::copy(white_indices.begin(), white_indices.end(), white_idx_arr.mutable_data());
-    std::copy(black_indices.begin(), black_indices.end(), black_idx_arr.mutable_data());
-    std::copy(white_offsets.begin(), white_offsets.end(), white_off_arr.mutable_data());
-    std::copy(black_offsets.begin(), black_offsets.end(), black_off_arr.mutable_data());
-    std::copy(stm.begin(), stm.end(), stm_arr.mutable_data());
-    
-    return py::make_tuple(white_idx_arr, white_off_arr, black_idx_arr, black_off_arr, stm_arr);
-  }, py::arg("data_list"), py::arg("flip") = false,
-  "Extract HalfKP features from batch of compressed FENs. Returns (w_idx, w_off, b_idx, b_off, stm). If flip=true, swaps perspectives (caller should negate scores)");
+  // ========================================================================
+  // Feature extraction helpers
+  // ========================================================================
 
-  // HalfKAv2 feature extraction
-  // Uses king buckets (12 buckets) + horizontal mirroring to reduce feature space
-  // and improve generalization. Buckets group strategically similar king positions.
-  //
-  // King bucket layout (from white's perspective, mirrored for black):
-  //   Files a-d are mirrored to e-h (horizontal symmetry)
-  //   Buckets based on king safety zones:
-  //     0-3: back rank (a1-d1 -> buckets by file groups)
-  //     4-7: second rank  
-  //     8-11: ranks 3-8 (less granular, king rarely there in middlegame)
-  //
-  // Feature index = bucket * 640 + piece_type * 2 * 64 + piece_color * 64 + piece_sq + 1
-  // Total features = 12 * 640 + 1 = 7681
+  // Build numpy result tuple from a batch of HalfKP::Features.
+  // idx_as_int64: if true, output index arrays as int64 (for torch); otherwise int32.
+  auto build_result = [](
+      const std::vector<nnue::HalfKP::Features>& feats,
+      bool idx_as_int64) -> py::tuple {
+    const size_t n = feats.size();
+    size_t total = 0;
+    for (const auto& f : feats) total += f.count;
 
-  m.def("get_halfkav2_features_batch", [](const std::vector<py::bytes> &data_list, bool flip) {
-    // King bucket table: maps king square (0-63) to bucket (0-11)
-    // For files e-h, we mirror to a-d first, so this table is for files a-d only
-    // Layout prioritizes back ranks where kings usually are
-    static constexpr int KING_BUCKET[32] = {
-      // Rank 1 (a1-d1): buckets 0-3 (most granular - castled king positions)
-      0, 1, 2, 3,
-      // Rank 2 (a2-d2): buckets 4-5 (king moved up one)
-      4, 4, 5, 5,
-      // Rank 3 (a3-d3): buckets 6-7
-      6, 6, 7, 7,
-      // Rank 4 (a4-d4): bucket 8
-      8, 8, 8, 8,
-      // Rank 5 (a5-d5): bucket 9
-      9, 9, 9, 9,
-      // Rank 6 (a6-d6): bucket 10
-      10, 10, 10, 10,
-      // Ranks 7-8 (a7-d8): bucket 11 (rare positions)
-      11, 11, 11, 11,
-    };
-    
-    const size_t n_positions = data_list.size();
-    
-    std::vector<int32_t> white_indices;
-    std::vector<int32_t> black_indices;
-    std::vector<int64_t> white_offsets(n_positions);
-    std::vector<int64_t> black_offsets(n_positions);
-    std::vector<int64_t> stm(n_positions);
-    
-    white_indices.reserve(n_positions * 16);
-    black_indices.reserve(n_positions * 16);
-    
-    auto get_bucket_and_mirror = [](int king_sq) -> std::pair<int, bool> {
-      int file = king_sq % 8;
-      int rank = king_sq / 8;
-      bool mirror = (file >= 4);
-      if (mirror) {
-        file = 7 - file;  // Mirror e-h to d-a
+    py::array_t<int64_t> white_off_arr(n);
+    py::array_t<int64_t> black_off_arr(n);
+    py::array_t<int64_t> stm_arr(n);
+    auto* w_off = white_off_arr.mutable_data();
+    auto* b_off = black_off_arr.mutable_data();
+    auto* stm_out = stm_arr.mutable_data();
+
+    if (idx_as_int64) {
+      py::array_t<int64_t> w_arr(total);
+      py::array_t<int64_t> b_arr(total);
+      auto* w = w_arr.mutable_data();
+      auto* b = b_arr.mutable_data();
+      size_t pos = 0;
+      for (size_t i = 0; i < n; ++i) {
+        w_off[i] = static_cast<int64_t>(pos);
+        b_off[i] = static_cast<int64_t>(pos);
+        stm_out[i] = feats[i].stm;
+        for (int j = 0; j < feats[i].count; ++j) {
+          w[pos + j] = feats[i].white[j];
+          b[pos + j] = feats[i].black[j];
+        }
+        pos += feats[i].count;
       }
-      // Index into bucket table: rank * 4 + file (for files a-d)
-      int bucket_idx = rank * 4 + file;
-      if (bucket_idx >= 32) bucket_idx = 31;  // Safety clamp
-      return {KING_BUCKET[bucket_idx], mirror};
-    };
-    
-    for (size_t pos_idx = 0; pos_idx < n_positions; ++pos_idx) {
-      white_offsets[pos_idx] = static_cast<int64_t>(white_indices.size());
-      black_offsets[pos_idx] = static_cast<int64_t>(black_indices.size());
-      
-      // Decompress FEN
-      char *buffer;
-      Py_ssize_t length;
-      PyBytes_AsStringAndSize(data_list[pos_idx].ptr(), &buffer, &length);
-      std::vector<uint8_t> v(buffer, buffer + length);
-      fen::FEN f = fen::compress::decompress_fen(v);
-      
-      int64_t stm_val = (f.active_player == WHITE) ? 0 : 1;
-      stm[pos_idx] = flip ? (1 - stm_val) : stm_val;
-      
-      // Parse board
-      int wk = -1, bk = -1;
-      std::vector<std::tuple<int, int, bool>> pieces;
-      
-      int sq = 56;
-      for (char c : f.board) {
-        if (sq < 0) break;
-        
-        int piece_type = -1;
-        bool is_white = false;
-        
-        switch (c) {
-          case 'P': piece_type = 0; is_white = true; break;
-          case 'N': piece_type = 1; is_white = true; break;
-          case 'B': piece_type = 2; is_white = true; break;
-          case 'R': piece_type = 3; is_white = true; break;
-          case 'Q': piece_type = 4; is_white = true; break;
-          case 'K': wk = sq; break;
-          case 'p': piece_type = 0; is_white = false; break;
-          case 'n': piece_type = 1; is_white = false; break;
-          case 'b': piece_type = 2; is_white = false; break;
-          case 'r': piece_type = 3; is_white = false; break;
-          case 'q': piece_type = 4; is_white = false; break;
-          case 'k': bk = sq; break;
-          default: break;
-        }
-        
-        if (piece_type >= 0) {
-          pieces.emplace_back(sq, piece_type, is_white);
-        }
-        
-        sq++;
-        if (sq % 8 == 0) {
-          sq -= 16;
-        }
+      return py::make_tuple(w_arr, white_off_arr, b_arr, black_off_arr, stm_arr);
+    } else {
+      py::array_t<int32_t> w_arr(total);
+      py::array_t<int32_t> b_arr(total);
+      auto* w = w_arr.mutable_data();
+      auto* b = b_arr.mutable_data();
+      size_t pos = 0;
+      for (size_t i = 0; i < n; ++i) {
+        w_off[i] = static_cast<int64_t>(pos);
+        b_off[i] = static_cast<int64_t>(pos);
+        stm_out[i] = feats[i].stm;
+        std::copy(feats[i].white, feats[i].white + feats[i].count, w + pos);
+        std::copy(feats[i].black, feats[i].black + feats[i].count, b + pos);
+        pos += feats[i].count;
       }
-      
-      // Get king buckets and mirror flags
-      auto [w_bucket, w_mirror] = get_bucket_and_mirror(wk);
-      auto [b_bucket, b_mirror] = get_bucket_and_mirror(63 - bk);  // Flip for black's perspective
-      
-      // Compute HalfKAv2 features for each piece
-      for (const auto& [piece_sq, pt, is_white] : pieces) {
-        int w_idx = is_white ? 0 : 1;
-        int b_idx = is_white ? 1 : 0;
-        
-        // Apply horizontal mirroring if king is on kingside
-        int w_piece_sq = w_mirror ? (piece_sq ^ 7) : piece_sq;  // XOR with 7 mirrors file
-        int b_piece_sq_flipped = 63 - piece_sq;  // Vertical flip for black
-        int b_piece_sq = b_mirror ? (b_piece_sq_flipped ^ 7) : b_piece_sq_flipped;
-        
-        // Feature index: bucket * 640 + piece_index * 64 + piece_sq + 1
-        int32_t white_feat = w_bucket * 641 + (pt * 2 + w_idx) * 64 + w_piece_sq + 1;
-        int32_t black_feat = b_bucket * 641 + (pt * 2 + b_idx) * 64 + b_piece_sq + 1;
-        
-        if (flip) {
-          white_indices.push_back(black_feat);
-          black_indices.push_back(white_feat);
-        } else {
-          white_indices.push_back(white_feat);
-          black_indices.push_back(black_feat);
-        }
-      }
+      return py::make_tuple(w_arr, white_off_arr, b_arr, black_off_arr, stm_arr);
     }
-    
-    // Convert to numpy arrays
-    auto white_idx_arr = py::array_t<int32_t>(white_indices.size());
-    auto black_idx_arr = py::array_t<int32_t>(black_indices.size());
-    auto white_off_arr = py::array_t<int64_t>(n_positions);
-    auto black_off_arr = py::array_t<int64_t>(n_positions);
-    auto stm_arr = py::array_t<int64_t>(n_positions);
-    
-    std::copy(white_indices.begin(), white_indices.end(), white_idx_arr.mutable_data());
-    std::copy(black_indices.begin(), black_indices.end(), black_idx_arr.mutable_data());
-    std::copy(white_offsets.begin(), white_offsets.end(), white_off_arr.mutable_data());
-    std::copy(black_offsets.begin(), black_offsets.end(), black_off_arr.mutable_data());
-    std::copy(stm.begin(), stm.end(), stm_arr.mutable_data());
-    
-    return py::make_tuple(white_idx_arr, white_off_arr, black_idx_arr, black_off_arr, stm_arr);
+  };
+
+  // Generic batch extraction from compressed FEN bytes.
+  // get_fen(pos_idx) -> (data_ptr, length)
+  // feature_fn(data, length, flip) -> Features
+  auto extract_batch = [&](
+      size_t n_positions, bool flip, bool idx_as_int64,
+      auto get_fen, auto feature_fn) -> py::tuple {
+    std::vector<nnue::HalfKP::Features> feats(n_positions);
+    for (size_t i = 0; i < n_positions; ++i) {
+      auto [data, length] = get_fen(i);
+      feats[i] = feature_fn(data, length, flip);
+    }
+    return build_result(feats, idx_as_int64);
+  };
+
+  auto halfkp_fn = [](const uint8_t* data, size_t len, bool flip) {
+    return nnue::HalfKP::get_features_compressed(data, len, flip);
+  };
+  auto halfkav2_fn = [](const uint8_t* data, size_t len, bool flip) {
+    return nnue::HalfKAv2::get_features_compressed(data, len, flip);
+  };
+
+  // ========================================================================
+  // Feature extraction bindings
+  // ========================================================================
+
+  // Helper: get_fen lambda for Arrow buffers
+  auto arrow_get_fen = [](const uint8_t* data_ptr, const int64_t* off_ptr) {
+    return [=](size_t i) -> std::pair<const uint8_t*, size_t> {
+      return {data_ptr + off_ptr[i], static_cast<size_t>(off_ptr[i+1] - off_ptr[i])};
+    };
+  };
+
+  // Helper: get_fen lambda for py::bytes list
+  auto bytes_get_fen = [](const std::vector<py::bytes>& data_list) {
+    return [&](size_t i) -> std::pair<const uint8_t*, size_t> {
+      char *buffer; Py_ssize_t length;
+      PyBytes_AsStringAndSize(data_list[i].ptr(), &buffer, &length);
+      return {reinterpret_cast<const uint8_t*>(buffer), static_cast<size_t>(length)};
+    };
+  };
+
+  // Helper: single FEN to numpy tuple
+  auto single_fen_result = [](const nnue::HalfKP::Features& f) {
+    py::array_t<int32_t> w_arr(f.count);
+    py::array_t<int32_t> b_arr(f.count);
+    std::copy(f.white, f.white + f.count, w_arr.mutable_data());
+    std::copy(f.black, f.black + f.count, b_arr.mutable_data());
+    return py::make_tuple(w_arr, b_arr, f.stm);
+  };
+
+  // -- HalfKP --
+
+  m.def("get_halfkp_features", [&](const std::string &fenstring, bool flip) {
+    Board board(fen::load_from_string(fenstring));
+    return single_fen_result(nnue::HalfKP::get_features(board, flip));
+  }, py::arg("fen"), py::arg("flip") = false,
+  "Extract HalfKP features for a single FEN. Returns (white_indices, black_indices, stm).");
+
+  m.def("get_halfkp_features_batch", [&](const std::vector<py::bytes> &data_list, bool flip) {
+    return extract_batch(data_list.size(), flip, false, bytes_get_fen(data_list), halfkp_fn);
   }, py::arg("data_list"), py::arg("flip") = false,
-  "Extract HalfKAv2 features from batch of compressed FENs. Uses 12 king buckets + horizontal mirroring. Returns (w_idx, w_off, b_idx, b_off, stm).");
+  "Extract HalfKP features from batch of compressed FENs. Returns (w_idx, w_off, b_idx, b_off, stm).");
+
+  // Single-batch extraction via raw pointers (no py::buffer overhead).
+  // data_ptr/offsets_ptr: raw addresses of Arrow buffers (caller keeps them alive)
+  // start: index of first position in this batch
+  // count: number of positions to extract
+  auto extract_raw = [&](
+      uintptr_t data_ptr, uintptr_t offsets_ptr,
+      size_t start, size_t count, bool flip,
+      auto feature_fn) -> py::tuple {
+    const auto* data = reinterpret_cast<const uint8_t*>(data_ptr);
+    const auto* offsets = reinterpret_cast<const int64_t*>(offsets_ptr);
+    auto get_fen = [=](size_t i) -> std::pair<const uint8_t*, size_t> {
+      size_t idx = start + i;
+      return {data + offsets[idx], static_cast<size_t>(offsets[idx + 1] - offsets[idx])};
+    };
+    return extract_batch(count, flip, true, get_fen, feature_fn);
+  };
+
+  m.def("get_halfkp_features_raw", [&](
+      uintptr_t data_ptr, uintptr_t offsets_ptr,
+      size_t start, size_t count, bool flip) {
+    return extract_raw(data_ptr, offsets_ptr, start, count, flip, halfkp_fn);
+  }, py::arg("data_ptr"), py::arg("offsets_ptr"),
+  py::arg("start"), py::arg("count"), py::arg("flip") = false,
+  "Extract HalfKP features via raw pointers. Returns (w_idx, w_off, b_idx, b_off, stm).");
+
+  m.def("get_halfkav2_features_raw", [&](
+      uintptr_t data_ptr, uintptr_t offsets_ptr,
+      size_t start, size_t count, bool flip) {
+    return extract_raw(data_ptr, offsets_ptr, start, count, flip, halfkav2_fn);
+  }, py::arg("data_ptr"), py::arg("offsets_ptr"),
+  py::arg("start"), py::arg("count"), py::arg("flip") = false,
+  "Extract HalfKAv2 features via raw pointers. Returns (w_idx, w_off, b_idx, b_off, stm).");
+
+  // ========================================================================
+  // Torch tensor output (optional, requires -DENABLE_TORCH=ON)
+  // ========================================================================
+
+  // -- HalfKAv2 --
+
+  m.def("get_halfkav2_features", [&](const std::string &fenstring, bool flip) {
+    Board board(fen::load_from_string(fenstring));
+    return single_fen_result(nnue::HalfKAv2::get_features(board, flip));
+  }, py::arg("fen"), py::arg("flip") = false,
+  "Extract HalfKAv2 features for a single FEN. Returns (white_indices, black_indices, stm).");
+
+  m.def("get_halfkav2_features_batch", [&](const std::vector<py::bytes> &data_list, bool flip) {
+    return extract_batch(data_list.size(), flip, false, bytes_get_fen(data_list), halfkav2_fn);
+  }, py::arg("data_list"), py::arg("flip") = false,
+  "Extract HalfKAv2 features from batch of compressed FENs. Returns (w_idx, w_off, b_idx, b_off, stm).");
 
   // Export constants for Python
   m.attr("HALFKP_SIZE") = 64 * 641 + 1;   // 41025
@@ -682,6 +605,45 @@ void register_preprocess_functions(py::module_ &m) {
 
 }
 
+class NNUEBindings {
+public:
+  NNUEBindings(const std::string &path) {
+    weights_ = std::make_unique<nnue::NetworkWeights>();
+    if (!nnue::NetworkLoader::load(path.c_str(), *weights_)) {
+      weights_.reset();
+      throw std::runtime_error("failed to load NNUE file: " + path);
+    }
+    eval_.set_weights(weights_.get());
+    eval_.reset();
+  }
+
+  int32_t evaluate(const std::string &fenstring) {
+    Board board(fen::load_from_string(fenstring));
+    eval_.set_weights(weights_.get());
+    eval_.reset();
+    int32_t cp = eval_.evaluate(board);
+    // Network outputs from white's perspective; negate for black STM
+    return (board.activePlayer() == BLACK) ? -cp : cp;
+  }
+
+  py::array_t<int32_t> evaluate_batch(const std::vector<std::string> &fens) {
+    auto result = py::array_t<int32_t>(fens.size());
+    auto buf = result.mutable_data();
+    for (size_t i = 0; i < fens.size(); ++i) {
+      Board board(fen::load_from_string(fens[i]));
+      eval_.set_weights(weights_.get());
+      eval_.reset();
+      int32_t cp = eval_.evaluate(board);
+      buf[i] = (board.activePlayer() == BLACK) ? -cp : cp;
+    }
+    return result;
+  }
+
+private:
+  std::unique_ptr<nnue::NetworkWeights> weights_;
+  nnue::Evaluator eval_;
+};
+
 PYBIND11_MODULE(_dummychess, m) {
   // Create preprocess submodule
   py::module_ preprocess = m.def_submodule("preprocess", "Preprocessing utilities for NNUE training");
@@ -689,6 +651,14 @@ PYBIND11_MODULE(_dummychess, m) {
   
   // Also register on main module for backward compatibility
   register_preprocess_functions(m);
+
+  py::class_<NNUEBindings>(m, "NNUE")
+    .def(py::init<const std::string &>(), py::arg("path"),
+        "Load a quantized .nnue network file")
+    .def("evaluate", &NNUEBindings::evaluate, py::arg("fen"),
+        "Evaluate a FEN string. Returns centipawns from side-to-move perspective.")
+    .def("evaluate_batch", &NNUEBindings::evaluate_batch, py::arg("fens"),
+        "Evaluate a list of FEN strings. Returns numpy array of centipawn scores.");
 
   py::enum_<BoardBindings::Status>(m, "Status")
     .value("ONGOING", BoardBindings::Status::ONGOING)
@@ -730,5 +700,11 @@ PYBIND11_MODULE(_dummychess, m) {
     .def("iterate_depths", &BoardBindings::iterate_depths)
     .def("evaluate", &BoardBindings::evaluate)
     .def("get_simple_features", &BoardBindings::get_simple_feature_set)
-    .def("get_move_from_move_t", &BoardBindings::get_move_from_move_t);
+    .def("get_move_from_move_t", &BoardBindings::get_move_from_move_t)
+    .def_static("set_tb_path", &BoardBindings::set_tb_path, py::arg("path"),
+        "Initialize Syzygy tablebases from the given path. Returns true on success.")
+    .def_static("free_tb", &BoardBindings::free_tb,
+        "Free Syzygy tablebase resources.")
+    .def_static("tb_max_pieces", &BoardBindings::tb_max_pieces,
+        "Return the maximum number of pieces supported by the loaded tablebases (0 if not loaded).");
 }

@@ -330,10 +330,10 @@ class TestKingBuckets:
 
     def test_mirroring_symmetry(self):
         """Test that mirrored positions produce consistent features."""
-        # Position with king on g1
-        fen1 = "8/8/8/8/8/8/8/6K1 w - - 0 1"
-        # Position with king on b1 (mirrored)
-        fen2 = "8/8/8/8/8/8/8/1K6 w - - 0 1"
+        # Position with white king on g1 and black king on e8
+        fen1 = "4k3/8/8/8/8/8/8/6K1 w - - 0 1"
+        # Position with white king on b1 (mirrored) and black king on e8
+        fen2 = "4k3/8/8/8/8/8/8/1K6 w - - 0 1"
 
         compressed1 = dummy_chess.compress_fen(fen1)
         compressed2 = dummy_chess.compress_fen(fen2)

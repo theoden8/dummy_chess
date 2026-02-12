@@ -39,11 +39,11 @@ namespace nnue {
 // ============================================================================
 
 // HalfKP feature dimensions
-constexpr size_t KING_SQUARES = 64;
-constexpr size_t PIECE_SQUARES = 64;
 constexpr size_t PIECE_TYPES = 10;  // 5 piece types * 2 colors (no kings)
-constexpr size_t HALFKP_SIZE = KING_SQUARES * (PIECE_TYPES * PIECE_SQUARES + 1);
-// = 64 * 641 = 41024
+constexpr size_t HALFKP_FEATURES = board::SIZE * (PIECE_TYPES * board::SIZE + 1);
+// = 64 * 641 = 41024 (number of actual HalfKP feature indices)
+constexpr size_t HALFKP_SIZE = HALFKP_FEATURES + 1;
+// = 41025 (EmbeddingBag size in training, includes zero/padding index)
 
 // Network architecture
 constexpr size_t FT_OUT = 256;          // Feature transformer output
@@ -56,6 +56,7 @@ constexpr size_t OUT_IN = L2_OUT;
 // Quantization constants
 constexpr int FT_SCALE = 127;           // Feature transformer activation scale
 constexpr int NET_SCALE = 64;           // Hidden layer activation scale
+constexpr int SIGMOID_SCALE = 400;      // Must match training SIGMOID_SCALE
 
 // Maximum search depth for accumulator stack
 constexpr size_t MAX_PLY = 256;
@@ -111,6 +112,77 @@ template<typename T, size_t N, size_t Alignment = CACHE_LINE>
 using AlignedArray = std::array<T, N>;
 
 // ============================================================================
+// Compressed FEN decoder with continuation-passing per piece
+// ============================================================================
+
+// Nibble encoding (from FEN.hpp): K=0,Q=1,R=2,B=3,N=4,P=5,k=6,q=7,r=8,b=9,n=10,p=11, 0xC=empty run
+// Nibble-to-PIECE lookup: nib%6 → {KING,QUEEN,ROOK,BISHOP,KNIGHT,PAWN}
+static constexpr PIECE NIB_TO_PIECE[6] = {KING, QUEEN, ROOK, BISHOP, KNIGHT, PAWN};
+
+// Decode compressed FEN and call func(sq, piece, color) for each non-king piece.
+// Writes king positions and active player through output references.
+// Single pass: collects kings and non-king pieces from the nibble stream,
+// then invokes the callback with king positions already set.
+template<typename F>
+inline void foreach_compressed_fen(
+    const uint8_t* data, size_t length,
+    COLOR& active_out, pos_t& wk_out, pos_t& bk_out,
+    F&& func)
+{
+    wk_out = board::nopos;
+    bk_out = board::nopos;
+    active_out = WHITE;
+    if (length < 8) return;
+
+    active_out = (data[0] & 1) ? BLACK : WHITE;
+    bool is_crazyhouse = data[0] & 4;
+    size_t meta_size = 6 + (is_crazyhouse ? 13 : 0);
+    size_t board_end = length - meta_size;
+
+    // Unpack nibbles
+    uint8_t nibs[128];
+    size_t n_nibs = 0;
+    for (size_t i = 1; i < board_end; ++i) {
+        nibs[n_nibs++] = (data[i] >> 4) & 0xF;
+        nibs[n_nibs++] = data[i] & 0xF;
+    }
+
+    // First pass: find kings and collect non-king pieces
+    // Buffer sized for worst case (crazyhouse can exceed standard chess limits).
+    struct PieceEntry { pos_t sq; PIECE piece; COLOR color; };
+    PieceEntry pieces[board::SIZE - NO_COLORS];
+    int n_pieces = 0;
+
+    int board_idx = 0;
+    for (size_t ni = 0; ni < n_nibs && board_idx < 64; ) {
+        uint8_t nib = nibs[ni];
+        if (nib == 0xC) {
+            uint8_t cnt = (ni + 1 < n_nibs) ? nibs[ni + 1] + 1 : 1;
+            board_idx += cnt;
+            ni += 2;
+        } else if (nib < 12) {
+            pos_t sq = static_cast<pos_t>((7 - board_idx / 8) * 8 + board_idx % 8);
+            COLOR color = (nib < 6) ? WHITE : BLACK;
+            PIECE piece = NIB_TO_PIECE[nib % 6];
+            if (piece == KING) {
+                if (color == WHITE) wk_out = sq; else bk_out = sq;
+            } else {
+                pieces[n_pieces++] = {sq, piece, color};
+            }
+            ++board_idx;
+            ++ni;
+        } else {
+            break;
+        }
+    }
+
+    // Second pass: invoke callback for each non-king piece
+    for (int i = 0; i < n_pieces; ++i) {
+        func(pieces[i].sq, pieces[i].piece, pieces[i].color);
+    }
+}
+
+// ============================================================================
 // HalfKP Feature Index Calculation
 // ============================================================================
 
@@ -138,8 +210,8 @@ struct HalfKP {
     INLINE static constexpr size_t index(bool white_pov, pos_t king_sq, pos_t piece_sq, int piece_type) {
         const pos_t oriented_sq = orient(white_pov, piece_sq);
         // Index = king_sq * 641 + piece_type * 64 + piece_sq + 1
-        return static_cast<size_t>(king_sq) * (PIECE_TYPES * PIECE_SQUARES + 1) 
-             + static_cast<size_t>(piece_type) * PIECE_SQUARES 
+        return static_cast<size_t>(king_sq) * (PIECE_TYPES * board::SIZE + 1) 
+             + static_cast<size_t>(piece_type) * board::SIZE 
              + static_cast<size_t>(oriented_sq) + 1;
     }
 
@@ -150,6 +222,187 @@ struct HalfKP {
         // From black's perspective: it's reversed
         bool same_side = (piece_color == WHITE) == white_pov;
         return piece_to_index[p][same_side ? 0 : 1];
+    }
+
+    // Result of feature extraction for a single position
+    struct Features {
+        static constexpr int MAX_FEATURES = board::SIZE - NO_COLORS; // all squares minus the two kings
+        int32_t white[MAX_FEATURES];  // White perspective feature indices
+        int32_t black[MAX_FEATURES];  // Black perspective feature indices
+        int count = 0;                // Number of features (same for both)
+        int64_t stm = 0;             // Side to move: 0=white, 1=black
+    };
+
+    // Extract HalfKP features from a Board position.
+    // If flip=true, swap white/black perspectives and flip STM.
+    template<typename BoardT>
+    static Features get_features(const BoardT& board, bool flip = false) {
+        Features f;
+        f.stm = (board.activePlayer() == WHITE) ? 0 : 1;
+        if (flip) f.stm = 1 - f.stm;
+
+        const pos_t wk_raw = board.pos_king[WHITE];
+        const pos_t bk_raw = board.pos_king[BLACK];
+        const pos_t wk = orient(true, wk_raw);   // White king from white's POV
+        const pos_t bk = orient(false, bk_raw);   // Black king from black's POV
+
+        const piece_bitboard_t occupied = board.bits[WHITE] | board.bits[BLACK];
+        const piece_bitboard_t king_bits = board.get_king_bits();
+
+        bitmask::foreach(occupied & ~king_bits, [&](pos_t sq) {
+            const auto p = board[sq];
+            const int wpt = get_piece_type(p.value, p.color, true);
+            const int bpt = get_piece_type(p.value, p.color, false);
+            if (wpt >= 0 && bpt >= 0 && f.count < Features::MAX_FEATURES) {
+                int32_t wi = static_cast<int32_t>(index(true, wk, sq, wpt));
+                int32_t bi = static_cast<int32_t>(index(false, bk, sq, bpt));
+                if (flip) {
+                    f.white[f.count] = bi;
+                    f.black[f.count] = wi;
+                } else {
+                    f.white[f.count] = wi;
+                    f.black[f.count] = bi;
+                }
+                ++f.count;
+            }
+        });
+        return f;
+    }
+
+    // Extract features directly from compressed FEN bytes (no Board/FeatureBoard)
+    static Features get_features_compressed(const uint8_t* data, size_t length, bool flip = false) {
+        Features f;
+        COLOR active; pos_t wk, bk;
+        foreach_compressed_fen(data, length, active, wk, bk,
+            [&](pos_t sq, PIECE piece, COLOR color) {
+                const int wpt = get_piece_type(piece, color, true);
+                const int bpt = get_piece_type(piece, color, false);
+                if (wpt >= 0 && bpt >= 0 && f.count < Features::MAX_FEATURES) {
+                    int32_t wi = static_cast<int32_t>(index(true, orient(true, wk), sq, wpt));
+                    int32_t bi = static_cast<int32_t>(index(false, orient(false, bk), sq, bpt));
+                    if (flip) {
+                        f.white[f.count] = bi;
+                        f.black[f.count] = wi;
+                    } else {
+                        f.white[f.count] = wi;
+                        f.black[f.count] = bi;
+                    }
+                    ++f.count;
+                }
+            });
+        f.stm = (active == WHITE) ? 0 : 1;
+        if (flip) f.stm = 1 - f.stm;
+        return f;
+    }
+};
+
+// ============================================================================
+// HalfKAv2 Feature Index Calculation (king buckets + horizontal mirroring)
+// ============================================================================
+
+struct HalfKAv2 {
+    // King bucket table: maps king square (files a-d only) to bucket (0-11).
+    // Files e-h are mirrored to a-d before lookup.
+    static constexpr int KING_BUCKET[32] = {
+        0, 1, 2, 3,       // Rank 1 (a1-d1)
+        4, 4, 5, 5,       // Rank 2 (a2-d2)
+        6, 6, 7, 7,       // Rank 3 (a3-d3)
+        8, 8, 8, 8,       // Rank 4 (a4-d4)
+        9, 9, 9, 9,       // Rank 5 (a5-d5)
+        10, 10, 10, 10,   // Rank 6 (a6-d6)
+        11, 11, 11, 11,   // Ranks 7-8
+    };
+
+    static constexpr int NUM_BUCKETS = 12;
+
+    struct BucketInfo {
+        int bucket;
+        bool mirror; // true if king was on kingside (files e-h)
+    };
+
+    INLINE static constexpr BucketInfo get_bucket(int king_sq) {
+        int file = king_sq % 8;
+        int rank = king_sq / 8;
+        bool mirror = (file >= 4);
+        if (mirror) file = 7 - file;
+        int idx = rank * 4 + file;
+        if (idx >= 32) idx = 31;
+        return {KING_BUCKET[idx], mirror};
+    }
+
+    // Calculate HalfKAv2 feature index
+    INLINE static constexpr size_t index(int bucket, bool mirror, int piece_type, pos_t piece_sq) {
+        int sq = mirror ? (static_cast<int>(piece_sq) ^ 7) : static_cast<int>(piece_sq);
+        return static_cast<size_t>(bucket) * (nnue::PIECE_TYPES * board::SIZE + 1)
+             + static_cast<size_t>(piece_type) * board::SIZE
+             + static_cast<size_t>(sq) + 1;
+    }
+
+    using Features = HalfKP::Features;
+
+    template<typename BoardT>
+    static Features get_features(const BoardT& board, bool flip = false) {
+        Features f;
+        f.stm = (board.activePlayer() == WHITE) ? 0 : 1;
+        if (flip) f.stm = 1 - f.stm;
+
+        const pos_t wk_raw = board.pos_king[WHITE];
+        const pos_t bk_raw = board.pos_king[BLACK];
+
+        // White perspective: orient white king, get bucket
+        auto [w_bucket, w_mirror] = get_bucket(static_cast<int>(wk_raw));
+        // Black perspective: orient black king (flip vertically first)
+        auto [b_bucket, b_mirror] = get_bucket(63 - static_cast<int>(bk_raw));
+
+        const piece_bitboard_t occupied = board.bits[WHITE] | board.bits[BLACK];
+        const piece_bitboard_t king_bits = board.get_king_bits();
+
+        bitmask::foreach(occupied & ~king_bits, [&](pos_t sq) {
+            const auto p = board[sq];
+            const int wpt = HalfKP::get_piece_type(p.value, p.color, true);
+            const int bpt = HalfKP::get_piece_type(p.value, p.color, false);
+            if (wpt >= 0 && bpt >= 0 && f.count < Features::MAX_FEATURES) {
+                int32_t wi = static_cast<int32_t>(index(w_bucket, w_mirror, wpt, sq));
+                int32_t bi = static_cast<int32_t>(index(b_bucket, b_mirror, bpt, 63 - sq));
+                if (flip) {
+                    f.white[f.count] = bi;
+                    f.black[f.count] = wi;
+                } else {
+                    f.white[f.count] = wi;
+                    f.black[f.count] = bi;
+                }
+                ++f.count;
+            }
+        });
+        return f;
+    }
+
+    // Extract features directly from compressed FEN bytes (no Board/FeatureBoard)
+    static Features get_features_compressed(const uint8_t* data, size_t length, bool flip = false) {
+        Features f;
+        COLOR active; pos_t wk, bk;
+        foreach_compressed_fen(data, length, active, wk, bk,
+            [&](pos_t sq, PIECE piece, COLOR color) {
+                auto [w_bucket, w_mirror] = get_bucket(static_cast<int>(wk));
+                auto [b_bucket, b_mirror] = get_bucket(63 - static_cast<int>(bk));
+                const int wpt = HalfKP::get_piece_type(piece, color, true);
+                const int bpt = HalfKP::get_piece_type(piece, color, false);
+                if (wpt >= 0 && bpt >= 0 && f.count < Features::MAX_FEATURES) {
+                    int32_t wi = static_cast<int32_t>(index(w_bucket, w_mirror, wpt, sq));
+                    int32_t bi = static_cast<int32_t>(index(b_bucket, b_mirror, bpt, 63 - sq));
+                    if (flip) {
+                        f.white[f.count] = bi;
+                        f.black[f.count] = wi;
+                    } else {
+                        f.white[f.count] = wi;
+                        f.black[f.count] = bi;
+                    }
+                    ++f.count;
+                }
+            });
+        f.stm = (active == WHITE) ? 0 : 1;
+        if (flip) f.stm = 1 - f.stm;
+        return f;
     }
 };
 
@@ -677,8 +930,10 @@ public:
     
     // Convert raw network output to centipawns
     static int32_t to_centipawns(int32_t raw) {
-        // Scale factor depends on training
-        return raw * 100 / (FT_SCALE * NET_SCALE);
+        // Remove quantization scaling and apply SIGMOID_SCALE from training.
+        // During training: output = linear(x) * SIGMOID_SCALE, but the export
+        // only quantizes linear(x), so we must apply SIGMOID_SCALE here.
+        return raw * SIGMOID_SCALE / (FT_SCALE * NET_SCALE);
     }
     
     // Full evaluation (refresh + forward)

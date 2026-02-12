@@ -29,8 +29,9 @@ import argparse
 import dataclasses
 import hashlib
 import io
-import json
 import itertools
+import json
+import os
 import pathlib
 import random
 import re
@@ -193,9 +194,11 @@ def uci_eval(
     board: chess.Board,
     engine,
     depth: int = 12,
+    max_nodes: int | None = None,
 ) -> tuple[int, int, int]:
     """UCI engine evaluation. Returns (score_cp, depth, knodes)."""
-    info = engine.analyse(board, chess.engine.Limit(depth=depth))
+    limit = chess.engine.Limit(depth=depth, nodes=max_nodes)
+    info = engine.analyse(board, limit)
     score = info["score"].white()
     if score.is_mate():
         cp = 10000 if score.mate() > 0 else -10000
@@ -207,11 +210,23 @@ def uci_eval(
     return cp, actual_depth, knodes
 
 
+def dummy_chess_eval(fen: str, depth: int = 12) -> tuple[int, int, int]:
+    """Evaluate position using dummy_chess engine. Returns (score_cp, depth, knodes)."""
+    board = dummy_chess.ChessDummy(fen)
+    result = board.get_depth_move(depth)
+    # Convert score from pawns to centipawns
+    cp = int(result.score * 100)
+    knodes = result.nodes // 1000
+    return cp, depth, knodes
+
+
 def process_puzzle_row(
     row: dict, engine, depth: int = 12
 ) -> list[tuple[str, int, int, int]]:
     """
     Process single puzzle row. Returns list of (fen_str, score, depth, knodes).
+
+    If engine is None, uses dummy_chess for evaluation.
 
     Extracts two positions:
     1. Starting position (FEN) - before any moves
@@ -230,7 +245,10 @@ def process_puzzle_row(
 
     # Position 1: Starting position
     board = chess.Board(fen)
-    score, out_depth, out_knodes = uci_eval(board, engine, depth)
+    if engine is not None:
+        score, out_depth, out_knodes = uci_eval(board, engine, depth)
+    else:
+        score, out_depth, out_knodes = dummy_chess_eval(board.fen(), depth)
     score = max(-15000, min(15000, score))
     results.append((board.fen(), score, out_depth, out_knodes))
 
@@ -240,7 +258,10 @@ def process_puzzle_row(
         return results  # Return just the starting position
     board.push(move)
 
-    score, out_depth, out_knodes = uci_eval(board, engine, depth)
+    if engine is not None:
+        score, out_depth, out_knodes = uci_eval(board, engine, depth)
+    else:
+        score, out_depth, out_knodes = dummy_chess_eval(board.fen(), depth)
     score = max(-15000, min(15000, score))
     results.append((board.fen(), score, out_depth, out_knodes))
 
@@ -251,7 +272,7 @@ def process_puzzles(
     input_path: pathlib.Path,
     output_path: pathlib.Path,
     max_rows: int | None,
-    engine_path: str,
+    engine_path: str | None,
     depth: int,
     tablebase_path: str | None = None,
     batch_size: int = 100000,
@@ -259,16 +280,22 @@ def process_puzzles(
     """
     Process puzzle data, streaming to parquet in batches.
 
-    Requires a UCI engine for evaluation.
+    If engine_path is None, uses dummy_chess for evaluation.
 
     Returns the number of rows written.
     """
-    engine = chess.engine.SimpleEngine.popen_uci(engine_path)
-    print(f"Using UCI engine: {engine_path} (depth={depth})")
-
-    if tablebase_path:
-        engine.configure({"SyzygyPath": tablebase_path})
-        print(f"Using tablebases: {tablebase_path}")
+    engine = None
+    if engine_path:
+        engine = chess.engine.SimpleEngine.popen_uci(engine_path)
+        print(f"Using UCI engine: {engine_path} (depth={depth})")
+        if tablebase_path:
+            engine.configure({"SyzygyPath": tablebase_path})
+            print(f"Using tablebases: {tablebase_path}")
+    else:
+        print(f"Using dummy_chess engine (depth={depth})")
+        if tablebase_path:
+            dummy_chess.ChessDummy.set_tb_path(tablebase_path)
+            print(f"Using tablebases: {tablebase_path}")
 
     print(f"Loading {input_path}...")
     if str(input_path).endswith(".zst"):
@@ -423,9 +450,17 @@ def process_evals(
     shuffle: bool = True,
     seed: int = 42,
     batch_size: int = 1000000,
+    min_depth: int | None = None,
+    engine_path: str | None = None,
+    tablebase_path: str | None = None,
 ) -> int:
     """
     Process evaluation data, streaming to parquet in batches.
+
+    If min_depth is specified:
+    - Positions with depth >= min_depth are kept as-is
+    - Positions with depth < min_depth are re-scored using the engine (if provided)
+    - If no engine is provided, low-depth positions are filtered out
 
     Returns the number of rows written.
     """
@@ -438,6 +473,21 @@ def process_evals(
         print("Counting rows...")
         total_rows = len(lf)
 
+    # Setup engine for re-scoring low-depth positions
+    engine = None
+    if min_depth is not None:
+        if engine_path:
+            engine = chess.engine.SimpleEngine.popen_uci(engine_path)
+            print(f"Using UCI engine: {engine_path} (depth={min_depth})")
+            if tablebase_path:
+                engine.configure({"SyzygyPath": tablebase_path})
+                print(f"Using tablebases: {tablebase_path}")
+            print(f"Positions with depth < {min_depth} will be re-scored")
+        else:
+            print(
+                f"Positions with depth < {min_depth} will be FILTERED OUT (no engine)"
+            )
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Create temp directory for batch parquet files NEXT TO output (not in /tmp)
@@ -447,6 +497,8 @@ def process_evals(
     print("Processing evaluations...")
     count = 0
     written = 0
+    rescored = 0
+    filtered = 0
     batch_num = 0
     batch: list[tuple[str, int, int, int]] = []  # FEN strings, not compressed
 
@@ -483,7 +535,50 @@ def process_evals(
 
         result = process_eval_row(row)
         if result:
-            batch.append(result)
+            fen, score, depth, knodes = result
+
+            # Check if re-scoring is needed
+            if min_depth is not None and depth < min_depth:
+                if engine:
+                    # Skip draws and checkmates - no need to re-score
+                    if score == 0 or abs(score) >= 10000:
+                        batch.append(result)
+                        written += 1
+                        count += 1
+                        pbar.update(1)
+                        continue
+
+                    # Re-score with engine (limit nodes to avoid traps)
+                    board = chess.Board(fen)
+                    try:
+                        new_score, new_depth, new_knodes = uci_eval(
+                            board, engine, min_depth, max_nodes=10_000_000
+                        )
+                    except chess.engine.EngineTerminatedError:
+                        # Engine crashed on this position, restart and skip
+                        assert engine_path is not None  # Already checked above
+                        print(f"\nEngine crashed on FEN: {fen}, skipping...")
+                        with open("failed_fens.txt", "a") as f:
+                            f.write(fen + "\n")
+                        engine = chess.engine.SimpleEngine.popen_uci(engine_path)
+                        if tablebase_path:
+                            engine.configure({"SyzygyPath": tablebase_path})
+                        filtered += 1
+                        count += 1
+                        pbar.update(1)
+                        continue
+                    new_score = max(-15000, min(15000, new_score))
+                    batch.append((fen, new_score, new_depth, new_knodes))
+                    rescored += 1
+                else:
+                    # Filter out low-depth position
+                    filtered += 1
+                    count += 1
+                    pbar.update(1)
+                    continue
+            else:
+                batch.append(result)
+
             written += 1
 
             if len(batch) >= batch_size:
@@ -495,7 +590,16 @@ def process_evals(
     pbar.close()
     flush_batch()  # Write remaining
 
+    # Cleanup engine
+    if engine:
+        engine.quit()
+
     print(f"Written {written} rows in {batch_num} batches")
+    if min_depth is not None:
+        if engine:
+            print(f"Re-scored {rescored} positions with depth < {min_depth}")
+        else:
+            print(f"Filtered out {filtered} positions with depth < {min_depth}")
 
     if batch_num == 0:
         print("No data to write")
@@ -869,16 +973,12 @@ class GameExtractionProgress:
 
     def save(self, path: pathlib.Path) -> None:
         """Save progress to JSON file."""
-        import json
-
         with open(path, "w") as f:
             json.dump(dataclasses.asdict(self), f, indent=2)
 
     @classmethod
     def load(cls, path: pathlib.Path) -> "GameExtractionProgress":
         """Load progress from JSON file."""
-        import json
-
         with open(path) as f:
             data = json.load(f)
         # Handle old format
@@ -922,8 +1022,6 @@ def parse_eval_comment(comment: str) -> int | None:
     Returns centipawn score (from white's perspective) or None if not found.
     Mate scores are converted to +/- 10000.
     """
-    import re
-
     match = re.search(r"\[%eval\s+([^\]]+)\]", comment)
     if not match:
         return None
@@ -1761,7 +1859,7 @@ def dedupe_parquet(
     input_path: str,
     output_path: str | None = None,
     num_buckets: int = 256,
-    row_group_size: int = 100_000,
+    row_group_size: int = 500_000,
     resume: bool = False,
     max_bucket_memory_mb: int = 512,
 ) -> tuple[int, int, int]:
@@ -1957,12 +2055,24 @@ def dedupe_parquet(
     output_writer = None
     if not stats_only:
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        # Get schema from first bucket
+        # Get schema from first bucket, ensuring fen is large_binary
         first_table = pyarrow.ipc.open_file(bucket_files[0]).read_all()
         first_df = polars.from_arrow(first_table)
         out_cols = [c for c in first_df.columns if c != "_hash"]
         arrow_schema = first_df.select(out_cols).to_arrow().schema
         del first_table, first_df
+        # Fix fen column type if needed (binary_view -> large_binary)
+        fen_idx = arrow_schema.get_field_index("fen")
+        if fen_idx >= 0 and arrow_schema.field(fen_idx).type != pyarrow.large_binary():
+            arrow_schema = pyarrow.schema(
+                [
+                    (
+                        field.name,
+                        pyarrow.large_binary() if field.name == "fen" else field.type,
+                    )
+                    for field in arrow_schema
+                ]
+            )
         output_writer = pyarrow.parquet.ParquetWriter(
             output_path, arrow_schema, compression="zstd"
         )
@@ -1992,7 +2102,16 @@ def dedupe_parquet(
                 out_df = unique_df.drop("_hash")
                 for i in range(0, len(out_df), row_group_size):
                     chunk = out_df.slice(i, row_group_size)
-                    output_writer.write_table(chunk.to_arrow())
+                    arrow_table = chunk.to_arrow()
+                    # Cast fen column if needed
+                    fi = arrow_table.schema.get_field_index("fen")
+                    if (
+                        fi >= 0
+                        and arrow_table.schema.field(fi).type != pyarrow.large_binary()
+                    ):
+                        fen_col = arrow_table.column("fen").cast(pyarrow.large_binary())
+                        arrow_table = arrow_table.set_column(fi, "fen", fen_col)
+                    output_writer.write_table(arrow_table)
                 del out_df
 
             del unique_df
@@ -2016,7 +2135,7 @@ def shuffle_parquet(
     input_path: str,
     output_path: str,
     num_buckets: int = 64,
-    row_group_size: int = 100_000,
+    row_group_size: int = 500_000,
     seed: int | None = None,
     resume: bool = False,
     max_bucket_memory_mb: int = 512,
@@ -2205,13 +2324,25 @@ def shuffle_parquet(
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Get schema from first bucket (without _sort_key)
+    # Get schema from first bucket (without _sort_key), ensuring fen is large_binary
     first_reader = pyarrow.ipc.open_file(bucket_files[0])
     first_table = first_reader.read_all()
     first_df = polars.from_arrow(first_table)
     out_cols = [c for c in first_df.columns if c != "_sort_key"]
     arrow_schema = first_df.select(out_cols).to_arrow().schema
     del first_table, first_df, first_reader
+    # Fix fen column type if needed (binary_view -> large_binary)
+    fen_idx = arrow_schema.get_field_index("fen")
+    if fen_idx >= 0 and arrow_schema.field(fen_idx).type != pyarrow.large_binary():
+        arrow_schema = pyarrow.schema(
+            [
+                (
+                    field.name,
+                    pyarrow.large_binary() if field.name == "fen" else field.type,
+                )
+                for field in arrow_schema
+            ]
+        )
 
     written = 0
     with pyarrow.parquet.ParquetWriter(
@@ -2235,7 +2366,16 @@ def shuffle_parquet(
                 # Write in chunks
                 for i in range(0, len(df), row_group_size):
                     chunk = df.slice(i, row_group_size)
-                    writer.write_table(chunk.to_arrow())
+                    arrow_table = chunk.to_arrow()
+                    # Cast fen column if needed
+                    fi = arrow_table.schema.get_field_index("fen")
+                    if (
+                        fi >= 0
+                        and arrow_table.schema.field(fi).type != pyarrow.large_binary()
+                    ):
+                        fen_col = arrow_table.column("fen").cast(pyarrow.large_binary())
+                        arrow_table = arrow_table.set_column(fi, "fen", fen_col)
+                    writer.write_table(arrow_table)
                 written += len(df)
 
                 del df
@@ -2308,6 +2448,138 @@ def save_data(
 
 
 # =============================================================================
+# Fix parquet column types (binary_view -> large_binary)
+# =============================================================================
+
+
+# =============================================================================
+# Repack parquet (also fixes fen column type: binary_view -> large_binary)
+# =============================================================================
+
+
+def repack_parquet(
+    input_path: pathlib.Path,
+    output_path: pathlib.Path | None = None,
+    row_group_size: int = 500_000,
+) -> None:
+    """
+    Rewrite a parquet file with a different row group size, streaming
+    row-group-by-row-group.  At most one output row group is buffered
+    in memory at a time.
+
+    Also ensures the fen column is large_binary (not binary_view).
+    Writes to a temp file, then atomically renames.
+
+    Skips rewriting if the file already has the correct fen type and
+    all row groups match the target size.
+    """
+    pf = pyarrow.parquet.ParquetFile(str(input_path))
+    schema = pf.schema_arrow
+    n_row_groups = pf.metadata.num_row_groups
+    total_rows = pf.metadata.num_rows
+
+    fen_idx = schema.get_field_index("fen")
+    fen_type = schema.field(fen_idx).type
+    needs_type_fix = fen_type != pyarrow.large_binary()
+
+    # Check whether row groups already match the target size.
+    # All full row groups should be exactly row_group_size; only the last
+    # one may be smaller (the tail).
+    rg_sizes_ok = (
+        all(
+            pf.metadata.row_group(i).num_rows == row_group_size
+            for i in range(n_row_groups - 1)
+        )
+        if n_row_groups > 1
+        else (n_row_groups == 0 or total_rows <= row_group_size)
+    )
+
+    if output_path is None:
+        output_path = input_path
+
+    # Early exit: nothing to do
+    if not needs_type_fix and rg_sizes_ok and output_path == input_path:
+        print(f"Already up to date: {input_path}")
+        return
+    if not needs_type_fix and rg_sizes_ok and output_path != input_path:
+        print(f"Already up to date, copying: {input_path} -> {output_path}")
+        shutil.copy2(input_path, output_path)
+        return
+
+    # Ensure fen column is large_binary in output schema
+    if needs_type_fix:
+        schema = pyarrow.schema(
+            [
+                (
+                    field.name,
+                    pyarrow.large_binary() if field.name == "fen" else field.type,
+                )
+                for field in schema
+            ]
+        )
+
+    n_output_rgs = (total_rows + row_group_size - 1) // row_group_size
+    parts = []
+    if needs_type_fix:
+        parts.append(f"fix fen type ({fen_type} -> large_binary)")
+    if not rg_sizes_ok:
+        parts.append(
+            f"repack {n_row_groups} -> {n_output_rgs} row groups ({row_group_size:,} rows/rg)"
+        )
+    print(f"Repacking {total_rows:,} rows: {', '.join(parts)}")
+
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=output_path.parent, suffix=".parquet.tmp")
+    os.close(tmp_fd)
+    tmp_path = pathlib.Path(tmp_path)
+
+    try:
+        with pyarrow.parquet.ParquetWriter(
+            str(tmp_path), schema, compression="zstd"
+        ) as writer:
+            buffer: pyarrow.Table | None = None
+            buffer_rows = 0
+
+            for rg_idx in tqdm.auto.tqdm(
+                range(n_row_groups), desc="Reading", unit=" rg"
+            ):
+                table = pf.read_row_group(rg_idx)
+
+                # Cast fen if needed
+                fen_col = table.column("fen")
+                if fen_col.type != pyarrow.large_binary():
+                    fen_col = fen_col.cast(pyarrow.large_binary())
+                    table = table.set_column(fen_idx, "fen", fen_col)
+
+                if buffer is None:
+                    buffer = table
+                    buffer_rows = len(table)
+                else:
+                    buffer = pyarrow.concat_tables([buffer, table])
+                    buffer_rows = len(buffer)
+
+                del table, fen_col
+
+                # Flush complete row groups from buffer
+                while buffer_rows >= row_group_size:
+                    chunk = buffer.slice(0, row_group_size)
+                    writer.write_table(chunk)
+                    buffer = buffer.slice(row_group_size)
+                    buffer_rows = len(buffer)
+                    del chunk
+
+            # Flush remaining rows
+            if buffer is not None and buffer_rows > 0:
+                writer.write_table(buffer)
+            del buffer
+
+        tmp_path.rename(output_path)
+        print(f"Saved: {output_path}")
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
+
+
+# =============================================================================
 # Main
 # =============================================================================
 
@@ -2324,8 +2596,9 @@ def main():
             "games-all",
             "shuffle",
             "dedupe",
+            "repack",
         ],
-        help="Data source: 'puzzles', 'evals', 'endgames', 'games', 'games-all', 'shuffle', or 'dedupe'",
+        help="Data source or tool: 'puzzles', 'evals', 'endgames', 'games', 'games-all', 'shuffle', 'dedupe', or 'repack'",
     )
     parser.add_argument("-i", "--input", default=None, help="Input file")
     parser.add_argument("-o", "--output", default=None, help="Output file")
@@ -2336,9 +2609,15 @@ def main():
     parser.add_argument("--no-shuffle", action="store_true")
     parser.add_argument("--toy", action="store_true", help="Generate toy dataset")
 
-    # Puzzle/games-specific
+    # Puzzle/games/evals-specific
     parser.add_argument("-e", "--engine", default=None, help="Path to UCI engine")
-    parser.add_argument("-d", "--depth", type=int, default=8, help="UCI engine depth")
+    parser.add_argument(
+        "-d",
+        "--depth",
+        type=int,
+        default=8,
+        help="UCI engine depth. For evals: positions with depth < this are re-scored",
+    )
 
     # Endgame-specific
     parser.add_argument(
@@ -2437,7 +2716,7 @@ def main():
         help="Initial number of buckets for shuffle/dedupe (auto-adjusted for memory)",
     )
     parser.add_argument(
-        "--row-group-size", type=int, default=100_000, help="Rows per output row group"
+        "--row-group-size", type=int, default=500_000, help="Rows per output row group"
     )
     parser.add_argument(
         "--max-bucket-mb",
@@ -2475,7 +2754,7 @@ def main():
         elif args.source == "evals":
             args.input = "data/lichess_db_eval.jsonl.zst"
 
-    if args.output is None:
+    if args.output is None and args.source != "repack":
         args.output = f"data/{args.source}.parquet"
 
     if args.toy:
@@ -2499,10 +2778,8 @@ def main():
                 "Download: wget https://database.lichess.org/lichess_db_puzzle.csv.zst"
             )
             sys.exit(1)
-        if not args.engine:
-            print("Error: --engine is required for puzzle preprocessing")
-            sys.exit(1)
         # Puzzles handles its own output (streaming)
+        # If no engine specified, uses dummy_chess
         process_puzzles(
             input_path,
             pathlib.Path(args.output),
@@ -2528,6 +2805,9 @@ def main():
             args.max,
             shuffle=not args.no_shuffle,
             seed=args.seed,
+            min_depth=args.depth if args.engine else None,
+            engine_path=args.engine,
+            tablebase_path=args.tablebase,
         )
         return
 
@@ -2828,6 +3108,19 @@ def main():
             resume=args.resume_dedupe,
             max_bucket_memory_mb=args.max_bucket_mb,
         )
+        return
+
+    elif args.source == "repack":
+        if args.input is None:
+            print("Error: --input is required for repack")
+            sys.exit(1)
+        input_path = pathlib.Path(args.input)
+        if not input_path.exists():
+            print(f"Error: {args.input} not found")
+            sys.exit(1)
+
+        output = pathlib.Path(args.output) if args.output else None
+        repack_parquet(input_path, output, row_group_size=args.row_group_size)
         return
 
 

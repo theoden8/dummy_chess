@@ -15,6 +15,8 @@
 #include <MoveScope.hpp>
 #include <MoveLine.hpp>
 
+#define self (*this)
+
 // board view of the game
 class Board {
 protected:
@@ -1553,6 +1555,8 @@ public:
     return f;
   }
 };
+
+#undef self
 
 bool Board::initialized_ = false;
 

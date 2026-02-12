@@ -7,7 +7,14 @@ name = "dummy-chess"
 version = "0.0.3"
 description = "A chess engine with NNUE evaluation"
 requires-python = ">=3.11"
-dependencies = ["numpy"]
+dependencies = [
+    "build>=1.4.0",
+    "cmake>=4.2.1",
+    "ninja>=1.13.0",
+    "numpy",
+    "pybind11>=3.0.1",
+    "scikit-build>=0.18.1",
+]
 
 [tool.setuptools]
 packages = ["dummy_chess"]

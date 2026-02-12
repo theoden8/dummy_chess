@@ -14,5 +14,12 @@ arrow = "53"
 indicatif = "0.17"
 clap = { version = "4", features = ["derive"] }
 rand = "0.8"
+rayon = "1.10"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
+
+[profile.release]
+opt-level = 3
+# LTO disabled - requires too much memory for CI/dev builds
+# lto = true
+# codegen-units = 1

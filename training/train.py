@@ -3,13 +3,19 @@
 Efficient NNUE Training using PyTorch
 
 Architecture: HalfKP(41024) -> 256x2 -> 32 -> 32 -> 1
+
+IMPORTANT: Run with 8GB memory limit to prevent OOM:
+    ulimit -v 8388608 && uv run python train.py ...
 """
 
 import __future__
 
 import argparse
+import collections
+import concurrent.futures
 import dataclasses
 import pathlib
+import queue
 import random
 import struct
 import sys
@@ -25,6 +31,8 @@ import pyarrow.parquet
 import torch
 import torch.nn.functional
 import tqdm.auto as tqdm
+
+import _preprocess
 
 # ============================================================================
 # Architecture Constants (must match NNUE.hpp)
@@ -260,23 +268,49 @@ class NNUE(torch.nn.Module):
         self.l2 = torch.nn.Linear(L1_OUT, L2_OUT)
         self.out = torch.nn.Linear(L2_OUT, 1)
 
+        # Output scaling factor - model outputs are scaled to centipawn range
+        # This ensures gradients flow properly with sigmoid-based loss
+        self.output_scale = SIGMOID_SCALE
+
         torch.nn.init.normal_(self.ft.weight, std=0.01)
         for m in [self.l1, self.l2, self.out]:
             torch.nn.init.kaiming_normal_(m.weight, nonlinearity="relu")
             torch.nn.init.zeros_(m.bias)
 
+    @staticmethod
+    def _clipped_relu(x: torch.Tensor, upper: float) -> torch.Tensor:
+        """Leaky ClippedReLU: linear in [0, upper], small slope outside.
+
+        Matches hard clamp(0, upper) at inference but preserves gradient
+        during training so neurons above the upper bound can recover.
+        Uses slope 0.01 below 0 and above upper (like leaky ReLU).
+        """
+        _LEAK = 0.01
+        return torch.where(
+            x <= 0,
+            _LEAK * x,
+            torch.where(x >= upper, upper + _LEAK * (x - upper), x),
+        )
+
     def forward(self, w_idx, w_off, b_idx, b_off, stm):
-        # ReLU during training; clamp to [0,127] happens in quantized C++ inference
-        w_ft = torch.relu(self.ft(w_idx, w_off) + self.ft_bias)
-        b_ft = torch.relu(self.ft(b_idx, b_off) + self.ft_bias)
+        # Leaky ClippedReLU bounds matching quantized C++ inference:
+        # FT output: int16 -> clamp(0, 127) -> int8, i.e. float [0, 1.0]
+        # Hidden layers: int32 -> /64 -> clamp(0, 127), i.e. float [0, 127/64]
+        _FT_CLAMP = 127.0 / FT_QUANT_SCALE  # 1.0
+        _HL_CLAMP = 127.0 / WEIGHT_QUANT_SCALE  # 127/64 ≈ 1.984
+
+        w_ft = self._clipped_relu(self.ft(w_idx, w_off) + self.ft_bias, _FT_CLAMP)
+        b_ft = self._clipped_relu(self.ft(b_idx, b_off) + self.ft_bias, _FT_CLAMP)
         ft = torch.where(
             stm.unsqueeze(1) == 0,
             torch.cat([w_ft, b_ft], 1),
             torch.cat([b_ft, w_ft], 1),
         )
-        x = torch.relu(self.l1(ft))
-        x = torch.relu(self.l2(x))
-        return self.out(x)
+        x = self._clipped_relu(self.l1(ft), _HL_CLAMP)
+        x = self._clipped_relu(self.l2(x), _HL_CLAMP)
+        out = self.out(x) * self.output_scale
+        # Negate output for black's perspective (stm=1) since scores are from white's POV
+        return torch.where(stm.unsqueeze(1) == 0, out, -out)
 
 
 # ============================================================================
@@ -322,486 +356,384 @@ class SplitConfig:
         return end - start
 
 
-class LazyFrameDataset(torch.utils.data.IterableDataset):
+class ParquetDataset(torch.utils.data.IterableDataset):
     """
-    Streaming dataset for large parquet files.
+    Unified high-performance dataset for parquet files.
 
-    Streams data directly from parquet without loading into memory.
-    Data should be pre-shuffled during preprocessing.
+    Combines features of BatchedParquetDataset and PrefetchedDataset into one class.
+    Uses pyarrow row-group streaming to handle arbitrarily large files.
 
     Args:
-        sources: LazyFrame, or list of LazyFrames, or list of (LazyFrame, weight) tuples
+        paths: List of parquet file paths
+        batch_size: Samples per batch. If None, yields individual samples (slower).
         split: Which split to use ('train', 'val', 'test', or None for all)
-        split_config: SplitConfig for splitting (uses row ranges, no shuffle)
-        chunk_size: Number of rows to process at a time
-        flip_augment: If True, yield both original and flipped positions (2x data)
+        split_config: SplitConfig for train/val/test splitting
         arch: Architecture for feature extraction ('halfkp' or 'halfkav2')
+        flip_augment: If True, also yield flipped positions with negated scores (2x data)
+        prefetch: Number of batches to prefetch in background thread (0 = disabled)
 
     Example:
-        split_cfg = SplitConfig(val_ratio=0.05, test_ratio=0.05)
+        # Fast batched training (recommended)
+        train_ds = ParquetDataset(
+            ["evals.parquet", "endgames.parquet"],
+            batch_size=8192,
+            split="train",
+            prefetch=4,
+        )
 
-        # Single source (pre-shuffled)
-        lf = pl.scan_parquet("data/evals.parquet")
-        train_ds = LazyFrameDataset(lf, split="train", split_config=split_cfg)
-
-        # Multiple sources with weights (70% evals, 20% puzzles, 10% endgames)
-        train_ds = LazyFrameDataset([
-            (pl.scan_parquet("data/evals.parquet"), 0.7),
-            (pl.scan_parquet("data/puzzles.parquet"), 0.2),
-            (pl.scan_parquet("data/endgames.parquet"), 0.1),
-        ], split="train", split_config=split_cfg)
+        # Individual samples (for compatibility, slower)
+        train_ds = ParquetDataset(
+            ["evals.parquet"],
+            batch_size=None,
+            split="train",
+        )
     """
 
     def __init__(
         self,
-        sources: pl.LazyFrame | list[pl.LazyFrame] | list[tuple[pl.LazyFrame, float]],
+        paths: list[str],
+        batch_size: int | None = 8192,
         split: str | None = None,
         split_config: SplitConfig | None = None,
-        chunk_size: int = 50000,
-        flip_augment: bool = False,
         arch: str = "halfkp",
+        flip_augment: bool = False,
+        prefetch: int = 2,
     ):
-        # Normalize to list of (LazyFrame, weight)
-        if isinstance(sources, pl.LazyFrame):
-            self.sources = [(sources, 1.0)]
-        elif isinstance(sources, list) and len(sources) > 0:
-            if isinstance(sources[0], tuple):
-                self.sources = list(sources)  # Already (lf, weight) tuples
-            else:
-                self.sources = [(lf, 1.0) for lf in sources]  # Equal weights
-        else:
-            self.sources = []
-
+        self.paths = paths if isinstance(paths, list) else [paths]
+        self.batch_size = batch_size
         self.split = split
         self.split_config = split_config or SplitConfig()
-        self.chunk_size = chunk_size
-        self.flip_augment = flip_augment
         self.arch = arch
+        self.flip_augment = flip_augment
+        self.prefetch = prefetch
         self._len: int | None = None
-        self._source_lens: list[int] | None = None
+        self._metadata: list[tuple[str, int]] | None = None
 
-        # Select feature extractor based on architecture
-        if arch == "halfkp":
-            self._get_features = dummy_chess.get_halfkp_features_batch
-        elif arch == "halfkav2":
-            self._get_features = dummy_chess.get_halfkav2_features_batch
-        else:
+        if arch not in ("halfkp", "halfkav2"):
             raise ValueError(f"Unknown architecture: {arch}")
 
-    def _get_source_lens(self) -> list[int]:
-        """Get row counts for each source (cached)."""
-        if self._source_lens is None:
-            self._source_lens = []
-            for lf, _ in self.sources:
-                n = lf.select(pl.len()).collect(engine="streaming").item()
-                self._source_lens.append(n)
-        return self._source_lens
-
-    def _get_weighted_counts(self) -> list[int]:
-        """Calculate sample counts per source respecting weights with strict ratio."""
-        source_lens = self._get_source_lens()
-        weights = [w for _, w in self.sources]
-        total_weight = sum(weights)
-        norm_weights = [w / total_weight for w in weights]
-
-        split_lens = [
-            self.split_config.get_split_len(n, self.split) for n in source_lens
-        ]
-
-        # Find max total that respects strict ratio (limited by smallest source)
-        # For each source: max_total = available / weight
-        max_totals = [
-            avail / w if w > 0 else float("inf")
-            for avail, w in zip(split_lens, norm_weights)
-        ]
-        max_total = min(max_totals)
-
-        # Calculate actual counts maintaining strict ratio
-        return [int(max_total * w) for w in norm_weights]
+    def _get_metadata(self) -> list[tuple[str, int]]:
+        """Get row counts from parquet metadata (no data loading)."""
+        if self._metadata is None:
+            self._metadata = []
+            for path in self.paths:
+                pf = pyarrow.parquet.ParquetFile(path)
+                self._metadata.append((path, pf.metadata.num_rows))
+        return self._metadata
 
     def __len__(self) -> int:
-        """Count samples in this split (cached)."""
         if self._len is None:
-            self._len = sum(self._get_weighted_counts())
+            total = 0
+            for path, n in self._get_metadata():
+                split_len = self.split_config.get_split_len(n, self.split)
+                total += split_len
             if self.flip_augment:
-                self._len *= 2
+                total *= 2
+            self._len = total
         return self._len
 
-    def __iter__(self):
-        source_lens = self._get_source_lens()
-        weights = [w for _, w in self.sources]
-        total_weight = sum(weights)
-        norm_weights = [w / total_weight for w in weights]
-
-        # Get weighted counts (strict ratio)
-        actual_counts = self._get_weighted_counts()
-
-        # Create iterators for each source's split (limited to actual_count)
-        source_iters = []
-        for i, (lf, _) in enumerate(self.sources):
-            n = source_lens[i]
-            start_idx, end_idx = self.split_config.get_split_indices(n, self.split)
-
-            # Limit to actual_count samples
-            end_idx = min(end_idx, start_idx + actual_counts[i])
-
-            if start_idx == 0:
-                split_lf = lf.head(end_idx)
-            else:
-                split_size = end_idx - start_idx
-                split_lf = lf.slice(start_idx, split_size)
-
-            source_iters.append(split_lf.collect_batches(chunk_size=self.chunk_size))
-
-        # Interleave sources round-robin style
-        source_buffers: list[list] = [[] for _ in self.sources]
-        source_exhausted = [False] * len(self.sources)
-
-        def refill_buffer(idx: int) -> bool:
-            """Try to refill buffer for source idx. Returns False if exhausted."""
-            if source_exhausted[idx]:
-                return False
-            try:
-                batch = next(source_iters[idx])
-                fens = batch["fen"].to_list()
-                scores = batch["score"].to_list()
-
-                w_idx, w_off, b_idx, b_off, stm = self._get_features(fens, False)
-
-                n_samples = len(fens)
-                for i in range(n_samples):
-                    w_start = w_off[i]
-                    w_end = w_off[i + 1] if i + 1 < n_samples else len(w_idx)
-                    b_start = b_off[i]
-                    b_end = b_off[i + 1] if i + 1 < n_samples else len(b_idx)
-
-                    source_buffers[idx].append(
-                        (
-                            w_idx[w_start:w_end].copy(),
-                            b_idx[b_start:b_end].copy(),
-                            int(stm[i]),
-                            float(scores[i]),
-                        )
-                    )
-
-                # Also add flipped if augmenting
-                if self.flip_augment:
-                    w_idx_f, w_off_f, b_idx_f, b_off_f, stm_f = self._get_features(
-                        fens, True
-                    )
-                    for i in range(n_samples):
-                        w_start = w_off_f[i]
-                        w_end = w_off_f[i + 1] if i + 1 < n_samples else len(w_idx_f)
-                        b_start = b_off_f[i]
-                        b_end = b_off_f[i + 1] if i + 1 < n_samples else len(b_idx_f)
-
-                        source_buffers[idx].append(
-                            (
-                                w_idx_f[w_start:w_end].copy(),
-                                b_idx_f[b_start:b_end].copy(),
-                                int(stm_f[i]),
-                                -float(scores[i]),
-                            )
-                        )
-
-                return True
-            except StopIteration:
-                source_exhausted[idx] = True
-                return False
-
-        # Yield samples interleaved by weight
-        rng = random.Random(42)  # Deterministic interleaving
-        while True:
-            # Check if all sources exhausted
-            all_empty = all(
-                len(buf) == 0 and source_exhausted[i]
-                for i, buf in enumerate(source_buffers)
-            )
-            if all_empty:
-                break
-
-            # Pick source based on weights (only from non-exhausted sources with data)
-            available = [
-                i
-                for i in range(len(self.sources))
-                if len(source_buffers[i]) > 0 or not source_exhausted[i]
-            ]
-            if not available:
-                break
-
-            # Weighted choice among available sources
-            avail_weights = [norm_weights[i] for i in available]
-            total_avail = sum(avail_weights)
-            avail_weights = [w / total_avail for w in avail_weights]
-
-            src_idx = rng.choices(available, avail_weights)[0]
-
-            # Refill if needed
-            if len(source_buffers[src_idx]) == 0:
-                if not refill_buffer(src_idx):
-                    continue
-
-            # Yield sample
-            if source_buffers[src_idx]:
-                yield source_buffers[src_idx].pop(0)
-
-
-class ShuffledParquetDataset(torch.utils.data.IterableDataset):
-    """
-    Shuffled streaming dataset using multi-row-group interleaving.
-
-    Maintains multiple "active" row groups and samples randomly from them,
-    providing good shuffling without loading entire dataset into memory.
-
-    Args:
-        paths: List of parquet file paths (or list of (path, weight) tuples)
-        split: Which split to use ('train', 'val', 'test', or None for all)
-        split_config: SplitConfig for splitting
-        num_active_groups: Number of row groups to keep active (more = better shuffle, more RAM)
-        buffer_per_group: Samples to buffer from each active group
-        flip_augment: If True, yield both original and flipped positions
-        seed: Random seed for shuffling (changes each epoch if None)
-        arch: Architecture for feature extraction ('halfkp' or 'halfkav2')
-
-    Memory usage: ~num_active_groups * buffer_per_group * 50 bytes
-    Default: 8 * 4096 * 50 = ~1.6 MB
-    """
-
-    def __init__(
-        self,
-        paths: list[str] | list[tuple[str, float]],
-        split: str | None = None,
-        split_config: SplitConfig | None = None,
-        num_active_groups: int = 8,
-        buffer_per_group: int = 4096,
-        flip_augment: bool = False,
-        seed: int | None = None,
-        arch: str = "halfkp",
-    ):
-        # Normalize to list of (path, weight)
-        if isinstance(paths[0], str):
-            self.paths = [(p, 1.0) for p in paths]
-        else:
-            self.paths = list(paths)
-
-        self.split = split
-        self.split_config = split_config or SplitConfig()
-        self.num_active_groups = num_active_groups
-        self.buffer_per_group = buffer_per_group
-        self.flip_augment = flip_augment
-        self.seed = seed
-        self.arch = arch
-        self._epoch = 0
-
-        # Select feature extractor based on architecture
-        if arch == "halfkp":
-            self._get_features = dummy_chess.get_halfkp_features_batch
-        elif arch == "halfkav2":
-            self._get_features = dummy_chess.get_halfkav2_features_batch
-        else:
-            raise ValueError(f"Unknown architecture: {arch}")
-
-        # Cache metadata
-        self._metadata: list[tuple[str, int, list[tuple[int, int]]]] | None = None
-        self._len: int | None = None
-
-    def set_epoch(self, epoch: int):
-        """Set epoch for deterministic shuffling."""
-        self._epoch = epoch
-
-    def _get_metadata(self) -> list[tuple[str, int, list[tuple[int, int]], float]]:
-        """Get row group metadata for all files. Returns [(path, total_rows, [(rg_start, rg_len), ...], weight)]."""
-        if self._metadata is not None:
-            return self._metadata
-
-        self._metadata = []
-        for path, weight in self.paths:
+    def _build_chunk_list(self) -> list[tuple[str, int, int, int]]:
+        """Build list of (path, rg_idx, slice_start, slice_end) for all row groups."""
+        chunks = []
+        for path, total_rows in self._get_metadata():
+            start, end = self.split_config.get_split_indices(total_rows, self.split)
             pf = pyarrow.parquet.ParquetFile(path)
             meta = pf.metadata
 
-            row_groups = []
-            offset = 0
-            for i in range(meta.num_row_groups):
-                rg_len = meta.row_group(i).num_rows
-                row_groups.append((offset, rg_len))
-                offset += rg_len
+            row_offset = 0
+            for rg_idx in range(meta.num_row_groups):
+                rg_rows = meta.row_group(rg_idx).num_rows
+                rg_start = row_offset
+                rg_end = row_offset + rg_rows
 
-            self._metadata.append((path, offset, row_groups, weight))
+                if rg_end <= start:
+                    row_offset = rg_end
+                    continue
+                if rg_start >= end:
+                    break
 
-        return self._metadata
+                slice_start = max(0, start - rg_start)
+                slice_end = min(rg_rows, end - rg_start)
+                chunks.append((path, rg_idx, slice_start, slice_end))
+                row_offset = rg_end
 
-    def _get_split_row_groups(self) -> list[tuple[str, int, int, float]]:
-        """Get row groups that fall within our split. Returns [(path, rg_start, rg_len, weight), ...]."""
-        metadata = self._get_metadata()
-        result = []
+        return chunks
 
-        for path, total_rows, row_groups, weight in metadata:
-            split_start, split_end = self.split_config.get_split_indices(
-                total_rows, self.split
+    def _read_chunk(self, path: str, rg_idx: int, slice_start: int, slice_end: int):
+        """Read a single row group chunk and return Arrow buffers + scores.
+
+        Returns (fen_col, data_ptr, offsets_ptr, n, scores) where the pointers
+        are raw addresses for direct C++ access via the bulk API.
+        """
+        pf = pyarrow.parquet.ParquetFile(path)
+
+        # Read columns separately — reading them together causes a penalty
+        # in PyArrow's to_numpy() due to mixed binary/numeric types
+        fen_table = pf.read_row_group(rg_idx, columns=["fen"])
+        score_table = pf.read_row_group(rg_idx, columns=["score"])
+        rg_rows = fen_table.num_rows
+
+        if slice_start > 0 or slice_end < rg_rows:
+            fen_table = fen_table.slice(slice_start, slice_end - slice_start)
+            score_table = score_table.slice(slice_start, slice_end - slice_start)
+
+        # Cast to large_binary for contiguous int64 offsets buffer
+        fen_col = fen_table.column("fen")
+        if fen_col.type != pyarrow.large_binary():
+            fen_col = fen_col.cast(pyarrow.large_binary())
+        if fen_col.num_chunks > 1:
+            fen_col = fen_col.combine_chunks()
+        else:
+            fen_col = fen_col.chunk(0)
+
+        fen_buffers = fen_col.buffers()
+        scores = score_table.column("score").to_numpy().astype(np.float32)
+
+        # Return raw buffer addresses — fen_col must stay alive (caller holds ref)
+        return (
+            fen_col,
+            fen_buffers[2].address,
+            fen_buffers[1].address,
+            len(fen_col),
+            scores,
+        )
+
+    def _get_torch_fn(self):
+        """Return the torch-native extraction function for current arch."""
+        if self.arch == "halfkp":
+            return _preprocess.get_halfkp_features_torch
+        elif self.arch == "halfkav2":
+            return _preprocess.get_halfkav2_features_torch
+        else:
+            raise ValueError(f"Unknown architecture: {self.arch}")
+
+    def _iter_batched(self):
+        """Yield pre-collated tensor batches (fast path), shuffled across all sources."""
+        chunks = self._build_chunk_list()
+        random.shuffle(chunks)
+        batch_size = self.batch_size or 50000
+        torch_fn = self._get_torch_fn()
+
+        for path, rg_idx, slice_start, slice_end in chunks:
+            fen_col, data_ptr, offsets_ptr, n, scores = self._read_chunk(
+                path, rg_idx, slice_start, slice_end
             )
 
-            for rg_start, rg_len in row_groups:
-                rg_end = rg_start + rg_len
+            for start in range(0, n, batch_size):
+                count = min(batch_size, n - start)
+                batch_scores = scores[start : start + count]
 
-                # Check if row group overlaps with split
-                if rg_end <= split_start or rg_start >= split_end:
-                    continue
+                w_idx, w_off, b_idx, b_off, stm = torch_fn(
+                    data_ptr, offsets_ptr, start, count
+                )
+                yield (
+                    w_idx,
+                    w_off,
+                    b_idx,
+                    b_off,
+                    stm,
+                    torch.from_numpy(batch_scores).unsqueeze(1),
+                )
 
-                # Clip to split boundaries
-                actual_start = max(rg_start, split_start)
-                actual_end = min(rg_end, split_end)
-                actual_len = actual_end - actual_start
+                if self.flip_augment:
+                    w_f, wo_f, b_f, bo_f, stm_f = torch_fn(
+                        data_ptr, offsets_ptr, start, count, True
+                    )
+                    yield (
+                        w_f,
+                        wo_f,
+                        b_f,
+                        bo_f,
+                        stm_f,
+                        torch.from_numpy(-batch_scores).unsqueeze(1),
+                    )
 
-                if actual_len > 0:
-                    result.append((path, actual_start, actual_len, weight))
+    def _iter_samples(self):
+        """Yield individual samples (slow path, for compatibility), shuffled across all sources."""
+        chunks = self._build_chunk_list()
+        random.shuffle(chunks)
+        torch_fn = self._get_torch_fn()
 
-        return result
+        for path, rg_idx, slice_start, slice_end in chunks:
+            fen_col, data_ptr, offsets_ptr, n, scores = self._read_chunk(
+                path, rg_idx, slice_start, slice_end
+            )
 
-    def __len__(self) -> int:
-        if self._len is None:
-            row_groups = self._get_split_row_groups()
-            self._len = sum(rg[2] for rg in row_groups)
-            if self.flip_augment:
-                self._len *= 2
-        return self._len
+            # Use large batches for extraction, yield individual samples
+            batch_size = 50000
+            for start in range(0, n, batch_size):
+                count = min(batch_size, n - start)
+                w_idx, w_off, b_idx, b_off, stm = torch_fn(
+                    data_ptr, offsets_ptr, start, count
+                )
+                batch_scores = scores[start : start + count]
 
-    def __iter__(self):
-        row_groups = self._get_split_row_groups()
-        if not row_groups:
+                for i in range(count):
+                    w_start = w_off[i]
+                    w_end = w_off[i + 1] if i + 1 < count else len(w_idx)
+                    b_start = b_off[i]
+                    b_end = b_off[i + 1] if i + 1 < count else len(b_idx)
+
+                    yield (
+                        w_idx[w_start:w_end].clone(),
+                        b_idx[b_start:b_end].clone(),
+                        int(stm[i]),
+                        float(batch_scores[i]),
+                    )
+
+                    if self.flip_augment:
+                        w_f, wo_f, b_f, bo_f, stm_f = torch_fn(
+                            data_ptr, offsets_ptr, start, count, True
+                        )
+                        yield (
+                            w_f[w_start:w_end].clone(),
+                            b_f[b_start:b_end].clone(),
+                            int(stm_f[i]),
+                            -float(batch_scores[i]),
+                        )
+
+    def _iter_chunk_subset(self, chunk_subset):
+        """Yield batches from a subset of row-group chunks.
+
+        Same logic as _iter_batched but only for the given chunks.
+        Used by multi-producer prefetching so each thread works on
+        independent row groups.
+        """
+        batch_size = self.batch_size or 50000
+        torch_fn = self._get_torch_fn()
+
+        for path, rg_idx, slice_start, slice_end in chunk_subset:
+            fen_col, data_ptr, offsets_ptr, n, scores = self._read_chunk(
+                path, rg_idx, slice_start, slice_end
+            )
+
+            for start in range(0, n, batch_size):
+                count = min(batch_size, n - start)
+                batch_scores = scores[start : start + count]
+
+                w_idx, w_off, b_idx, b_off, stm = torch_fn(
+                    data_ptr, offsets_ptr, start, count
+                )
+                yield (
+                    w_idx,
+                    w_off,
+                    b_idx,
+                    b_off,
+                    stm,
+                    torch.from_numpy(batch_scores).unsqueeze(1),
+                )
+
+                if self.flip_augment:
+                    w_f, wo_f, b_f, bo_f, stm_f = torch_fn(
+                        data_ptr, offsets_ptr, start, count, True
+                    )
+                    yield (
+                        w_f,
+                        wo_f,
+                        b_f,
+                        bo_f,
+                        stm_f,
+                        torch.from_numpy(-batch_scores).unsqueeze(1),
+                    )
+
+    # Number of parallel producer threads for prefetching.
+    _NUM_PRODUCERS = 3
+
+    def _iter_with_prefetch(self, base_iter):
+        """Wrap iterator with multi-producer background prefetching.
+
+        Splits row-group chunks across ``_NUM_PRODUCERS`` threads so that
+        Parquet I/O and C++ feature extraction run concurrently across
+        independent row groups.  All producers feed a single bounded queue
+        consumed by the training loop.
+
+        Falls back to a single producer when there are fewer chunks than
+        producers (e.g. small files or validation sets).
+        """
+        chunks = self._build_chunk_list()
+        random.shuffle(chunks)
+
+        n_producers = min(self._NUM_PRODUCERS, len(chunks))
+        if n_producers <= 1:
+            # Single-producer fast path (original behaviour)
+            q: queue.Queue = queue.Queue(maxsize=self.prefetch)
+            sentinel = object()
+
+            def single_producer():
+                for item in base_iter:
+                    q.put(item)
+                q.put(sentinel)
+
+            thread = threading.Thread(target=single_producer, daemon=True)
+            thread.start()
+
+            while True:
+                item = q.get()
+                if item is sentinel:
+                    break
+                yield item
+            thread.join()
             return
 
-        # Shuffle row groups for this epoch
-        rng = random.Random(self.seed if self.seed is not None else self._epoch)
-        row_groups = list(row_groups)
-        rng.shuffle(row_groups)
+        # --- Multi-producer path ---
+        # Each producer puts a unique sentinel when done.  Consumer counts
+        # sentinels to know when all producers have finished.
+        q = queue.Queue(maxsize=self.prefetch)
+        _SENTINEL = None  # sentinels are None; real items are tuples
 
-        # Active group state: {idx: (path, pf, current_offset, end_offset, buffer, weight)}
-        active: dict[int, tuple] = {}
-        next_group_idx = 0
+        def producer(chunk_subset):
+            for item in self._iter_chunk_subset(chunk_subset):
+                q.put(item)
+            q.put(_SENTINEL)
 
-        def fill_active():
-            """Fill active slots up to num_active_groups."""
-            nonlocal next_group_idx
-            while len(active) < self.num_active_groups and next_group_idx < len(
-                row_groups
-            ):
-                path, start, length, weight = row_groups[next_group_idx]
-                pf = pyarrow.parquet.ParquetFile(path)
-                active[next_group_idx] = {
-                    "path": path,
-                    "pf": pf,
-                    "offset": start,
-                    "end": start + length,
-                    "buffer": [],
-                    "weight": weight,
-                }
-                next_group_idx += 1
+        # Round-robin distribute chunks to producers
+        subsets: list[list] = [[] for _ in range(n_producers)]
+        for i, chunk in enumerate(chunks):
+            subsets[i % n_producers].append(chunk)
 
-        def refill_buffer(idx: int) -> bool:
-            """Refill buffer for active group. Returns False if exhausted."""
-            state = active[idx]
-            if state["offset"] >= state["end"]:
-                return False
+        threads = []
+        for subset in subsets:
+            t = threading.Thread(target=producer, args=(subset,), daemon=True)
+            t.start()
+            threads.append(t)
 
-            # Read a chunk
-            read_len = min(self.buffer_per_group, state["end"] - state["offset"])
+        # Consumer: drain queue until all producers have sent their sentinel
+        done_count = 0
+        while done_count < n_producers:
+            item = q.get()
+            if item is _SENTINEL:
+                done_count += 1
+            else:
+                yield item
 
-            # Use polars for efficient reading with offset
-            df = (
-                pl.scan_parquet(state["path"])
-                .slice(state["offset"], read_len)
-                .collect()
-            )
-            state["offset"] += read_len
+        for t in threads:
+            t.join()
 
-            fens = df["fen"].to_list()
-            scores = df["score"].to_list()
+    def __iter__(self):
+        if self.batch_size is not None:
+            base_iter = self._iter_batched()
+        else:
+            base_iter = self._iter_samples()
 
-            # Extract features
-            w_idx, w_off, b_idx, b_off, stm = self._get_features(fens, False)
+        if self.prefetch > 0 and self.batch_size is not None:
+            yield from self._iter_with_prefetch(base_iter)
+        else:
+            yield from base_iter
 
-            n_samples = len(fens)
-            for i in range(n_samples):
-                w_start = w_off[i]
-                w_end = w_off[i + 1] if i + 1 < n_samples else len(w_idx)
-                b_start = b_off[i]
-                b_end = b_off[i + 1] if i + 1 < n_samples else len(b_idx)
-
-                state["buffer"].append(
-                    (
-                        w_idx[w_start:w_end].copy(),
-                        b_idx[b_start:b_end].copy(),
-                        int(stm[i]),
-                        float(scores[i]),
-                    )
-                )
-
-            # Also add flipped if augmenting
-            if self.flip_augment:
-                w_idx_f, w_off_f, b_idx_f, b_off_f, stm_f = self._get_features(
-                    fens, True
-                )
-                for i in range(n_samples):
-                    w_start = w_off_f[i]
-                    w_end = w_off_f[i + 1] if i + 1 < n_samples else len(w_idx_f)
-                    b_start = b_off_f[i]
-                    b_end = b_off_f[i + 1] if i + 1 < n_samples else len(b_idx_f)
-
-                    state["buffer"].append(
-                        (
-                            w_idx_f[w_start:w_end].copy(),
-                            b_idx_f[b_start:b_end].copy(),
-                            int(stm_f[i]),
-                            -float(scores[i]),
-                        )
-                    )
-
-            # Shuffle buffer
-            rng.shuffle(state["buffer"])
-            return True
-
-        # Initial fill
-        fill_active()
-        for idx in list(active.keys()):
-            refill_buffer(idx)
-
-        # Yield samples
-        while active:
-            # Pick random active group (weighted)
-            indices = list(active.keys())
-            weights = [active[i]["weight"] for i in indices]
-            total_w = sum(weights)
-            weights = [w / total_w for w in weights]
-
-            idx = rng.choices(indices, weights)[0]
-            state = active[idx]
-
-            # Get sample from buffer
-            if state["buffer"]:
-                yield state["buffer"].pop()
-
-            # Refill if empty
-            if not state["buffer"]:
-                if not refill_buffer(idx):
-                    # This group is exhausted, remove and fill replacement
-                    del active[idx]
-                    fill_active()
-                    for new_idx in list(active.keys()):
-                        if not active[new_idx]["buffer"]:
-                            if not refill_buffer(new_idx):
-                                del active[new_idx]
+    @property
+    def is_batched(self) -> bool:
+        """True if dataset yields pre-batched tensors."""
+        return self.batch_size is not None
 
 
 def collate_sparse(batch):
     """Collate sparse HalfKP features into batched tensors."""
-    # Pre-compute sizes for numpy pre-allocation
     n = len(batch)
     w_lens = [len(b[0]) for b in batch]
     b_lens = [len(b[1]) for b in batch]
     w_total = sum(w_lens)
     b_total = sum(b_lens)
 
-    # Pre-allocate numpy arrays
     w_all = np.empty(w_total, dtype=np.int64)
     b_all = np.empty(b_total, dtype=np.int64)
     w_off = np.empty(n, dtype=np.int64)
@@ -809,21 +741,16 @@ def collate_sparse(batch):
     stm_arr = np.empty(n, dtype=np.int64)
     score_arr = np.empty(n, dtype=np.float32)
 
-    # Fill arrays
     w_pos, b_pos = 0, 0
     for i, (w, b, stm, score) in enumerate(batch):
         w_len = w_lens[i]
         b_len = b_lens[i]
-
         w_off[i] = w_pos
         b_off[i] = b_pos
-
         w_all[w_pos : w_pos + w_len] = w
         b_all[b_pos : b_pos + b_len] = b
-
         w_pos += w_len
         b_pos += b_len
-
         stm_arr[i] = stm
         score_arr[i] = score
 
@@ -835,6 +762,238 @@ def collate_sparse(batch):
         torch.from_numpy(stm_arr),
         torch.from_numpy(score_arr).unsqueeze(1),
     )
+
+
+# ============================================================================
+# GPU-side feature extraction dataset
+# ============================================================================
+
+
+class GpuExtractDataset:
+    """
+    Streaming dataset that extracts NNUE features on-device using CUDA kernels.
+
+    Only metadata is stored at init time.  During iteration, one parquet row
+    group (~100K rows, ~2-3 MB) is loaded to GPU at a time, features are
+    extracted, batches are yielded, and the row group's GPU memory is freed
+    before the next one is loaded.  This keeps GPU memory usage constant
+    regardless of dataset size.
+
+    Requires the ``_extract_cuda`` extension (built with nvcc).
+
+    Args:
+        paths: Parquet file paths
+        batch_size: Samples per batch
+        split: 'train', 'val', 'test', or None
+        split_config: SplitConfig for splitting
+        arch: 'halfkp' or 'halfkav2'
+        flip_augment: Include flipped positions (2x data)
+        device: torch device (must be CUDA)
+    """
+
+    def __init__(
+        self,
+        paths: list[str],
+        batch_size: int = 65536,
+        split: str | None = None,
+        split_config: SplitConfig | None = None,
+        arch: str = "halfkp",
+        flip_augment: bool = False,
+        device: torch.device | None = None,
+    ):
+        self.batch_size = batch_size
+        self.arch = arch
+        self.flip_augment = flip_augment
+        self.device = device or torch.device("cuda")
+        self.split = split
+        self.split_config = split_config or SplitConfig()
+
+        if arch not in ("halfkp", "halfkav2"):
+            raise ValueError(f"Unknown architecture: {arch}")
+
+        # Scan metadata only — no data loaded.  Build a list of
+        # (path, rg_idx, slice_lo, slice_hi, n_rows) for each row group
+        # that overlaps the requested split.
+        self._chunks: list[tuple[str, int, int, int, int]] = []
+        self.n_positions = 0
+
+        paths = paths if isinstance(paths, list) else [paths]
+
+        for path in paths:
+            pf = pyarrow.parquet.ParquetFile(path)
+            file_rows = pf.metadata.num_rows
+            start, end = self.split_config.get_split_indices(file_rows, split)
+            if start >= end:
+                continue
+
+            rg_row_offset = 0
+            for rg_idx in range(pf.metadata.num_row_groups):
+                rg_nrows = pf.metadata.row_group(rg_idx).num_rows
+                rg_start = rg_row_offset
+                rg_end = rg_row_offset + rg_nrows
+                rg_row_offset = rg_end
+
+                if rg_end <= start or rg_start >= end:
+                    continue
+
+                slice_lo = max(start - rg_start, 0)
+                slice_hi = min(end - rg_start, rg_nrows)
+                n_rows = slice_hi - slice_lo
+                if n_rows > 0:
+                    self._chunks.append((path, rg_idx, slice_lo, slice_hi, n_rows))
+                    self.n_positions += n_rows
+
+        if not self._chunks:
+            raise ValueError("No data found for the requested split")
+
+        print(
+            f"GPU extract: {self.n_positions} positions across "
+            f"{len(self._chunks)} row groups (streaming)"
+        )
+
+    def __len__(self) -> int:
+        n = self.n_positions
+        if self.flip_augment:
+            n *= 2
+        return n
+
+    @property
+    def n_batches(self) -> int:
+        """Exact batch count per epoch (accounts for per-row-group tails)."""
+        bs = self.batch_size
+        n = sum((rows + bs - 1) // bs for _, _, _, _, rows in self._chunks)
+        if self.flip_augment:
+            n *= 2
+        return n
+
+    def _get_extract_fn(self):
+        """Return the CUDA extraction function for current arch."""
+        import _extract_cuda
+
+        if self.arch == "halfkp":
+            return _extract_cuda.extract_halfkp_gpu
+        elif self.arch == "halfkav2":
+            return _extract_cuda.extract_halfkav2_gpu
+        else:
+            raise ValueError(f"Unknown architecture: {self.arch}")
+
+    @staticmethod
+    def _load_row_group(
+        path: str,
+        rg_idx: int,
+        slice_lo: int,
+        slice_hi: int,
+        device: torch.device,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, int]:
+        """Load one row group to GPU.  Returns (data, offsets, scores, n_rows)."""
+        pf = pyarrow.parquet.ParquetFile(path)
+        table = pf.read_row_group(rg_idx, columns=["fen", "score"])
+        rg_nrows = len(table)
+
+        if slice_lo > 0 or slice_hi < rg_nrows:
+            table = table.slice(slice_lo, slice_hi - slice_lo)
+
+        n_rows = len(table)
+
+        fen_col = table.column("fen")
+        if fen_col.type != pyarrow.large_binary():
+            fen_col = fen_col.cast(pyarrow.large_binary())
+        if fen_col.num_chunks > 1:
+            fen_col = fen_col.combine_chunks()
+        else:
+            fen_col = fen_col.chunk(0)
+
+        bufs = fen_col.buffers()
+        raw_data = np.frombuffer(bufs[2], dtype=np.uint8)
+        raw_off = np.frombuffer(bufs[1], dtype=np.int64)
+
+        # Rebase offsets to start at 0
+        offsets = raw_off[: n_rows + 1].copy()
+        base = offsets[0]
+        data = raw_data[base : offsets[-1]].copy()
+        offsets -= base
+
+        data_gpu = torch.from_numpy(data).to(device, non_blocking=True)
+        off_gpu = torch.from_numpy(offsets).to(device, non_blocking=True)
+
+        scores_np = table.column("score").to_numpy().astype(np.float32)
+        scores_gpu = (
+            torch.from_numpy(scores_np).unsqueeze(1).to(device, non_blocking=True)
+        )
+
+        del table, fen_col, bufs, raw_data, raw_off, data, offsets, scores_np
+        return data_gpu, off_gpu, scores_gpu, n_rows
+
+    def iter_batches(self, shuffle: bool = True):
+        """
+        Yield (w_idx, w_off, b_idx, b_off, stm, target) tuples, all on GPU.
+
+        Streams one row group at a time from disk to GPU.  A background thread
+        prefetches the next row group while training runs on the current one,
+        hiding I/O latency.  At most two row groups are on GPU simultaneously
+        (current + prefetched).
+        """
+        extract_fn = self._get_extract_fn()
+        bs = self.batch_size
+
+        # Shuffle row groups within each file (preserves sequential I/O per file)
+        # then shuffle the file order itself.
+        if shuffle:
+            # Group chunk indices by file path
+            file_groups: dict[str, list[int]] = {}
+            for ci, (path, _, _, _, _) in enumerate(self._chunks):
+                file_groups.setdefault(path, []).append(ci)
+            # Shuffle within each file, then shuffle file order
+            group_keys = list(file_groups.keys())
+            random.shuffle(group_keys)
+            chunk_order: list[int] = []
+            for key in group_keys:
+                group = file_groups[key]
+                random.shuffle(group)
+                chunk_order.extend(group)
+        else:
+            chunk_order = list(range(len(self._chunks)))
+
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+
+        # Submit first row group load
+        ci = chunk_order[0]
+        path, rg_idx, slice_lo, slice_hi, _ = self._chunks[ci]
+        future = executor.submit(
+            self._load_row_group, path, rg_idx, slice_lo, slice_hi, self.device
+        )
+
+        for i, ci in enumerate(chunk_order):
+            # Wait for current row group
+            data_gpu, off_gpu, scores_gpu, n_rows = future.result()
+
+            # Prefetch next row group in background
+            if i + 1 < len(chunk_order):
+                next_ci = chunk_order[i + 1]
+                np_, rg_, sl_, sh_, _ = self._chunks[next_ci]
+                future = executor.submit(
+                    self._load_row_group, np_, rg_, sl_, sh_, self.device
+                )
+
+            # Iterate over batches within this row group
+            for start in range(0, n_rows, bs):
+                count = min(bs, n_rows - start)
+                w_idx, w_off, b_idx, b_off, stm = extract_fn(
+                    data_gpu, off_gpu, start, count, False
+                )
+                target = scores_gpu[start : start + count]
+                yield w_idx, w_off, b_idx, b_off, stm, target
+
+                if self.flip_augment:
+                    w_f, wo_f, b_f, bo_f, stm_f = extract_fn(
+                        data_gpu, off_gpu, start, count, True
+                    )
+                    yield w_f, wo_f, b_f, bo_f, stm_f, -target
+
+            # Free this row group's GPU memory before loading the next
+            del data_gpu, off_gpu, scores_gpu
+
+        executor.shutdown(wait=False)
 
 
 # ============================================================================
@@ -868,10 +1027,8 @@ class Tracker:
     """
 
     def __init__(self):
-        from collections import defaultdict
-
-        self._current: dict[str, dict[str, list[float]]] = defaultdict(
-            lambda: defaultdict(list)
+        self._current: dict[str, dict[str, list[float]]] = collections.defaultdict(
+            lambda: collections.defaultdict(list)
         )
         self._history: list[dict[str, dict[str, float]]] = []
         self._epoch = 0
@@ -944,14 +1101,49 @@ class Tracker:
         return min(values) if values else float("inf")
 
 
-def evaluate(model, loader, device):
+# ============================================================================
+# Loss Functions
+# ============================================================================
+
+# Scaling factor for sigmoid transformation (Stockfish uses 410)
+# Maps ~400cp to ~76% win probability
+SIGMOID_SCALE = 400.0
+
+
+def wdl_loss(
+    pred: torch.Tensor, target: torch.Tensor, scale: float = SIGMOID_SCALE
+) -> torch.Tensor:
+    """
+    WDL-style loss using sigmoid scaling.
+
+    Converts both prediction and target to win probabilities using sigmoid,
+    then computes MSE. This naturally handles the wide score range (-15000 to +15000)
+    by compressing extreme values.
+
+    Args:
+        pred: Model predictions in centipawns
+        target: Target scores in centipawns
+        scale: Sigmoid scaling factor (default 400, Stockfish uses 410)
+
+    Returns:
+        Scalar loss tensor
+    """
+    pred_prob = torch.sigmoid(pred / scale)
+    target_prob = torch.sigmoid(target / scale)
+    return torch.nn.functional.mse_loss(pred_prob, target_prob)
+
+
+def evaluate(model, loader, device, loss_fn=None):
+    """Evaluate model on a data loader."""
+    if loss_fn is None:
+        loss_fn = wdl_loss
     model.eval()
     total_loss, n = 0, 0
     with torch.no_grad():
         for batch in loader:
             w_idx, w_off, b_idx, b_off, stm, target = [x.to(device) for x in batch]
             pred = model(w_idx, w_off, b_idx, b_off, stm)
-            total_loss += torch.nn.functional.mse_loss(pred, target).item()
+            total_loss += loss_fn(pred, target).item()
             n += 1
     return total_loss / max(n, 1)
 
@@ -965,63 +1157,116 @@ def train(
     lr: float,
     tracker: Tracker | None = None,
     num_workers: int = 0,
-    arch: str = "halfkp",
+    arch: str | None = None,
+    quiet: bool = False,
+    accum_steps: int = 1,
 ) -> tuple[NNUE, Tracker]:
+    # Infer arch from dataset if not explicitly provided
+    dataset_arch = getattr(train_dataset, "arch", None)
+    if arch is None:
+        arch = dataset_arch or "halfkp"
+    elif dataset_arch is not None and arch != dataset_arch:
+        raise ValueError(
+            f"arch mismatch: train() got arch='{arch}' but dataset uses "
+            f"arch='{dataset_arch}'. Remove the arch argument from train() "
+            f"to use the dataset's architecture."
+        )
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
     print(f"Architecture: {arch}")
+    if accum_steps > 1:
+        print(f"Gradient accumulation: {accum_steps} micro-batches per step")
+
+    # Detect GPU extraction dataset
+    gpu_extract = isinstance(train_dataset, GpuExtractDataset)
+    if gpu_extract:
+        print("Using GPU-side feature extraction (CUDA kernels)")
+
+    # Check if dataset yields pre-batched tensors
+    is_prebatched = (
+        isinstance(train_dataset, ParquetDataset) and train_dataset.is_batched
+    )
 
     is_iterable = isinstance(
         train_dataset, torch.utils.data.IterableDataset
     ) or not hasattr(train_dataset, "__getitem__")
-    train_loader = torch.utils.data.DataLoader(
-        train_dataset,
-        batch_size=batch_size,
-        collate_fn=collate_sparse,
-        num_workers=num_workers,
-        shuffle=not is_iterable,
-    )
-    n_train_batches = (len(train_dataset) + batch_size - 1) // batch_size
-    val_loader = (
-        torch.utils.data.DataLoader(
-            val_dataset,
+
+    if gpu_extract:
+        # GpuExtractDataset knows its exact batch count (per-row-group tails)
+        n_train_batches = train_dataset.n_batches
+        n_val_batches = val_dataset.n_batches if val_dataset is not None else 0
+    elif is_prebatched:
+        # Pre-batched dataset: no collate needed, prefetching is built-in
+        train_loader = torch.utils.data.DataLoader(
+            train_dataset,
+            batch_size=None,  # Dataset yields complete batches
+        )
+        n_train_batches = (len(train_dataset) + batch_size - 1) // batch_size
+        val_loader = (
+            torch.utils.data.DataLoader(val_dataset, batch_size=None)
+            if val_dataset is not None
+            else None
+        )
+        n_val_batches = (
+            (len(val_dataset) + batch_size - 1) // batch_size
+            if val_dataset is not None
+            else 0
+        )
+    else:
+        train_loader = torch.utils.data.DataLoader(
+            train_dataset,
             batch_size=batch_size,
             collate_fn=collate_sparse,
             num_workers=num_workers,
+            shuffle=not is_iterable,
         )
-        if val_dataset is not None
-        else None
-    )
-    n_val_batches = (
-        (len(val_dataset) + batch_size - 1) // batch_size
-        if val_dataset is not None
-        else 0
-    )
+        n_train_batches = (len(train_dataset) + batch_size - 1) // batch_size
+        val_loader = (
+            torch.utils.data.DataLoader(
+                val_dataset,
+                batch_size=batch_size,
+                collate_fn=collate_sparse,
+                num_workers=num_workers,
+            )
+            if val_dataset is not None
+            else None
+        )
+        n_val_batches = (
+            (len(val_dataset) + batch_size - 1) // batch_size
+            if val_dataset is not None
+            else 0
+        )
 
     model = NNUE(arch=arch).to(device)
+    model.ft.sparse = (
+        False  # Dense gradients — faster than SparseAdam at high batch sizes
+    )
     if tracker is None:
         tracker = Tracker()
 
-    # Use SparseAdam for sparse embedding, AdamW for dense layers
-    sparse_params = [model.ft.weight]
+    # Single optimizer with per-group weight decay:
+    # no decay on embedding (it's a lookup table), decay on dense layers
     dense_params = [p for n, p in model.named_parameters() if "ft.weight" not in n]
-
-    sparse_optimizer = torch.optim.SparseAdam(sparse_params, lr=lr)
-    dense_optimizer = torch.optim.AdamW(dense_params, lr=lr, weight_decay=1e-4)
+    optimizer = torch.optim.AdamW(
+        [
+            {"params": [model.ft.weight], "weight_decay": 0},
+            {"params": dense_params, "weight_decay": 1e-4},
+        ],
+        lr=lr,
+    )
 
     # Use CosineAnnealingLR which steps per epoch (no fixed steps_per_epoch needed)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        dense_optimizer, T_max=epochs, eta_min=lr * 0.01
+        optimizer, T_max=epochs, eta_min=lr * 0.01
     )
 
-    scaler = torch.amp.GradScaler("cuda") if device.type == "cuda" else None
     best_val = float("inf")
 
     # Calculate total batches for single progress bar across all epochs
     batches_per_epoch = n_train_batches + n_val_batches
     total_batches = batches_per_epoch * epochs
 
-    pbar = tqdm.tqdm(total=total_batches, desc="Training")
+    pbar = tqdm.tqdm(total=total_batches, desc="Training", disable=quiet)
     tracker.track_epoch("epoch", f"1/{epochs}")
 
     for epoch in range(epochs):
@@ -1029,48 +1274,91 @@ def train(
         tracker.track_epoch("epoch", f"{epoch + 1}/{epochs}")
 
         # Training
-        for batch in train_loader:
-            w_idx, w_off, b_idx, b_off, stm, target = [x.to(device) for x in batch]
-            sparse_optimizer.zero_grad(set_to_none=True)
-            dense_optimizer.zero_grad(set_to_none=True)
+        # Accumulate loss entirely on GPU — only sync once at epoch end.
+        loss_accum = torch.zeros(1, device=device)
+        loss_count = 0
+        loss_scale = 1.0 / accum_steps
 
-            if scaler:
-                with torch.amp.autocast("cuda"):
-                    loss = torch.nn.functional.mse_loss(
-                        model(w_idx, w_off, b_idx, b_off, stm), target
-                    )
-                scaler.scale(loss).backward()
-                scaler.step(sparse_optimizer)
-                scaler.step(dense_optimizer)
-                scaler.update()
+        optimizer.zero_grad(set_to_none=True)
+        train_iter = (
+            train_dataset.iter_batches(shuffle=True) if gpu_extract else train_loader
+        )
+        for step, batch in enumerate(train_iter):
+            if gpu_extract:
+                # GpuExtractDataset yields tensors already on GPU
+                w_idx, w_off, b_idx, b_off, stm, target = batch
             else:
-                loss = torch.nn.functional.mse_loss(
-                    model(w_idx, w_off, b_idx, b_off, stm), target
-                )
-                loss.backward()
-                sparse_optimizer.step()
-                dense_optimizer.step()
+                w_idx = batch[0].to(device, non_blocking=True)
+                w_off = batch[1].to(device, non_blocking=True)
+                b_idx = batch[2].to(device, non_blocking=True)
+                b_off = batch[3].to(device, non_blocking=True)
+                stm = batch[4].to(device, non_blocking=True)
+                target = batch[5].to(device, non_blocking=True)
 
-            tracker.track("train", "loss", loss.item())
-            pbar.set_postfix(**tracker.postfix)
+            pred = model(w_idx, w_off, b_idx, b_off, stm)
+            loss = wdl_loss(pred, target)
+            # Scale loss for gradient accumulation so effective gradient
+            # equals the mean over all micro-batches in an accumulation window.
+            (loss * loss_scale).backward()
+
+            loss_accum.add_(loss.detach())
+            loss_count += 1
             pbar.update(1)
 
+            if loss_count % accum_steps == 0:
+                optimizer.step()
+                optimizer.zero_grad(set_to_none=True)
+
+        # Flush partial accumulation at epoch boundary
+        if loss_count % accum_steps != 0:
+            optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
+
+        # Sync once at epoch end for logging
+        avg_loss = (loss_accum / loss_count).item()
+        tracker.track("train", "loss", avg_loss)
+        pbar.set_postfix(**tracker.postfix)
+
         # Validation
-        if val_loader is not None:
+        val_iter = None
+        if gpu_extract and val_dataset is not None:
+            val_iter = val_dataset.iter_batches(shuffle=False)
+        elif not gpu_extract and val_loader is not None:
+            val_iter = val_loader
+
+        if val_iter is not None:
             model.eval()
             with torch.no_grad():
-                for batch in val_loader:
-                    w_idx, w_off, b_idx, b_off, stm, target = [
-                        x.to(device) for x in batch
-                    ]
+                for batch in val_iter:
+                    if gpu_extract:
+                        w_idx, w_off, b_idx, b_off, stm, target = batch
+                    else:
+                        w_idx = batch[0].to(device, non_blocking=True)
+                        w_off = batch[1].to(device, non_blocking=True)
+                        b_idx = batch[2].to(device, non_blocking=True)
+                        b_off = batch[3].to(device, non_blocking=True)
+                        stm = batch[4].to(device, non_blocking=True)
+                        target = batch[5].to(device, non_blocking=True)
                     pred = model(w_idx, w_off, b_idx, b_off, stm)
-                    val_loss = torch.nn.functional.mse_loss(pred, target).item()
+                    val_loss = wdl_loss(pred, target).item()
                     tracker.track("val", "loss", val_loss)
                     pbar.set_postfix(**tracker.postfix)
                     pbar.update(1)
 
         scheduler.step()
-        tracker.submit_epoch()
+        epoch_metrics = tracker.submit_epoch()
+
+        # Keep val_loss visible in progress bar for next epoch
+        if "val" in epoch_metrics and "loss" in epoch_metrics["val"]:
+            tracker.track_epoch("val_loss", f"{epoch_metrics['val']['loss']:.4f}")
+
+        # Print epoch summary when quiet
+        if quiet:
+            train_loss = epoch_metrics.get("train", {}).get("loss", float("nan"))
+            val_loss = epoch_metrics.get("val", {}).get("loss", float("nan"))
+            print(
+                f"Epoch {epoch + 1}/{epochs}: train_loss={train_loss:.6f}, val_loss={val_loss:.6f}"
+            )
 
         val_loss = tracker["val"].get("loss", float("inf"))
         if val_loss < best_val:
@@ -1088,24 +1376,35 @@ def train(
 # ============================================================================
 
 
+_ARCH_STRINGS = {
+    "halfkp": b"Features=HalfKP(Friend)[41024->256x2]->[32->32]->1",
+    "halfkav2": b"Features=HalfKAv2(Friend)[7692->256x2]->[32->32]->1",
+}
+
+_ARCH_FT_SIZES = {
+    "halfkp": HALFKP_SIZE,
+    "halfkav2": HALFKAV2_SIZE,
+}
+
+
 def export_nnue(model: NNUE, path: str):
     with open(path, "wb") as f:
         f.write(struct.pack("<I", 0x7AF32F20))
         f.write(struct.pack("<I", 0))
-        arch = b"Features=HalfKP(Friend)[41024->256x2]->[32->32]->1"
-        f.write(struct.pack("<I", len(arch)))
-        f.write(arch)
+        arch_str = _ARCH_STRINGS[model.arch]
+        f.write(struct.pack("<I", len(arch_str)))
+        f.write(arch_str)
         f.write(struct.pack("<I", 0x5D69D5B9))
 
         # Feature transformer
         bias = (
-            (model.ft_bias.detach().cpu().numpy() * FT_QUANT_SCALE)
+            np.round(model.ft_bias.detach().cpu().numpy() * FT_QUANT_SCALE)
             .clip(-32768, 32767)
             .astype(np.int16)
         )
         f.write(bias.tobytes())
         weight = (
-            (model.ft.weight.detach().cpu().numpy().T * FT_QUANT_SCALE)
+            np.round(model.ft.weight.detach().cpu().numpy().T * FT_QUANT_SCALE)
             .clip(-32768, 32767)
             .astype(np.int16)
         )
@@ -1114,34 +1413,213 @@ def export_nnue(model: NNUE, path: str):
         f.write(struct.pack("<I", 0))
 
         # Hidden layers
+        # Bias scale must match the dot product scale at each layer.
+        # After ClippedReLU + divide-by-NET_SCALE, activations are at scale
+        # FT_QUANT_SCALE (127). So dot(input, weights) has scale
+        # FT_QUANT_SCALE * WEIGHT_QUANT_SCALE = 8128 for all layers.
         for layer, scale in [
             (model.l1, FT_QUANT_SCALE * WEIGHT_QUANT_SCALE),
-            (model.l2, WEIGHT_QUANT_SCALE * WEIGHT_QUANT_SCALE),
+            (model.l2, FT_QUANT_SCALE * WEIGHT_QUANT_SCALE),
         ]:
             f.write(
-                (layer.bias.detach().cpu().numpy() * scale).astype(np.int32).tobytes()
+                np.round(layer.bias.detach().cpu().numpy() * scale)
+                .astype(np.int32)
+                .tobytes()
             )
             f.write(
-                (layer.weight.detach().cpu().numpy().T * WEIGHT_QUANT_SCALE)
+                np.round(layer.weight.detach().cpu().numpy() * WEIGHT_QUANT_SCALE)
                 .clip(-128, 127)
                 .astype(np.int8)
                 .tobytes()
             )
 
-        # Output
+        # Output (same bias scale as hidden layers: FT_QUANT_SCALE * WEIGHT_QUANT_SCALE)
         f.write(
-            (model.out.bias.detach().cpu().numpy() * WEIGHT_QUANT_SCALE**2)
+            np.round(
+                model.out.bias.detach().cpu().numpy()
+                * FT_QUANT_SCALE
+                * WEIGHT_QUANT_SCALE
+            )
             .astype(np.int32)
             .tobytes()
         )
         f.write(
-            (model.out.weight.detach().cpu().numpy().flatten() * WEIGHT_QUANT_SCALE)
+            np.round(
+                model.out.weight.detach().cpu().numpy().flatten() * WEIGHT_QUANT_SCALE
+            )
             .clip(-128, 127)
             .astype(np.int8)
             .tobytes()
         )
 
     print(f"Exported: {path}")
+
+
+def load_nnue(path: str) -> dict:
+    """Load a quantized .nnue file into numpy arrays.
+
+    Returns a dict with keys: arch, ft_bias, ft_weights, l1_bias, l1_weights,
+    l2_bias, l2_weights, out_bias, out_weights.
+    """
+    with open(path, "rb") as f:
+        # Header
+        f.read(4)  # version
+        f.read(4)  # hash
+        arch_len = struct.unpack("<I", f.read(4))[0]
+        arch_bytes = f.read(arch_len)
+        f.read(4)  # FT header
+
+        # Detect architecture from header string
+        arch = "halfkp"  # default
+        for name, expected in _ARCH_STRINGS.items():
+            if arch_bytes == expected:
+                arch = name
+                break
+        ft_size = _ARCH_FT_SIZES[arch]
+
+        # Feature transformer
+        ft_bias = np.frombuffer(f.read(FT_OUT * 2), dtype=np.int16).copy()
+        ft_weights = (
+            np.frombuffer(f.read(ft_size * FT_OUT * 2), dtype=np.int16)
+            .reshape(ft_size, FT_OUT)
+            .copy()
+        )
+
+        # Network header
+        f.read(4)
+
+        # L1: (L1_OUT, L1_IN) = (32, 512)
+        l1_bias = np.frombuffer(f.read(L1_OUT * 4), dtype=np.int32).copy()
+        l1_weights = (
+            np.frombuffer(f.read(L1_OUT * FT_OUT * 2 * 1), dtype=np.int8)
+            .reshape(L1_OUT, FT_OUT * 2)
+            .copy()
+        )
+
+        # L2: (L2_OUT, L2_IN) = (32, 32)
+        l2_bias = np.frombuffer(f.read(L2_OUT * 4), dtype=np.int32).copy()
+        l2_weights = (
+            np.frombuffer(f.read(L2_OUT * L1_OUT * 1), dtype=np.int8)
+            .reshape(L2_OUT, L1_OUT)
+            .copy()
+        )
+
+        # Output: (1, 32)
+        out_bias = struct.unpack("<i", f.read(4))[0]
+        out_weights = np.frombuffer(f.read(L2_OUT * 1), dtype=np.int8).copy()
+
+    return {
+        "arch": arch,
+        "ft_bias": ft_bias,
+        "ft_weights": ft_weights,
+        "l1_bias": l1_bias,
+        "l1_weights": l1_weights,
+        "l2_bias": l2_bias,
+        "l2_weights": l2_weights,
+        "out_bias": out_bias,
+        "out_weights": out_weights,
+    }
+
+
+def _trunc_div(a: int, b: int) -> int:
+    """C-style integer division (truncate toward zero)."""
+    return int(a / b) if (a ^ b) >= 0 else -int((-a) / b)
+
+
+def evaluate_fen_quantized(fen: str, weights: dict) -> int:
+    """Evaluate a FEN using quantized integer arithmetic matching C++ NNUE.hpp.
+
+    This replicates the exact computation in Evaluator::evaluate() + forward()
+    so we can verify the C++ implementation is correct.
+
+    Args:
+        fen: FEN string
+        weights: dict from load_nnue()
+
+    Returns:
+        Score in centipawns from side-to-move perspective (int).
+    """
+    NET_SCALE = 64
+    FT_SCALE_VAL = 127
+    SIGMOID_SCALE_VAL = 400
+
+    # Extract features using the architecture from the weights
+    compressed = dummy_chess.compress_fen(fen)
+    arch = weights.get("arch", "halfkp")
+    if arch == "halfkav2":
+        w_idx, w_off, b_idx, b_off, stm = dummy_chess.get_halfkav2_features_batch(
+            [compressed]
+        )
+    else:
+        w_idx, w_off, b_idx, b_off, stm = dummy_chess.get_halfkp_features_batch(
+            [compressed]
+        )
+
+    # Build accumulators (int16, matching C++ refresh_accumulator)
+    ft_bias = weights["ft_bias"]
+    ft_w = weights["ft_weights"]
+
+    # White perspective accumulator
+    w_acc = ft_bias.astype(np.int32).copy()
+    for idx in w_idx:
+        w_acc += ft_w[int(idx)].astype(np.int32)
+    # Clip to int16 range (accumulator is int16 in C++)
+    w_acc = np.clip(w_acc, -32768, 32767).astype(np.int16)
+
+    # Black perspective accumulator
+    b_acc = ft_bias.astype(np.int32).copy()
+    for idx in b_idx:
+        b_acc += ft_w[int(idx)].astype(np.int32)
+    b_acc = np.clip(b_acc, -32768, 32767).astype(np.int16)
+
+    # ClippedReLU: int16 -> int8, clamp [0, 127]
+    # Concatenate STM first, NSTM second (matching C++ forward)
+    stm_val = int(stm[0])
+    if stm_val == 0:  # white to move
+        stm_acc, nstm_acc = w_acc, b_acc
+    else:  # black to move
+        stm_acc, nstm_acc = b_acc, w_acc
+
+    ft_out = np.concatenate(
+        [
+            np.clip(stm_acc, 0, 127).astype(np.int8),
+            np.clip(nstm_acc, 0, 127).astype(np.int8),
+        ]
+    )
+
+    # L1: 512 -> 32
+    l1_out = np.empty(L1_OUT, dtype=np.int8)
+    for j in range(L1_OUT):
+        s = int(weights["l1_bias"][j])
+        s += int(
+            np.dot(ft_out.astype(np.int32), weights["l1_weights"][j].astype(np.int32))
+        )
+        # C-style: clamp(sum / 64, 0, 127)
+        s = max(0, min(127, _trunc_div(s, NET_SCALE)))
+        l1_out[j] = s
+
+    # L2: 32 -> 32
+    l2_out = np.empty(L2_OUT, dtype=np.int8)
+    for j in range(L2_OUT):
+        s = int(weights["l2_bias"][j])
+        s += int(
+            np.dot(l1_out.astype(np.int32), weights["l2_weights"][j].astype(np.int32))
+        )
+        s = max(0, min(127, _trunc_div(s, NET_SCALE)))
+        l2_out[j] = s
+
+    # Output: 32 -> 1
+    raw = int(weights["out_bias"])
+    raw += int(np.dot(l2_out.astype(np.int32), weights["out_weights"].astype(np.int32)))
+
+    # to_centipawns: raw * 400 / 8128 (C-style truncation)
+    cp = _trunc_div(raw * SIGMOID_SCALE_VAL, FT_SCALE_VAL * NET_SCALE)
+
+    # Negate for black STM (network outputs white's perspective)
+    if stm_val == 1:
+        cp = -cp
+
+    return cp
 
 
 # ============================================================================
@@ -1171,14 +1649,22 @@ def evaluate_fen(
     if model is None:
         if model_path is None:
             model_path = str(pathlib.Path(__file__).parent / "network.pt")
-        model = NNUE()
-        model.load_state_dict(
-            torch.load(model_path, map_location="cpu", weights_only=True)
-        )
+        # Peek at state dict to detect arch from ft.weight shape
+        state = torch.load(model_path, map_location="cpu", weights_only=True)
+        ft_size = state["ft.weight"].shape[0]
+        arch = "halfkav2" if ft_size == HALFKAV2_SIZE else "halfkp"
+        model = NNUE(arch=arch)
+        model.load_state_dict(state)
         model.eval()
 
     device = _get_model_device(model)
-    w_feats, b_feats, stm = get_halfkp_features(fen)
+
+    # Use correct feature extractor for the model's architecture
+    fen_str = fen if isinstance(fen, str) else dummy_chess.decompress_fen(fen)
+    if model.arch == "halfkav2":
+        w_feats, b_feats, stm = dummy_chess.get_halfkav2_features(fen_str)
+    else:
+        w_feats, b_feats, stm = get_halfkp_features(fen_str)
 
     with torch.no_grad():
         w_idx = torch.tensor(w_feats, dtype=torch.long, device=device)
@@ -1209,10 +1695,11 @@ def evaluate_fens(
     if model is None:
         if model_path is None:
             model_path = str(pathlib.Path(__file__).parent / "network.pt")
-        model = NNUE()
-        model.load_state_dict(
-            torch.load(model_path, map_location="cpu", weights_only=True)
-        )
+        state = torch.load(model_path, map_location="cpu", weights_only=True)
+        ft_size = state["ft.weight"].shape[0]
+        arch = "halfkav2" if ft_size == HALFKAV2_SIZE else "halfkp"
+        model = NNUE(arch=arch)
+        model.load_state_dict(state)
         model.eval()
 
     device = _get_model_device(model)
@@ -1235,8 +1722,11 @@ def evaluate_fens(
         for i, idx in enumerate(compressed_indices):
             fen_strs[idx] = decompressed[i]
 
-    # Extract features for all positions
-    batch = [get_halfkp_features(fen) for fen in fen_strs]
+    # Extract features for all positions using correct architecture
+    if model.arch == "halfkav2":
+        batch = [dummy_chess.get_halfkav2_features(f) for f in fen_strs]
+    else:
+        batch = [get_halfkp_features(f) for f in fen_strs]
 
     # Collate into batched tensors
     w_all, b_all, w_off, b_off = [], [], [0], [0]
@@ -1265,8 +1755,6 @@ def evaluate_fens(
 # ============================================================================
 
 if __name__ == "__main__":
-    import polars as pl
-
     parser = argparse.ArgumentParser(description="Train NNUE network.")
     parser.add_argument(
         "data",
@@ -1285,27 +1773,32 @@ if __name__ == "__main__":
         help="Augment data by including flipped positions (2x data, zero mean scores)",
     )
     parser.add_argument(
-        "--shuffle",
-        action="store_true",
-        help="Use shuffled multi-row-group sampling (recommended for training)",
-    )
-    parser.add_argument(
-        "--num-active-groups",
-        type=int,
-        default=8,
-        help="Number of row groups to sample from simultaneously (more = better shuffle)",
-    )
-    parser.add_argument(
-        "--buffer-per-group",
-        type=int,
-        default=4096,
-        help="Samples to buffer per active row group",
-    )
-    parser.add_argument(
         "--arch",
         choices=["halfkp", "halfkav2"],
         default="halfkp",
         help="NNUE architecture: halfkp (41K features) or halfkav2 (7.7K features, king buckets)",
+    )
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Suppress progress bar, only print epoch summaries",
+    )
+    parser.add_argument(
+        "--prefetch",
+        type=int,
+        default=4,
+        help="Number of batches to prefetch (0 to disable)",
+    )
+    parser.add_argument(
+        "--grad-acc-steps",
+        type=int,
+        default=1,
+        help="Gradient accumulation steps. Effective batch = batch_size * grad_acc_steps.",
+    )
+    parser.add_argument(
+        "--gpu-extract",
+        action="store_true",
+        help="Extract features on GPU using CUDA kernels (requires _extract_cuda extension and CUDA device)",
     )
     args = parser.parse_args()
 
@@ -1322,48 +1815,42 @@ if __name__ == "__main__":
         test_ratio=args.test_ratio,
     )
 
-    if args.shuffle:
-        # Use shuffled dataset (recommended for training)
-        train_dataset = ShuffledParquetDataset(
+    # Build datasets — GPU extraction or CPU extraction
+    if args.gpu_extract:
+        train_dataset = GpuExtractDataset(
             args.data,
+            batch_size=args.batch_size,
             split="train",
             split_config=split_config,
-            num_active_groups=args.num_active_groups,
-            buffer_per_group=args.buffer_per_group,
-            flip_augment=args.flip_augment,
             arch=args.arch,
+            flip_augment=args.flip_augment,
         )
-        val_dataset = ShuffledParquetDataset(
+        val_dataset = GpuExtractDataset(
             args.data,
+            batch_size=args.batch_size,
             split="val",
             split_config=split_config,
-            num_active_groups=4,  # Fewer for validation
-            buffer_per_group=args.buffer_per_group,
-            flip_augment=False,
             arch=args.arch,
+            flip_augment=False,
         )
     else:
-        # Use sequential dataset (for compatibility)
-        sources: list[pl.LazyFrame] = []
-        for path in args.data:
-            if path.endswith(".parquet"):
-                sources.append(pl.scan_parquet(path))
-            else:
-                sources.append(pl.scan_csv(path))
-
-        train_dataset = LazyFrameDataset(
-            sources,
+        train_dataset = ParquetDataset(
+            args.data,
+            batch_size=args.batch_size,
             split="train",
             split_config=split_config,
-            flip_augment=args.flip_augment,
             arch=args.arch,
+            flip_augment=args.flip_augment,
+            prefetch=args.prefetch,
         )
-        val_dataset = LazyFrameDataset(
-            sources,
+        val_dataset = ParquetDataset(
+            args.data,
+            batch_size=args.batch_size,
             split="val",
             split_config=split_config,
-            flip_augment=False,
             arch=args.arch,
+            flip_augment=False,
+            prefetch=args.prefetch,
         )
 
     print(f"Train: {len(train_dataset)} rows, Val: {len(val_dataset)} rows")
@@ -1376,4 +1863,6 @@ if __name__ == "__main__":
         args.batch_size,
         args.lr,
         arch=args.arch,
+        quiet=args.quiet,
+        accum_steps=args.grad_acc_steps,
     )
