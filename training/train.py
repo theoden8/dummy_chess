@@ -848,6 +848,10 @@ def train(
                     pred = model(w_idx, w_off, b_idx, b_off, stm)
                     loss = wdl_loss(pred, target)
                 scaler.scale(loss).backward()
+                # Unscale before stepping - required for SparseAdam compatibility
+                scaler.unscale_(sparse_optimizer)
+                scaler.unscale_(dense_optimizer)
+                # Step both optimizers (skip if inf/nan gradients detected)
                 scaler.step(sparse_optimizer)
                 scaler.step(dense_optimizer)
                 scaler.update()
