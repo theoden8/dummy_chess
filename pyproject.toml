@@ -14,4 +14,9 @@ packages = ["dummy_chess"]
 package-dir = {"dummy_chess" = "python/dummy_chess"}
 
 [dependency-groups]
-dev = ["bpython", "auditwheel"]
+dev = [
+    "bpython",
+    "auditwheel",
+    "pytest>=9.0.2",
+    "chess>=1.11.2",
+]

@@ -437,6 +437,8 @@ requires-dist = [{ name = "numpy" }]
 dev = [
     { name = "auditwheel" },
     { name = "bpython" },
+    { name = "chess", specifier = ">=1.11.2" },
+    { name = "pytest", specifier = ">=9.0.2" },
 ]
 
 [[package]]

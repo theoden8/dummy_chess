@@ -624,13 +624,17 @@ void register_preprocess_functions(py::module_ &m) {
 
   // Parse a single PGN game and extract positions with [%eval] annotations
   // Returns list of (compressed_fen, score_cp, ply_index) tuples
-  m.def("parse_pgn_with_evals", [parse_eval_from_comment](const std::string &pgn_text) {
+  // Returns empty list for invalid/corrupted PGNs (unless strict=true, then asserts)
+  m.def("parse_pgn_with_evals", [parse_eval_from_comment](const std::string &pgn_text, bool strict=false) {
     py::list results;
     
     Board board;
     pgn::PGN pgn(board);
     
-    pgn.read(pgn_text, true);  // true = store comments
+    if (!pgn.read(pgn_text, true, strict)) {  // true = store comments
+      // Invalid PGN (corrupted game) - return empty list
+      return results;
+    }
     
     // pgn.read() has played all moves, board is at final position
     // Walk backwards to collect positions with evals
@@ -671,9 +675,10 @@ void register_preprocess_functions(py::module_ &m) {
     }
     
     return results;
-  }, py::arg("pgn_text"),
+  }, py::arg("pgn_text"), py::arg("strict") = false,
   "Parse a PGN game and extract positions with [%eval] annotations. "
-  "Returns list of (compressed_fen, score_cp, ply_index) tuples.");
+  "Returns list of (compressed_fen, score_cp, ply_index) tuples. "
+  "If strict=True, asserts on invalid PGNs instead of returning empty list.");
 
 }
 
