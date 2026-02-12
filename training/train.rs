@@ -128,6 +128,8 @@ struct TrainConfig {
     backend: String,
     #[serde(default = "default_prefetch")]
     prefetch: usize,
+    #[serde(default)]
+    quiet: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -937,6 +939,7 @@ fn train_with_backend<B: burn::tensor::backend::AutodiffBackend>(
     split_config: SplitConfig,
     flip_augment: bool,
     prefetch: usize,
+    quiet: bool,
     device: B::Device,
 ) where
     B::InnerBackend: burn::tensor::backend::Backend<Device = B::Device>,
@@ -983,18 +986,26 @@ fn train_with_backend<B: burn::tensor::backend::AutodiffBackend>(
 
     let total = (n_train_batches + n_val_batches) * epochs;
 
-    let pb = ProgressBar::new(total as u64);
-    pb.set_style(
-        ProgressStyle::default_bar()
-            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta}) {msg}")
-            .unwrap()
-            .progress_chars("#>-"),
-    );
+    // Create progress bar (hidden if quiet)
+    let pb = if quiet {
+        ProgressBar::hidden()
+    } else {
+        let pb = ProgressBar::new(total as u64);
+        pb.set_style(
+            ProgressStyle::default_bar()
+                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta}) {msg}")
+                .unwrap()
+                .progress_chars("#>-"),
+        );
+        pb
+    };
 
     let mut best_val = f32::INFINITY;
     let mut model = model;
 
     for epoch in 0..epochs {
+        let epoch_start = std::time::Instant::now();
+
         // Create fresh iterators with prefetching for each epoch
         let train_iter = BatchIterator::new(
             sources.clone(),
@@ -1054,22 +1065,38 @@ fn train_with_backend<B: burn::tensor::backend::AutodiffBackend>(
         }
         val_loss /= val_batch_count.max(1) as f32;
 
-        pb.set_message(format!(
-            "epoch {}/{} train={:.4} val={:.4}",
-            epoch + 1,
-            epochs,
-            train_loss,
-            val_loss
-        ));
+        let epoch_elapsed = epoch_start.elapsed();
+
+        if quiet {
+            println!(
+                "Epoch {}/{}: train_loss={:.6}, val_loss={:.6}, time={:.1}s",
+                epoch + 1,
+                epochs,
+                train_loss,
+                val_loss,
+                epoch_elapsed.as_secs_f32()
+            );
+        } else {
+            pb.set_message(format!(
+                "epoch {}/{} train={:.4} val={:.4}",
+                epoch + 1,
+                epochs,
+                train_loss,
+                val_loss
+            ));
+        }
 
         if val_loss < best_val {
             best_val = val_loss;
-            println!("\nNew best val={:.4}, saving to {:?}", val_loss, output);
+            if !quiet {
+                println!("\nNew best val={:.4}, saving to {:?}", val_loss, output);
+            }
             // TODO: save model in NNUE format
         }
     }
 
     pb.finish_with_message("Done");
+    println!("Training complete. Best val_loss={:.6}", best_val);
 }
 
 // ============================================================================
@@ -1137,13 +1164,17 @@ struct Args {
     /// Number of batches to prefetch in background thread
     #[arg(long, default_value_t = 4)]
     prefetch: usize,
+
+    /// Suppress progress bar, only print epoch summaries
+    #[arg(long)]
+    quiet: bool,
 }
 
 fn main() {
     let args = Args::parse();
 
     // Load from config file or CLI args
-    let (sources, output, epochs, batch_size, lr, val_ratio, test_ratio, flip_augment, backend, prefetch) =
+    let (sources, output, epochs, batch_size, lr, val_ratio, test_ratio, flip_augment, backend, prefetch, quiet) =
         if let Some(config_path) = &args.config {
             let config = TrainConfig::load(config_path).unwrap_or_else(|e| {
                 eprintln!("Error: {}", e);
@@ -1161,6 +1192,7 @@ fn main() {
                 config.flip_augment,
                 backend,
                 config.prefetch,
+                config.quiet,
             )
         } else {
             if args.data.is_empty() {
@@ -1178,6 +1210,7 @@ fn main() {
                 args.flip_augment,
                 args.backend,
                 args.prefetch,
+                args.quiet,
             )
         };
 
@@ -1209,6 +1242,7 @@ fn main() {
                 split_config,
                 flip_augment,
                 prefetch,
+                quiet,
                 WgpuDevice::default(),
             );
         }
@@ -1222,6 +1256,7 @@ fn main() {
                 split_config,
                 flip_augment,
                 prefetch,
+                quiet,
                 NdArrayDevice::Cpu,
             );
         }
