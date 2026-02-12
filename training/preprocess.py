@@ -33,6 +33,7 @@ import json
 import itertools
 import pathlib
 import random
+import re
 import shutil
 import sys
 import tempfile
@@ -301,7 +302,7 @@ def process_puzzles(
             return
         # Batch compress all FENs at once
         fens = [row[0] for row in batch]
-        compressed_fens = dummy_chess.compress_fens_batch(fens)
+        compressed_fens = dummy_chess.preprocess.compress_fens_batch(fens)
         compressed_batch = [
             (compressed_fens[i], batch[i][1], batch[i][2], batch[i][3])
             for i in range(len(batch))
@@ -455,7 +456,7 @@ def process_evals(
             return
         # Batch compress all FENs at once
         fens = [row[0] for row in batch]
-        compressed_fens = dummy_chess.compress_fens_batch(fens)
+        compressed_fens = dummy_chess.preprocess.compress_fens_batch(fens)
         compressed_batch = [
             (compressed_fens[i], batch[i][1], batch[i][2], batch[i][3])
             for i in range(len(batch))
@@ -801,7 +802,7 @@ def process_endgames(
     # Batch compress all FENs
     if fen_results:
         fens = [row[0] for row in fen_results]
-        compressed_fens = dummy_chess.compress_fens_batch(fens)
+        compressed_fens = dummy_chess.preprocess.compress_fens_batch(fens)
         results: list[tuple[bytes, int, int, int]] = [
             (
                 compressed_fens[i],
@@ -1291,6 +1292,13 @@ def process_games_pgn_evals(
                 if use_cpp_parser:
                     # Fast path: use C++ parser
                     debug_pgn_path = pathlib.Path("/tmp/last_pgn.txt")
+
+                    # Track failed games (invalid/corrupted PGNs)
+                    failed_games: list[tuple[int, str]] = []  # (game_num, pgn_text)
+                    max_failed_games = (
+                        1000  # Stop tracking after this many to avoid disk flood
+                    )
+
                     for pgn_text in iter_pgn_text(text_stream):
                         games_processed += 1
                         pbar.update(1)
@@ -1298,7 +1306,7 @@ def process_games_pgn_evals(
                         # Print status every 20k games when progress bar disabled
                         if disable_progress and games_processed % 20000 == 0:
                             print(
-                                f"Games: {games_processed}, positions: {positions_extracted}",
+                                f"Games: {games_processed}, positions: {positions_extracted}, failed: {len(failed_games)}",
                                 flush=True,
                             )
 
@@ -1312,14 +1320,22 @@ def process_games_pgn_evals(
                             continue
 
                         # Write to /tmp before parsing so we can debug crashes
-                        # Only in debug mode (disabled by default - slows down processing)
-                        # debug_pgn_path.write_text(
-                        #     f"Game #{games_processed}\n\n{pgn_text}"
-                        # )
+                        debug_pgn_path.write_text(
+                            f"Game #{games_processed}\n\n{pgn_text}"
+                        )
 
                         # Parse with C++ and get all positions with evals
-                        positions = dummy_chess.parse_pgn_with_evals(pgn_text)
+                        positions = dummy_chess.preprocess.parse_pgn_with_evals(
+                            pgn_text
+                        )
                         if not positions:
+                            # Empty result could mean no evals OR invalid PGN
+                            # Check if it has eval annotations - if yes, it's likely corrupted
+                            if (
+                                "[%eval" in pgn_text
+                                and len(failed_games) < max_failed_games
+                            ):
+                                failed_games.append((games_processed, pgn_text))
                             continue
 
                         # Filter by config constraints
@@ -1350,6 +1366,28 @@ def process_games_pgn_evals(
                         # Check limit
                         if max_positions and positions_extracted >= max_positions:
                             break
+
+                    # Write failed games to file if any
+                    if failed_games:
+                        # Extract month from source URL (e.g., "2014-03" from lichess_db_standard_rated_2014-03.pgn.zst)
+                        month_match = re.search(r"(\d{4}-\d{2})", source)
+                        month_str = month_match.group(1) if month_match else "unknown"
+
+                        failed_dir = output_path.parent / "failed"
+                        failed_dir.mkdir(parents=True, exist_ok=True)
+                        failed_file = failed_dir / f"{month_str}.txt"
+
+                        with open(failed_file, "w") as f:
+                            for game_num, pgn_text in failed_games:
+                                f.write(f"=== Game #{game_num} ===\n\n{pgn_text}\n\n")
+
+                        print(
+                            f"Wrote {len(failed_games)} failed games to {failed_file}"
+                        )
+                        if len(failed_games) >= max_failed_games:
+                            print(
+                                f"Warning: Hit max failed games limit ({max_failed_games}), some may not be recorded"
+                            )
                 else:
                     # Slow path: use Python chess library
                     for game in iter_pgn_games(text_stream):
@@ -1374,7 +1412,7 @@ def process_games_pgn_evals(
 
                         # Compress FEN and add to batch
                         # Use depth=0 and knodes=0 to indicate PGN eval (not engine)
-                        compressed_fen = dummy_chess.compress_fen(fen)
+                        compressed_fen = dummy_chess.preprocess.compress_fen(fen)
                         batch.append((compressed_fen, score, 0, 0))
                         positions_extracted += 1
 
@@ -1620,7 +1658,7 @@ def process_games(
                     knodes = info.get("nodes", 0) // 1000
 
                     # Compress FEN and add to batch
-                    compressed_fen = dummy_chess.compress_fen(fen)
+                    compressed_fen = dummy_chess.preprocess.compress_fen(fen)
                     batch.append((compressed_fen, score, depth_out, knodes))
                     positions_extracted += 1
 

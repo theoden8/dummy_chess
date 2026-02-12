@@ -14,8 +14,10 @@ mappings.txt
 perf.data*
 m42.*
 _skbuild/
+__pycache__
 MANIFEST.in
 target/
+core
 
 *.swp
 *.swo
