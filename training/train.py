@@ -830,13 +830,12 @@ def train(
     pbar = tqdm.tqdm(total=total_batches, desc="Training", disable=quiet)
     tracker.track_epoch("epoch", f"1/{epochs}")
 
-    step = 0
     for epoch in range(epochs):
         model.train()
         tracker.track_epoch("epoch", f"{epoch + 1}/{epochs}")
 
         # Training
-        for batch in train_loader:
+        for step, batch in enumerate(train_loader):
             # Use non_blocking for async transfer (works with pinned memory)
             w_idx, w_off, b_idx, b_off, stm, target = [
                 x.to(device, non_blocking=True) for x in batch
@@ -874,7 +873,6 @@ def train(
             tracker.track("train", "loss", loss.item())
             pbar.set_postfix(**tracker.postfix)
             pbar.update(1)
-            step += 1
 
         # Validation
         if val_loader is not None:
