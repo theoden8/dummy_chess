@@ -3,6 +3,9 @@
 Efficient NNUE Training using PyTorch
 
 Architecture: HalfKP(41024) -> 256x2 -> 32 -> 32 -> 1
+
+IMPORTANT: Run with 8GB memory limit to prevent OOM:
+    ulimit -v 8388608 && uv run python train.py ...
 """
 
 import __future__
@@ -944,14 +947,49 @@ class Tracker:
         return min(values) if values else float("inf")
 
 
-def evaluate(model, loader, device):
+# ============================================================================
+# Loss Functions
+# ============================================================================
+
+# Scaling factor for sigmoid transformation (Stockfish uses 410)
+# Maps ~400cp to ~76% win probability
+SIGMOID_SCALE = 400.0
+
+
+def wdl_loss(
+    pred: torch.Tensor, target: torch.Tensor, scale: float = SIGMOID_SCALE
+) -> torch.Tensor:
+    """
+    WDL-style loss using sigmoid scaling.
+
+    Converts both prediction and target to win probabilities using sigmoid,
+    then computes MSE. This naturally handles the wide score range (-15000 to +15000)
+    by compressing extreme values.
+
+    Args:
+        pred: Model predictions in centipawns
+        target: Target scores in centipawns
+        scale: Sigmoid scaling factor (default 400, Stockfish uses 410)
+
+    Returns:
+        Scalar loss tensor
+    """
+    pred_prob = torch.sigmoid(pred / scale)
+    target_prob = torch.sigmoid(target / scale)
+    return torch.nn.functional.mse_loss(pred_prob, target_prob)
+
+
+def evaluate(model, loader, device, loss_fn=None):
+    """Evaluate model on a data loader."""
+    if loss_fn is None:
+        loss_fn = wdl_loss
     model.eval()
     total_loss, n = 0, 0
     with torch.no_grad():
         for batch in loader:
             w_idx, w_off, b_idx, b_off, stm, target = [x.to(device) for x in batch]
             pred = model(w_idx, w_off, b_idx, b_off, stm)
-            total_loss += torch.nn.functional.mse_loss(pred, target).item()
+            total_loss += loss_fn(pred, target).item()
             n += 1
     return total_loss / max(n, 1)
 
@@ -966,6 +1004,7 @@ def train(
     tracker: Tracker | None = None,
     num_workers: int = 0,
     arch: str = "halfkp",
+    quiet: bool = False,
 ) -> tuple[NNUE, Tracker]:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
@@ -1021,7 +1060,7 @@ def train(
     batches_per_epoch = n_train_batches + n_val_batches
     total_batches = batches_per_epoch * epochs
 
-    pbar = tqdm.tqdm(total=total_batches, desc="Training")
+    pbar = tqdm.tqdm(total=total_batches, desc="Training", disable=quiet)
     tracker.track_epoch("epoch", f"1/{epochs}")
 
     for epoch in range(epochs):
@@ -1036,17 +1075,15 @@ def train(
 
             if scaler:
                 with torch.amp.autocast("cuda"):
-                    loss = torch.nn.functional.mse_loss(
-                        model(w_idx, w_off, b_idx, b_off, stm), target
-                    )
+                    pred = model(w_idx, w_off, b_idx, b_off, stm)
+                    loss = wdl_loss(pred, target)
                 scaler.scale(loss).backward()
                 scaler.step(sparse_optimizer)
                 scaler.step(dense_optimizer)
                 scaler.update()
             else:
-                loss = torch.nn.functional.mse_loss(
-                    model(w_idx, w_off, b_idx, b_off, stm), target
-                )
+                pred = model(w_idx, w_off, b_idx, b_off, stm)
+                loss = wdl_loss(pred, target)
                 loss.backward()
                 sparse_optimizer.step()
                 dense_optimizer.step()
@@ -1064,13 +1101,21 @@ def train(
                         x.to(device) for x in batch
                     ]
                     pred = model(w_idx, w_off, b_idx, b_off, stm)
-                    val_loss = torch.nn.functional.mse_loss(pred, target).item()
+                    val_loss = wdl_loss(pred, target).item()
                     tracker.track("val", "loss", val_loss)
                     pbar.set_postfix(**tracker.postfix)
                     pbar.update(1)
 
         scheduler.step()
         tracker.submit_epoch()
+
+        # Print epoch summary when quiet
+        if quiet:
+            train_loss = tracker["train"].get("loss", float("nan"))
+            val_loss = tracker["val"].get("loss", float("nan"))
+            print(
+                f"Epoch {epoch + 1}/{epochs}: train_loss={train_loss:.6f}, val_loss={val_loss:.6f}"
+            )
 
         val_loss = tracker["val"].get("loss", float("inf"))
         if val_loss < best_val:
@@ -1307,6 +1352,11 @@ if __name__ == "__main__":
         default="halfkp",
         help="NNUE architecture: halfkp (41K features) or halfkav2 (7.7K features, king buckets)",
     )
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Suppress progress bar, only print epoch summaries",
+    )
     args = parser.parse_args()
 
     # Validate paths
@@ -1376,4 +1426,5 @@ if __name__ == "__main__":
         args.batch_size,
         args.lr,
         arch=args.arch,
+        quiet=args.quiet,
     )
