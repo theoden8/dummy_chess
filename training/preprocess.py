@@ -1840,9 +1840,13 @@ def dedupe_parquet(
     bytes_per_row = max(bytes_per_row, 40) + 8
 
     # Calculate optimal bucket count to keep each bucket under memory limit
-    # IMPORTANT: Polars needs ~4x raw data size for unique() operation
-    # (original + hash table + result + temporary buffers)
-    memory_multiplier = 4
+    # IMPORTANT: Polars needs significant memory for unique() operation:
+    # - Reading IPC file into Arrow table
+    # - Converting Arrow to Polars DataFrame
+    # - Hash table for deduplication
+    # - Result DataFrame + temporary buffers
+    # Using 8x multiplier to be safe under memory-constrained environments
+    memory_multiplier = 8
     max_rows_per_bucket = (max_bucket_memory_mb * 1024 * 1024) / (
         bytes_per_row * memory_multiplier
     )
@@ -2091,8 +2095,9 @@ def shuffle_parquet(
     bytes_per_row = max(bytes_per_row, 40) + 8  # +8 for sort key
 
     # Calculate optimal bucket count
-    # Polars sort() needs ~3x raw data (original + sorted + temp)
-    memory_multiplier = 3
+    # Polars sort() needs significant memory (original + sorted + temp + Arrow overhead)
+    # Using 6x multiplier for safety under memory-constrained environments
+    memory_multiplier = 6
     max_rows_per_bucket = (max_bucket_memory_mb * 1024 * 1024) / (
         bytes_per_row * memory_multiplier
     )
