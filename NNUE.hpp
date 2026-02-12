@@ -788,3 +788,107 @@ public:
 };
 
 } // namespace nnue
+
+// ============================================================================
+// Preprocessing utilities for training (separate namespace)
+// ============================================================================
+
+namespace preprocess {
+
+// Extract HalfKP features from compressed FEN bytes (for training data loading)
+// This is a C-compatible interface for use with Cython/Python
+// 
+// Parameters:
+//   data: pointer to compressed FEN bytes
+//   length: length of data
+//   flip: if true, swap white/black perspectives
+//   white_indices: output array for white features (must have space for 32 elements)
+//   black_indices: output array for black features (must have space for 32 elements)
+//   n_white: output count of white features
+//   n_black: output count of black features  
+//   stm: output side to move (0=white, 1=black)
+//
+inline void extract_halfkp_features(
+    const uint8_t* data,
+    size_t length,
+    bool flip,
+    int32_t* white_indices,
+    int32_t* black_indices,
+    int* n_white,
+    int* n_black,
+    int64_t* stm
+) {
+    *n_white = 0;
+    *n_black = 0;
+    *stm = 0;
+    
+    if (length == 0) return;
+    
+    // Parse flags (byte 0)
+    uint8_t flags = data[0];
+    int64_t stm_val = (flags & 1) ? 1 : 0;  // bit 0 = black to move
+    
+    // Parse board (bytes 1-32, 64 nibbles)
+    int wk = -1, bk = -1;
+    int piece_squares[32];
+    int piece_types[32];
+    bool piece_colors[32];
+    int n_pieces = 0;
+    
+    for (int sq = 0; sq < 64; ++sq) {
+        size_t byte_idx = 1 + (sq / 2);
+        if (byte_idx >= length) break;
+        
+        uint8_t nibble = (sq % 2 == 0) 
+            ? (data[byte_idx] & 0x0F)
+            : ((data[byte_idx] >> 4) & 0x0F);
+        
+        // Nibble encoding: 0=empty, 1-5=white PNBRQ, 6=white K, 7-11=black pnbrq, 12=black k
+        if (nibble == 0) {
+            continue;
+        } else if (nibble == 6) {
+            wk = sq;
+        } else if (nibble == 12) {
+            bk = sq;
+        } else if (nibble >= 1 && nibble <= 5) {
+            piece_squares[n_pieces] = sq;
+            piece_types[n_pieces] = nibble - 1;  // 0-4 = PNBRQ
+            piece_colors[n_pieces] = true;  // white
+            n_pieces++;
+        } else if (nibble >= 7 && nibble <= 11) {
+            piece_squares[n_pieces] = sq;
+            piece_types[n_pieces] = nibble - 7;  // 0-4 = pnbrq
+            piece_colors[n_pieces] = false;  // black
+            n_pieces++;
+        }
+    }
+    
+    // Set STM
+    *stm = flip ? (1 - stm_val) : stm_val;
+    
+    // Compute features
+    for (int i = 0; i < n_pieces; ++i) {
+        int sq = piece_squares[i];
+        int pt = piece_types[i];
+        bool is_white = piece_colors[i];
+        
+        int w_idx = is_white ? 0 : 1;
+        int b_idx = is_white ? 1 : 0;
+        
+        int32_t white_feat = wk * 641 + (pt * 2 + w_idx) * 64 + sq + 1;
+        int32_t black_feat = (63 - bk) * 641 + (pt * 2 + b_idx) * 64 + (63 - sq) + 1;
+        
+        if (flip) {
+            white_indices[i] = black_feat;
+            black_indices[i] = white_feat;
+        } else {
+            white_indices[i] = white_feat;
+            black_indices[i] = black_feat;
+        }
+    }
+    
+    *n_white = n_pieces;
+    *n_black = n_pieces;
+}
+
+} // namespace preprocess
