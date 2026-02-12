@@ -857,6 +857,7 @@ class BatchedParquetDataset(torch.utils.data.IterableDataset):
         split: Which split to use ('train', 'val', 'test', or None for all)
         split_config: SplitConfig for splitting
         arch: Architecture for feature extraction ('halfkp' or 'halfkav2')
+        flip_augment: If True, also yield flipped positions with negated scores (2x data)
     """
 
     def __init__(
@@ -866,12 +867,14 @@ class BatchedParquetDataset(torch.utils.data.IterableDataset):
         split: str | None = None,
         split_config: SplitConfig | None = None,
         arch: str = "halfkp",
+        flip_augment: bool = False,
     ):
         self.paths = paths if isinstance(paths, list) else [paths]
         self.batch_size = batch_size
         self.split = split
         self.split_config = split_config or SplitConfig()
         self.arch = arch
+        self.flip_augment = flip_augment
         self._len: int | None = None
         self._metadata: list[tuple[str, int]] | None = None  # [(path, total_rows), ...]
 
@@ -897,6 +900,8 @@ class BatchedParquetDataset(torch.utils.data.IterableDataset):
             for path, n in self._get_metadata():
                 split_len = self.split_config.get_split_len(n, self.split)
                 total += split_len
+            if self.flip_augment:
+                total *= 2
             self._len = total
         return self._len
 
@@ -959,6 +964,20 @@ class BatchedParquetDataset(torch.utils.data.IterableDataset):
                     torch.from_numpy(stm.astype(np.int64)),
                     torch.from_numpy(scores).unsqueeze(1),
                 )
+
+                # Yield flipped batch with negated scores
+                if self.flip_augment:
+                    w_idx_f, w_off_f, b_idx_f, b_off_f, stm_f = self._get_features(
+                        fens, True
+                    )
+                    yield (
+                        torch.from_numpy(w_idx_f.astype(np.int64)),
+                        torch.from_numpy(w_off_f.astype(np.int64)),
+                        torch.from_numpy(b_idx_f.astype(np.int64)),
+                        torch.from_numpy(b_off_f.astype(np.int64)),
+                        torch.from_numpy(stm_f.astype(np.int64)),
+                        torch.from_numpy(-scores).unsqueeze(1),
+                    )
 
 
 # ============================================================================
@@ -1528,6 +1547,7 @@ if __name__ == "__main__":
             split="train",
             split_config=split_config,
             arch=args.arch,
+            flip_augment=args.flip_augment,
         )
         val_dataset = BatchedParquetDataset(
             args.data,
