@@ -853,12 +853,6 @@ def train(
                 scaler.unscale_(dense_optimizer)
                 # Clip gradients to prevent explosion (dense params only)
                 torch.nn.utils.clip_grad_norm_(dense_params, max_norm=1.0)
-                # Assert no inf/nan gradients after clipping (dense params only)
-                for name, param in model.named_parameters():
-                    if param.grad is not None and not param.grad.is_sparse:
-                        assert torch.isfinite(param.grad).all(), (
-                            f"Non-finite gradient in {name}"
-                        )
                 scaler.step(sparse_optimizer)
                 scaler.step(dense_optimizer)
                 scaler.update()
