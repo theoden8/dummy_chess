@@ -980,6 +980,58 @@ class BatchedParquetDataset(torch.utils.data.IterableDataset):
                     )
 
 
+class PrefetchedDataset(torch.utils.data.IterableDataset):
+    """
+    Wraps an IterableDataset to prefetch batches in a background thread.
+
+    This overlaps data loading (CPU/IO bound) with GPU compute, improving
+    GPU utilization when data loading is the bottleneck.
+
+    Args:
+        dataset: The underlying IterableDataset to wrap
+        prefetch: Number of batches to prefetch (default 2)
+        pin_memory: Pin tensors for async GPU transfer (default False, can hurt due to GIL)
+    """
+
+    def __init__(
+        self,
+        dataset: torch.utils.data.IterableDataset,
+        prefetch: int = 2,
+        pin_memory: bool = False,
+    ):
+        self.dataset = dataset
+        self.prefetch = prefetch
+        self.pin_memory = pin_memory
+
+    def __len__(self) -> int:
+        return len(self.dataset)
+
+    def __iter__(self):
+        import queue
+
+        q: queue.Queue = queue.Queue(maxsize=self.prefetch)
+        sentinel = object()
+
+        def producer():
+            for batch in self.dataset:
+                # Pin memory for faster GPU transfer
+                if self.pin_memory:
+                    batch = tuple(t.pin_memory() for t in batch)
+                q.put(batch)
+            q.put(sentinel)
+
+        thread = threading.Thread(target=producer, daemon=True)
+        thread.start()
+
+        while True:
+            item = q.get()
+            if item is sentinel:
+                break
+            yield item
+
+        thread.join()
+
+
 # ============================================================================
 # Training
 # ============================================================================
@@ -1158,7 +1210,11 @@ def train(
     ) or not hasattr(train_dataset, "__getitem__")
 
     if is_prebatched:
-        # Pre-batched dataset: batch_size=1, no collate (already batched)
+        # Pre-batched dataset with prefetching for better GPU utilization
+        train_dataset = PrefetchedDataset(train_dataset, prefetch=2)
+        if val_dataset is not None:
+            val_dataset = PrefetchedDataset(val_dataset, prefetch=2)
+
         train_loader = torch.utils.data.DataLoader(
             train_dataset,
             batch_size=None,  # Dataset yields complete batches
@@ -1231,7 +1287,10 @@ def train(
 
         # Training
         for batch in train_loader:
-            w_idx, w_off, b_idx, b_off, stm, target = [x.to(device) for x in batch]
+            # Use non_blocking for async transfer (works with pinned memory)
+            w_idx, w_off, b_idx, b_off, stm, target = [
+                x.to(device, non_blocking=True) for x in batch
+            ]
             sparse_optimizer.zero_grad(set_to_none=True)
             dense_optimizer.zero_grad(set_to_none=True)
 
@@ -1260,7 +1319,7 @@ def train(
             with torch.no_grad():
                 for batch in val_loader:
                     w_idx, w_off, b_idx, b_off, stm, target = [
-                        x.to(device) for x in batch
+                        x.to(device, non_blocking=True) for x in batch
                     ]
                     pred = model(w_idx, w_off, b_idx, b_off, stm)
                     val_loss = wdl_loss(pred, target).item()
