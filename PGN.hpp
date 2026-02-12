@@ -196,7 +196,7 @@ struct PGN {
   // write move, advance board state and determine game-state
   // Returns false if move is invalid (corrupted PGN)
   // If strict=true, asserts instead of returning false
-  bool handle_move(move_t m, bool strict=false) {
+  bool handle_move(move_t m, bool strict) {
     if (!board.check_valid_move(m, false)) {
       if (strict) {
         assert(false && "Invalid move in PGN");
@@ -226,13 +226,13 @@ struct PGN {
     return true;
   }
 
-  bool handle_move(pos_t i, pos_t j, bool strict=false) {
+  bool handle_move(pos_t i, pos_t j, bool strict) {
     return handle_move(bitmask::_pos_pair(i, j), strict);
   }
 
-  void handle_line(MoveLine &mline) {
+  void handle_line(MoveLine &mline, bool strict) {
     for(const move_t &m : mline) {
-      handle_move(m);
+      handle_move(m, strict);
     }
   }
 
@@ -451,7 +451,7 @@ struct PGN {
   bool read(const std::string &s, bool store_comments=false, bool strict=false) {
     size_t i = 0;
     bool in_moves = false;  // Have we seen any moves yet?
-    
+
     while(i < s.length()) {
       if(isspace(s[i])) {
         ++i;
@@ -460,7 +460,7 @@ struct PGN {
         // Header tag
         size_t end = s.find("]", i + 1);
         if(end == std::string::npos) break;
-        
+
         if (!in_moves) {
           // Parse FEN header if present
           std::string header = s.substr(i + 1, end - i - 1);
@@ -476,7 +476,7 @@ struct PGN {
         // Comment
         size_t end = s.find("}", i + 1);
         if(end == std::string::npos) break;
-        
+
         if (store_comments && !comments.empty()) {
           // Append to last move's comment
           std::string comment = s.substr(i + 1, end - i - 1);
@@ -515,7 +515,7 @@ struct PGN {
         // Unfinished game
         break;
       }
-      
+
       // Find end of move token
       size_t j = i;
       while(j < s.length() && !isspace(s[j]) && s[j] != '{' && s[j] != '(' && s[j] != '$') {
@@ -525,14 +525,14 @@ struct PGN {
         ++i;
         continue;
       }
-      
+
       std::string ss = s.substr(i, j - i);
-      
+
       // Strip annotations like ! ? !! ?? !? ?!
       while(!ss.empty() && (ss.back() == '!' || ss.back() == '?')) {
         ss.pop_back();
       }
-      
+
       if(!ss.empty() && ss != "1-0" && ss != "0-1" && ss != "1/2-1/2" && ss != "*") {
         if (!read_move(ss, strict)) {
           return false;  // Invalid move - corrupted PGN
@@ -582,7 +582,7 @@ struct PGN {
 std::string _move_str(Board &b, move_t m) {
   assert(m == board::nullmove || b.check_valid_move(m));
   pgn::PGN pgn(b);
-  pgn.handle_move(m);
+  pgn.handle_move(m, true);
   std::string s = pgn.ply.front();
   pgn.retract_move();
   return s;
@@ -598,7 +598,7 @@ NEVER_INLINE std::string _line_str(Board &b, const MoveLine &mline) {
   assert(b.check_valid_sequence(mline));
   pgn::PGN pgn(b);
   for(const move_t m : mline) {
-    pgn.handle_move(m);
+    pgn.handle_move(m, true);
   }
   std::string s = str::join(pgn.ply, " "s);
   for(auto m : mline) {
@@ -614,7 +614,7 @@ NEVER_INLINE std::string _line_str_full(Board &b, const MoveLine &mline) {
     b.retract_move();
   }
   for(const move_t m : mline.get_past()) {
-    pgn.handle_move(m);
+    pgn.handle_move(m, true);
   }
   std::string s = ""s;
   if(mline.start > 0) {

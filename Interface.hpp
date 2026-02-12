@@ -375,7 +375,7 @@ struct Interface {
           const pos_t pos_to = board::_pos(A+cursor_x, 1+cursor_y);
           const piece_bitboard_t moves = (board[pos_from].color == board.activePlayer() ? board.state.moves[pos_from] : 0x00);
           if((1ULL << pos_to) & moves && board[pos_from].color == board.activePlayer()) {
-            pgn.handle_move(pos_from, pos_to | board::PROMOTE_QUEEN);
+            pgn.handle_move(pos_from, pos_to | board::PROMOTE_QUEEN, true);
             sel_x=-1,sel_y=-1;
           } else {
             sel_x=cursor_x,sel_y=cursor_y;
@@ -388,12 +388,12 @@ struct Interface {
           if(sel_x==-1||sel_y==-1)m=board.get_random_move();
           else m=board.get_random_move_from(board::_pos(A+sel_x, 1+sel_y));
           if(m != board::nullmove) {
-            pgn.handle_move(m);
+            pgn.handle_move(m, true);
           }
         }
       break;
       case ' ':
-        pgn.handle_move(board::nullmove);
+        pgn.handle_move(board::nullmove, true);
       break;
       case KEY_BACKSPACE:
         pgn.retract_move();
