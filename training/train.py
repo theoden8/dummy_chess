@@ -846,7 +846,10 @@ class BatchedParquetDataset(torch.utils.data.IterableDataset):
 
     Unlike LazyFrameDataset which yields individual samples, this yields
     complete batches directly from C++ feature extraction, avoiding Python
-    per-sample overhead. ~10x faster data loading.
+    per-sample overhead. ~8x faster data loading.
+
+    Uses pyarrow row-group streaming to handle arbitrarily large files
+    without loading them into memory.
 
     Args:
         paths: List of parquet file paths
@@ -854,7 +857,6 @@ class BatchedParquetDataset(torch.utils.data.IterableDataset):
         split: Which split to use ('train', 'val', 'test', or None for all)
         split_config: SplitConfig for splitting
         arch: Architecture for feature extraction ('halfkp' or 'halfkav2')
-        device: Device to place tensors on (default 'cpu', set to 'cuda' for pinned memory)
     """
 
     def __init__(
@@ -864,15 +866,14 @@ class BatchedParquetDataset(torch.utils.data.IterableDataset):
         split: str | None = None,
         split_config: SplitConfig | None = None,
         arch: str = "halfkp",
-        device: str = "cpu",
     ):
         self.paths = paths if isinstance(paths, list) else [paths]
         self.batch_size = batch_size
         self.split = split
         self.split_config = split_config or SplitConfig()
         self.arch = arch
-        self.device = device
         self._len: int | None = None
+        self._metadata: list[tuple[str, int]] | None = None  # [(path, total_rows), ...]
 
         if arch == "halfkp":
             self._get_features = dummy_chess.get_halfkp_features_batch
@@ -881,32 +882,71 @@ class BatchedParquetDataset(torch.utils.data.IterableDataset):
         else:
             raise ValueError(f"Unknown architecture: {arch}")
 
+    def _get_metadata(self) -> list[tuple[str, int]]:
+        """Get row counts from parquet metadata (no data loading)."""
+        if self._metadata is None:
+            self._metadata = []
+            for path in self.paths:
+                pf = pyarrow.parquet.ParquetFile(path)
+                self._metadata.append((path, pf.metadata.num_rows))
+        return self._metadata
+
     def __len__(self) -> int:
         if self._len is None:
             total = 0
-            for path in self.paths:
-                n = pl.scan_parquet(path).select(pl.len()).collect().item()
+            for path, n in self._get_metadata():
                 split_len = self.split_config.get_split_len(n, self.split)
                 total += split_len
             self._len = total
         return self._len
 
+    def _iter_batches(self, path: str, start: int, end: int):
+        """Yield batches from a single parquet file using row-group streaming."""
+        pf = pyarrow.parquet.ParquetFile(path)
+        meta = pf.metadata
+
+        # Find which row groups overlap with our range
+        row_offset = 0
+        for rg_idx in range(meta.num_row_groups):
+            rg_rows = meta.row_group(rg_idx).num_rows
+            rg_start = row_offset
+            rg_end = row_offset + rg_rows
+
+            # Skip row groups before our range
+            if rg_end <= start:
+                row_offset = rg_end
+                continue
+
+            # Stop if we're past our range
+            if rg_start >= end:
+                break
+
+            # Read this row group
+            table = pf.read_row_group(rg_idx, columns=["fen", "score"])
+
+            # Calculate slice within this row group
+            slice_start = max(0, start - rg_start)
+            slice_end = min(rg_rows, end - rg_start)
+
+            if slice_start > 0 or slice_end < rg_rows:
+                table = table.slice(slice_start, slice_end - slice_start)
+
+            # Yield in batch_size chunks
+            fens = table.column("fen").to_pylist()
+            scores = table.column("score").to_numpy().astype(np.float32)
+
+            for i in range(0, len(fens), self.batch_size):
+                batch_fens = fens[i : i + self.batch_size]
+                batch_scores = scores[i : i + self.batch_size]
+                yield batch_fens, batch_scores
+
+            row_offset = rg_end
+
     def __iter__(self):
-        for path in self.paths:
-            lf = pl.scan_parquet(path)
-            n = lf.select(pl.len()).collect().item()
-            start, end = self.split_config.get_split_indices(n, self.split)
+        for path, total_rows in self._get_metadata():
+            start, end = self.split_config.get_split_indices(total_rows, self.split)
 
-            # Stream in chunks of batch_size
-            offset = start
-            while offset < end:
-                chunk_size = min(self.batch_size, end - offset)
-                df = lf.slice(offset, chunk_size).collect()
-                offset += chunk_size
-
-                fens = df["fen"].to_list()
-                scores = df["score"].to_numpy().astype(np.float32)
-
+            for fens, scores in self._iter_batches(path, start, end):
                 # Get features directly as numpy arrays
                 w_idx, w_off, b_idx, b_off, stm = self._get_features(fens, False)
 
