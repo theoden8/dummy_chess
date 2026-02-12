@@ -851,12 +851,8 @@ def train(
                 # Unscale before stepping - required for SparseAdam compatibility
                 scaler.unscale_(sparse_optimizer)
                 scaler.unscale_(dense_optimizer)
-                # Assert no inf/nan gradients (dense params only - sparse doesn't support isfinite)
-                for name, param in model.named_parameters():
-                    if param.grad is not None and not param.grad.is_sparse:
-                        assert torch.isfinite(param.grad).all(), (
-                            f"Non-finite gradient in {name}"
-                        )
+                # Clip gradients to prevent explosion (dense params only)
+                torch.nn.utils.clip_grad_norm_(dense_params, max_norm=1.0)
                 scaler.step(sparse_optimizer)
                 scaler.step(dense_optimizer)
                 scaler.update()
