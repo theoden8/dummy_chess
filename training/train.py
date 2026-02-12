@@ -325,549 +325,48 @@ class SplitConfig:
         return end - start
 
 
-class LazyFrameDataset(torch.utils.data.IterableDataset):
+class ParquetDataset(torch.utils.data.IterableDataset):
     """
-    Streaming dataset for large parquet files.
+    Unified high-performance dataset for parquet files.
 
-    Streams data directly from parquet without loading into memory.
-    Data should be pre-shuffled during preprocessing.
-
-    Args:
-        sources: LazyFrame, or list of LazyFrames, or list of (LazyFrame, weight) tuples
-        split: Which split to use ('train', 'val', 'test', or None for all)
-        split_config: SplitConfig for splitting (uses row ranges, no shuffle)
-        chunk_size: Number of rows to process at a time
-        flip_augment: If True, yield both original and flipped positions (2x data)
-        arch: Architecture for feature extraction ('halfkp' or 'halfkav2')
-
-    Example:
-        split_cfg = SplitConfig(val_ratio=0.05, test_ratio=0.05)
-
-        # Single source (pre-shuffled)
-        lf = pl.scan_parquet("data/evals.parquet")
-        train_ds = LazyFrameDataset(lf, split="train", split_config=split_cfg)
-
-        # Multiple sources with weights (70% evals, 20% puzzles, 10% endgames)
-        train_ds = LazyFrameDataset([
-            (pl.scan_parquet("data/evals.parquet"), 0.7),
-            (pl.scan_parquet("data/puzzles.parquet"), 0.2),
-            (pl.scan_parquet("data/endgames.parquet"), 0.1),
-        ], split="train", split_config=split_cfg)
-    """
-
-    def __init__(
-        self,
-        sources: pl.LazyFrame | list[pl.LazyFrame] | list[tuple[pl.LazyFrame, float]],
-        split: str | None = None,
-        split_config: SplitConfig | None = None,
-        chunk_size: int = 50000,
-        flip_augment: bool = False,
-        arch: str = "halfkp",
-    ):
-        # Normalize to list of (LazyFrame, weight)
-        if isinstance(sources, pl.LazyFrame):
-            self.sources = [(sources, 1.0)]
-        elif isinstance(sources, list) and len(sources) > 0:
-            if isinstance(sources[0], tuple):
-                self.sources = list(sources)  # Already (lf, weight) tuples
-            else:
-                self.sources = [(lf, 1.0) for lf in sources]  # Equal weights
-        else:
-            self.sources = []
-
-        self.split = split
-        self.split_config = split_config or SplitConfig()
-        self.chunk_size = chunk_size
-        self.flip_augment = flip_augment
-        self.arch = arch
-        self._len: int | None = None
-        self._source_lens: list[int] | None = None
-
-        # Select feature extractor based on architecture
-        if arch == "halfkp":
-            self._get_features = dummy_chess.get_halfkp_features_batch
-        elif arch == "halfkav2":
-            self._get_features = dummy_chess.get_halfkav2_features_batch
-        else:
-            raise ValueError(f"Unknown architecture: {arch}")
-
-    def _get_source_lens(self) -> list[int]:
-        """Get row counts for each source (cached)."""
-        if self._source_lens is None:
-            self._source_lens = []
-            for lf, _ in self.sources:
-                n = lf.select(pl.len()).collect(engine="streaming").item()
-                self._source_lens.append(n)
-        return self._source_lens
-
-    def _get_weighted_counts(self) -> list[int]:
-        """Calculate sample counts per source respecting weights with strict ratio."""
-        source_lens = self._get_source_lens()
-        weights = [w for _, w in self.sources]
-        total_weight = sum(weights)
-        norm_weights = [w / total_weight for w in weights]
-
-        split_lens = [
-            self.split_config.get_split_len(n, self.split) for n in source_lens
-        ]
-
-        # Find max total that respects strict ratio (limited by smallest source)
-        # For each source: max_total = available / weight
-        max_totals = [
-            avail / w if w > 0 else float("inf")
-            for avail, w in zip(split_lens, norm_weights)
-        ]
-        max_total = min(max_totals)
-
-        # Calculate actual counts maintaining strict ratio
-        return [int(max_total * w) for w in norm_weights]
-
-    def __len__(self) -> int:
-        """Count samples in this split (cached)."""
-        if self._len is None:
-            self._len = sum(self._get_weighted_counts())
-            if self.flip_augment:
-                self._len *= 2
-        return self._len
-
-    def __iter__(self):
-        source_lens = self._get_source_lens()
-        weights = [w for _, w in self.sources]
-        total_weight = sum(weights)
-        norm_weights = [w / total_weight for w in weights]
-
-        # Get weighted counts (strict ratio)
-        actual_counts = self._get_weighted_counts()
-
-        # Create iterators for each source's split (limited to actual_count)
-        source_iters = []
-        for i, (lf, _) in enumerate(self.sources):
-            n = source_lens[i]
-            start_idx, end_idx = self.split_config.get_split_indices(n, self.split)
-
-            # Limit to actual_count samples
-            end_idx = min(end_idx, start_idx + actual_counts[i])
-
-            if start_idx == 0:
-                split_lf = lf.head(end_idx)
-            else:
-                split_size = end_idx - start_idx
-                split_lf = lf.slice(start_idx, split_size)
-
-            source_iters.append(split_lf.collect_batches(chunk_size=self.chunk_size))
-
-        # Interleave sources round-robin style
-        source_buffers: list[list] = [[] for _ in self.sources]
-        source_exhausted = [False] * len(self.sources)
-
-        def refill_buffer(idx: int) -> bool:
-            """Try to refill buffer for source idx. Returns False if exhausted."""
-            if source_exhausted[idx]:
-                return False
-            try:
-                batch = next(source_iters[idx])
-                fens = batch["fen"].to_list()
-                scores = batch["score"].to_list()
-
-                w_idx, w_off, b_idx, b_off, stm = self._get_features(fens, False)
-
-                n_samples = len(fens)
-                for i in range(n_samples):
-                    w_start = w_off[i]
-                    w_end = w_off[i + 1] if i + 1 < n_samples else len(w_idx)
-                    b_start = b_off[i]
-                    b_end = b_off[i + 1] if i + 1 < n_samples else len(b_idx)
-
-                    source_buffers[idx].append(
-                        (
-                            w_idx[w_start:w_end].copy(),
-                            b_idx[b_start:b_end].copy(),
-                            int(stm[i]),
-                            float(scores[i]),
-                        )
-                    )
-
-                # Also add flipped if augmenting
-                if self.flip_augment:
-                    w_idx_f, w_off_f, b_idx_f, b_off_f, stm_f = self._get_features(
-                        fens, True
-                    )
-                    for i in range(n_samples):
-                        w_start = w_off_f[i]
-                        w_end = w_off_f[i + 1] if i + 1 < n_samples else len(w_idx_f)
-                        b_start = b_off_f[i]
-                        b_end = b_off_f[i + 1] if i + 1 < n_samples else len(b_idx_f)
-
-                        source_buffers[idx].append(
-                            (
-                                w_idx_f[w_start:w_end].copy(),
-                                b_idx_f[b_start:b_end].copy(),
-                                int(stm_f[i]),
-                                -float(scores[i]),
-                            )
-                        )
-
-                return True
-            except StopIteration:
-                source_exhausted[idx] = True
-                return False
-
-        # Yield samples interleaved by weight
-        rng = random.Random(42)  # Deterministic interleaving
-        while True:
-            # Check if all sources exhausted
-            all_empty = all(
-                len(buf) == 0 and source_exhausted[i]
-                for i, buf in enumerate(source_buffers)
-            )
-            if all_empty:
-                break
-
-            # Pick source based on weights (only from non-exhausted sources with data)
-            available = [
-                i
-                for i in range(len(self.sources))
-                if len(source_buffers[i]) > 0 or not source_exhausted[i]
-            ]
-            if not available:
-                break
-
-            # Weighted choice among available sources
-            avail_weights = [norm_weights[i] for i in available]
-            total_avail = sum(avail_weights)
-            avail_weights = [w / total_avail for w in avail_weights]
-
-            src_idx = rng.choices(available, avail_weights)[0]
-
-            # Refill if needed
-            if len(source_buffers[src_idx]) == 0:
-                if not refill_buffer(src_idx):
-                    continue
-
-            # Yield sample
-            if source_buffers[src_idx]:
-                yield source_buffers[src_idx].pop(0)
-
-
-class ShuffledParquetDataset(torch.utils.data.IterableDataset):
-    """
-    Shuffled streaming dataset using multi-row-group interleaving.
-
-    Maintains multiple "active" row groups and samples randomly from them,
-    providing good shuffling without loading entire dataset into memory.
-
-    Args:
-        paths: List of parquet file paths (or list of (path, weight) tuples)
-        split: Which split to use ('train', 'val', 'test', or None for all)
-        split_config: SplitConfig for splitting
-        num_active_groups: Number of row groups to keep active (more = better shuffle, more RAM)
-        buffer_per_group: Samples to buffer from each active group
-        flip_augment: If True, yield both original and flipped positions
-        seed: Random seed for shuffling (changes each epoch if None)
-        arch: Architecture for feature extraction ('halfkp' or 'halfkav2')
-
-    Memory usage: ~num_active_groups * buffer_per_group * 50 bytes
-    Default: 8 * 4096 * 50 = ~1.6 MB
-    """
-
-    def __init__(
-        self,
-        paths: list[str] | list[tuple[str, float]],
-        split: str | None = None,
-        split_config: SplitConfig | None = None,
-        num_active_groups: int = 8,
-        buffer_per_group: int = 4096,
-        flip_augment: bool = False,
-        seed: int | None = None,
-        arch: str = "halfkp",
-    ):
-        # Normalize to list of (path, weight)
-        if isinstance(paths[0], str):
-            self.paths = [(p, 1.0) for p in paths]
-        else:
-            self.paths = list(paths)
-
-        self.split = split
-        self.split_config = split_config or SplitConfig()
-        self.num_active_groups = num_active_groups
-        self.buffer_per_group = buffer_per_group
-        self.flip_augment = flip_augment
-        self.seed = seed
-        self.arch = arch
-        self._epoch = 0
-
-        # Select feature extractor based on architecture
-        if arch == "halfkp":
-            self._get_features = dummy_chess.get_halfkp_features_batch
-        elif arch == "halfkav2":
-            self._get_features = dummy_chess.get_halfkav2_features_batch
-        else:
-            raise ValueError(f"Unknown architecture: {arch}")
-
-        # Cache metadata
-        self._metadata: list[tuple[str, int, list[tuple[int, int]]]] | None = None
-        self._len: int | None = None
-
-    def set_epoch(self, epoch: int):
-        """Set epoch for deterministic shuffling."""
-        self._epoch = epoch
-
-    def _get_metadata(self) -> list[tuple[str, int, list[tuple[int, int]], float]]:
-        """Get row group metadata for all files. Returns [(path, total_rows, [(rg_start, rg_len), ...], weight)]."""
-        if self._metadata is not None:
-            return self._metadata
-
-        self._metadata = []
-        for path, weight in self.paths:
-            pf = pyarrow.parquet.ParquetFile(path)
-            meta = pf.metadata
-
-            row_groups = []
-            offset = 0
-            for i in range(meta.num_row_groups):
-                rg_len = meta.row_group(i).num_rows
-                row_groups.append((offset, rg_len))
-                offset += rg_len
-
-            self._metadata.append((path, offset, row_groups, weight))
-
-        return self._metadata
-
-    def _get_split_row_groups(self) -> list[tuple[str, int, int, float]]:
-        """Get row groups that fall within our split. Returns [(path, rg_start, rg_len, weight), ...]."""
-        metadata = self._get_metadata()
-        result = []
-
-        for path, total_rows, row_groups, weight in metadata:
-            split_start, split_end = self.split_config.get_split_indices(
-                total_rows, self.split
-            )
-
-            for rg_start, rg_len in row_groups:
-                rg_end = rg_start + rg_len
-
-                # Check if row group overlaps with split
-                if rg_end <= split_start or rg_start >= split_end:
-                    continue
-
-                # Clip to split boundaries
-                actual_start = max(rg_start, split_start)
-                actual_end = min(rg_end, split_end)
-                actual_len = actual_end - actual_start
-
-                if actual_len > 0:
-                    result.append((path, actual_start, actual_len, weight))
-
-        return result
-
-    def __len__(self) -> int:
-        if self._len is None:
-            row_groups = self._get_split_row_groups()
-            self._len = sum(rg[2] for rg in row_groups)
-            if self.flip_augment:
-                self._len *= 2
-        return self._len
-
-    def __iter__(self):
-        row_groups = self._get_split_row_groups()
-        if not row_groups:
-            return
-
-        # Shuffle row groups for this epoch
-        rng = random.Random(self.seed if self.seed is not None else self._epoch)
-        row_groups = list(row_groups)
-        rng.shuffle(row_groups)
-
-        # Active group state: {idx: (path, pf, current_offset, end_offset, buffer, weight)}
-        active: dict[int, tuple] = {}
-        next_group_idx = 0
-
-        def fill_active():
-            """Fill active slots up to num_active_groups."""
-            nonlocal next_group_idx
-            while len(active) < self.num_active_groups and next_group_idx < len(
-                row_groups
-            ):
-                path, start, length, weight = row_groups[next_group_idx]
-                pf = pyarrow.parquet.ParquetFile(path)
-                active[next_group_idx] = {
-                    "path": path,
-                    "pf": pf,
-                    "offset": start,
-                    "end": start + length,
-                    "buffer": [],
-                    "weight": weight,
-                }
-                next_group_idx += 1
-
-        def refill_buffer(idx: int) -> bool:
-            """Refill buffer for active group. Returns False if exhausted."""
-            state = active[idx]
-            if state["offset"] >= state["end"]:
-                return False
-
-            # Read a chunk
-            read_len = min(self.buffer_per_group, state["end"] - state["offset"])
-
-            # Use polars for efficient reading with offset
-            df = (
-                pl.scan_parquet(state["path"])
-                .slice(state["offset"], read_len)
-                .collect()
-            )
-            state["offset"] += read_len
-
-            fens = df["fen"].to_list()
-            scores = df["score"].to_list()
-
-            # Extract features
-            w_idx, w_off, b_idx, b_off, stm = self._get_features(fens, False)
-
-            n_samples = len(fens)
-            for i in range(n_samples):
-                w_start = w_off[i]
-                w_end = w_off[i + 1] if i + 1 < n_samples else len(w_idx)
-                b_start = b_off[i]
-                b_end = b_off[i + 1] if i + 1 < n_samples else len(b_idx)
-
-                state["buffer"].append(
-                    (
-                        w_idx[w_start:w_end].copy(),
-                        b_idx[b_start:b_end].copy(),
-                        int(stm[i]),
-                        float(scores[i]),
-                    )
-                )
-
-            # Also add flipped if augmenting
-            if self.flip_augment:
-                w_idx_f, w_off_f, b_idx_f, b_off_f, stm_f = self._get_features(
-                    fens, True
-                )
-                for i in range(n_samples):
-                    w_start = w_off_f[i]
-                    w_end = w_off_f[i + 1] if i + 1 < n_samples else len(w_idx_f)
-                    b_start = b_off_f[i]
-                    b_end = b_off_f[i + 1] if i + 1 < n_samples else len(b_idx_f)
-
-                    state["buffer"].append(
-                        (
-                            w_idx_f[w_start:w_end].copy(),
-                            b_idx_f[b_start:b_end].copy(),
-                            int(stm_f[i]),
-                            -float(scores[i]),
-                        )
-                    )
-
-            # Shuffle buffer
-            rng.shuffle(state["buffer"])
-            return True
-
-        # Initial fill
-        fill_active()
-        for idx in list(active.keys()):
-            refill_buffer(idx)
-
-        # Yield samples
-        while active:
-            # Pick random active group (weighted)
-            indices = list(active.keys())
-            weights = [active[i]["weight"] for i in indices]
-            total_w = sum(weights)
-            weights = [w / total_w for w in weights]
-
-            idx = rng.choices(indices, weights)[0]
-            state = active[idx]
-
-            # Get sample from buffer
-            if state["buffer"]:
-                yield state["buffer"].pop()
-
-            # Refill if empty
-            if not state["buffer"]:
-                if not refill_buffer(idx):
-                    # This group is exhausted, remove and fill replacement
-                    del active[idx]
-                    fill_active()
-                    for new_idx in list(active.keys()):
-                        if not active[new_idx]["buffer"]:
-                            if not refill_buffer(new_idx):
-                                del active[new_idx]
-
-
-def collate_sparse(batch):
-    """Collate sparse HalfKP features into batched tensors."""
-    # Pre-compute sizes for numpy pre-allocation
-    n = len(batch)
-    w_lens = [len(b[0]) for b in batch]
-    b_lens = [len(b[1]) for b in batch]
-    w_total = sum(w_lens)
-    b_total = sum(b_lens)
-
-    # Pre-allocate numpy arrays
-    w_all = np.empty(w_total, dtype=np.int64)
-    b_all = np.empty(b_total, dtype=np.int64)
-    w_off = np.empty(n, dtype=np.int64)
-    b_off = np.empty(n, dtype=np.int64)
-    stm_arr = np.empty(n, dtype=np.int64)
-    score_arr = np.empty(n, dtype=np.float32)
-
-    # Fill arrays
-    w_pos, b_pos = 0, 0
-    for i, (w, b, stm, score) in enumerate(batch):
-        w_len = w_lens[i]
-        b_len = b_lens[i]
-
-        w_off[i] = w_pos
-        b_off[i] = b_pos
-
-        w_all[w_pos : w_pos + w_len] = w
-        b_all[b_pos : b_pos + b_len] = b
-
-        w_pos += w_len
-        b_pos += b_len
-
-        stm_arr[i] = stm
-        score_arr[i] = score
-
-    return (
-        torch.from_numpy(w_all),
-        torch.from_numpy(w_off),
-        torch.from_numpy(b_all),
-        torch.from_numpy(b_off),
-        torch.from_numpy(stm_arr),
-        torch.from_numpy(score_arr).unsqueeze(1),
-    )
-
-
-class BatchedParquetDataset(torch.utils.data.IterableDataset):
-    """
-    High-performance batched dataset that yields pre-collated tensors.
-
-    Unlike LazyFrameDataset which yields individual samples, this yields
-    complete batches directly from C++ feature extraction, avoiding Python
-    per-sample overhead. ~8x faster data loading.
-
-    Uses pyarrow row-group streaming to handle arbitrarily large files
-    without loading them into memory.
+    Combines features of BatchedParquetDataset and PrefetchedDataset into one class.
+    Uses pyarrow row-group streaming to handle arbitrarily large files.
 
     Args:
         paths: List of parquet file paths
-        batch_size: Number of samples per batch
+        batch_size: Samples per batch. If None, yields individual samples (slower).
         split: Which split to use ('train', 'val', 'test', or None for all)
-        split_config: SplitConfig for splitting
+        split_config: SplitConfig for train/val/test splitting
         arch: Architecture for feature extraction ('halfkp' or 'halfkav2')
         flip_augment: If True, also yield flipped positions with negated scores (2x data)
+        prefetch: Number of batches to prefetch in background thread (0 = disabled)
+
+    Example:
+        # Fast batched training (recommended)
+        train_ds = ParquetDataset(
+            ["evals.parquet", "endgames.parquet"],
+            batch_size=8192,
+            split="train",
+            prefetch=4,
+        )
+
+        # Individual samples (for compatibility, slower)
+        train_ds = ParquetDataset(
+            ["evals.parquet"],
+            batch_size=None,
+            split="train",
+        )
     """
 
     def __init__(
         self,
         paths: list[str],
-        batch_size: int = 8192,
+        batch_size: int | None = 8192,
         split: str | None = None,
         split_config: SplitConfig | None = None,
         arch: str = "halfkp",
         flip_augment: bool = False,
+        prefetch: int = 2,
     ):
         self.paths = paths if isinstance(paths, list) else [paths]
         self.batch_size = batch_size
@@ -875,8 +374,9 @@ class BatchedParquetDataset(torch.utils.data.IterableDataset):
         self.split_config = split_config or SplitConfig()
         self.arch = arch
         self.flip_augment = flip_augment
+        self.prefetch = prefetch
         self._len: int | None = None
-        self._metadata: list[tuple[str, int]] | None = None  # [(path, total_rows), ...]
+        self._metadata: list[tuple[str, int]] | None = None
 
         if arch == "halfkp":
             self._get_features = dummy_chess.get_halfkp_features_batch
@@ -905,57 +405,47 @@ class BatchedParquetDataset(torch.utils.data.IterableDataset):
             self._len = total
         return self._len
 
-    def _iter_batches(self, path: str, start: int, end: int):
-        """Yield batches from a single parquet file using row-group streaming."""
+    def _iter_row_groups(self, path: str, start: int, end: int):
+        """Yield (fens, scores) chunks from row groups in range [start, end)."""
         pf = pyarrow.parquet.ParquetFile(path)
         meta = pf.metadata
+        batch_size = self.batch_size or 50000  # Default chunk size for unbatched
 
-        # Find which row groups overlap with our range
         row_offset = 0
         for rg_idx in range(meta.num_row_groups):
             rg_rows = meta.row_group(rg_idx).num_rows
             rg_start = row_offset
             rg_end = row_offset + rg_rows
 
-            # Skip row groups before our range
             if rg_end <= start:
                 row_offset = rg_end
                 continue
-
-            # Stop if we're past our range
             if rg_start >= end:
                 break
 
-            # Read this row group
             table = pf.read_row_group(rg_idx, columns=["fen", "score"])
 
-            # Calculate slice within this row group
             slice_start = max(0, start - rg_start)
             slice_end = min(rg_rows, end - rg_start)
-
             if slice_start > 0 or slice_end < rg_rows:
                 table = table.slice(slice_start, slice_end - slice_start)
 
-            # Yield in batch_size chunks
             fens = table.column("fen").to_pylist()
             scores = table.column("score").to_numpy().astype(np.float32)
 
-            for i in range(0, len(fens), self.batch_size):
-                batch_fens = fens[i : i + self.batch_size]
-                batch_scores = scores[i : i + self.batch_size]
-                yield batch_fens, batch_scores
+            for i in range(0, len(fens), batch_size):
+                yield fens[i : i + batch_size], scores[i : i + batch_size]
 
             row_offset = rg_end
 
-    def __iter__(self):
+    def _iter_batched(self):
+        """Yield pre-collated tensor batches (fast path)."""
         for path, total_rows in self._get_metadata():
             start, end = self.split_config.get_split_indices(total_rows, self.split)
 
-            for fens, scores in self._iter_batches(path, start, end):
-                # Get features directly as numpy arrays
+            for fens, scores in self._iter_row_groups(path, start, end):
                 w_idx, w_off, b_idx, b_off, stm = self._get_features(fens, False)
 
-                # Convert to tensors
                 yield (
                     torch.from_numpy(w_idx.astype(np.int64)),
                     torch.from_numpy(w_off.astype(np.int64)),
@@ -965,7 +455,6 @@ class BatchedParquetDataset(torch.utils.data.IterableDataset):
                     torch.from_numpy(scores).unsqueeze(1),
                 )
 
-                # Yield flipped batch with negated scores
                 if self.flip_augment:
                     w_idx_f, w_off_f, b_idx_f, b_off_f, stm_f = self._get_features(
                         fens, True
@@ -979,45 +468,49 @@ class BatchedParquetDataset(torch.utils.data.IterableDataset):
                         torch.from_numpy(-scores).unsqueeze(1),
                     )
 
+    def _iter_samples(self):
+        """Yield individual samples (slow path, for compatibility)."""
+        for path, total_rows in self._get_metadata():
+            start, end = self.split_config.get_split_indices(total_rows, self.split)
 
-class PrefetchedDataset(torch.utils.data.IterableDataset):
-    """
-    Wraps an IterableDataset to prefetch batches in a background thread.
+            for fens, scores in self._iter_row_groups(path, start, end):
+                w_idx, w_off, b_idx, b_off, stm = self._get_features(fens, False)
 
-    This overlaps data loading (CPU/IO bound) with GPU compute, improving
-    GPU utilization when data loading is the bottleneck.
+                n = len(fens)
+                for i in range(n):
+                    w_start = w_off[i]
+                    w_end = w_off[i + 1] if i + 1 < n else len(w_idx)
+                    b_start = b_off[i]
+                    b_end = b_off[i + 1] if i + 1 < n else len(b_idx)
 
-    Args:
-        dataset: The underlying IterableDataset to wrap
-        prefetch: Number of batches to prefetch (default 2)
-        pin_memory: Pin tensors for async GPU transfer (default False, can hurt due to GIL)
-    """
+                    yield (
+                        w_idx[w_start:w_end].copy(),
+                        b_idx[b_start:b_end].copy(),
+                        int(stm[i]),
+                        float(scores[i]),
+                    )
 
-    def __init__(
-        self,
-        dataset: torch.utils.data.IterableDataset,
-        prefetch: int = 2,
-        pin_memory: bool = False,
-    ):
-        self.dataset = dataset
-        self.prefetch = prefetch
-        self.pin_memory = pin_memory
+                    if self.flip_augment:
+                        w_idx_f, w_off_f, b_idx_f, b_off_f, stm_f = self._get_features(
+                            fens, True
+                        )
+                        yield (
+                            w_idx_f[w_start:w_end].copy(),
+                            b_idx_f[b_start:b_end].copy(),
+                            int(stm_f[i]),
+                            -float(scores[i]),
+                        )
 
-    def __len__(self) -> int:
-        return len(self.dataset)
-
-    def __iter__(self):
+    def _iter_with_prefetch(self, base_iter):
+        """Wrap iterator with background prefetching."""
         import queue
 
         q: queue.Queue = queue.Queue(maxsize=self.prefetch)
         sentinel = object()
 
         def producer():
-            for batch in self.dataset:
-                # Pin memory for faster GPU transfer
-                if self.pin_memory:
-                    batch = tuple(t.pin_memory() for t in batch)
-                q.put(batch)
+            for item in base_iter:
+                q.put(item)
             q.put(sentinel)
 
         thread = threading.Thread(target=producer, daemon=True)
@@ -1030,6 +523,64 @@ class PrefetchedDataset(torch.utils.data.IterableDataset):
             yield item
 
         thread.join()
+
+    def __iter__(self):
+        if self.batch_size is not None:
+            base_iter = self._iter_batched()
+        else:
+            base_iter = self._iter_samples()
+
+        if self.prefetch > 0 and self.batch_size is not None:
+            yield from self._iter_with_prefetch(base_iter)
+        else:
+            yield from base_iter
+
+    @property
+    def is_batched(self) -> bool:
+        """True if dataset yields pre-batched tensors."""
+        return self.batch_size is not None
+
+
+# Legacy aliases for backward compatibility
+BatchedParquetDataset = ParquetDataset
+
+
+def collate_sparse(batch):
+    """Collate sparse HalfKP features into batched tensors."""
+    n = len(batch)
+    w_lens = [len(b[0]) for b in batch]
+    b_lens = [len(b[1]) for b in batch]
+    w_total = sum(w_lens)
+    b_total = sum(b_lens)
+
+    w_all = np.empty(w_total, dtype=np.int64)
+    b_all = np.empty(b_total, dtype=np.int64)
+    w_off = np.empty(n, dtype=np.int64)
+    b_off = np.empty(n, dtype=np.int64)
+    stm_arr = np.empty(n, dtype=np.int64)
+    score_arr = np.empty(n, dtype=np.float32)
+
+    w_pos, b_pos = 0, 0
+    for i, (w, b, stm, score) in enumerate(batch):
+        w_len = w_lens[i]
+        b_len = b_lens[i]
+        w_off[i] = w_pos
+        b_off[i] = b_pos
+        w_all[w_pos : w_pos + w_len] = w
+        b_all[b_pos : b_pos + b_len] = b
+        w_pos += w_len
+        b_pos += b_len
+        stm_arr[i] = stm
+        score_arr[i] = score
+
+    return (
+        torch.from_numpy(w_all),
+        torch.from_numpy(w_off),
+        torch.from_numpy(b_all),
+        torch.from_numpy(b_off),
+        torch.from_numpy(stm_arr),
+        torch.from_numpy(score_arr).unsqueeze(1),
+    )
 
 
 # ============================================================================
@@ -1203,18 +754,16 @@ def train(
     print(f"Architecture: {arch}")
 
     # Check if dataset yields pre-batched tensors
-    is_prebatched = isinstance(train_dataset, BatchedParquetDataset)
+    is_prebatched = (
+        isinstance(train_dataset, ParquetDataset) and train_dataset.is_batched
+    )
 
     is_iterable = isinstance(
         train_dataset, torch.utils.data.IterableDataset
     ) or not hasattr(train_dataset, "__getitem__")
 
     if is_prebatched:
-        # Pre-batched dataset with prefetching for better GPU utilization
-        train_dataset = PrefetchedDataset(train_dataset, prefetch=2)
-        if val_dataset is not None:
-            val_dataset = PrefetchedDataset(val_dataset, prefetch=2)
-
+        # Pre-batched dataset: no collate needed, prefetching is built-in
         train_loader = torch.utils.data.DataLoader(
             train_dataset,
             batch_size=None,  # Dataset yields complete batches
@@ -1551,23 +1100,6 @@ if __name__ == "__main__":
         help="Augment data by including flipped positions (2x data, zero mean scores)",
     )
     parser.add_argument(
-        "--shuffle",
-        action="store_true",
-        help="Use shuffled multi-row-group sampling (recommended for training)",
-    )
-    parser.add_argument(
-        "--num-active-groups",
-        type=int,
-        default=8,
-        help="Number of row groups to sample from simultaneously (more = better shuffle)",
-    )
-    parser.add_argument(
-        "--buffer-per-group",
-        type=int,
-        default=4096,
-        help="Samples to buffer per active row group",
-    )
-    parser.add_argument(
         "--arch",
         choices=["halfkp", "halfkav2"],
         default="halfkp",
@@ -1579,9 +1111,10 @@ if __name__ == "__main__":
         help="Suppress progress bar, only print epoch summaries",
     )
     parser.add_argument(
-        "--fast",
-        action="store_true",
-        help="Use high-performance batched dataset (10x faster, no per-sample shuffle)",
+        "--prefetch",
+        type=int,
+        default=4,
+        help="Number of batches to prefetch (0 to disable)",
     )
     args = parser.parse_args()
 
@@ -1598,66 +1131,25 @@ if __name__ == "__main__":
         test_ratio=args.test_ratio,
     )
 
-    if args.fast:
-        # Use high-performance batched dataset
-        train_dataset = BatchedParquetDataset(
-            args.data,
-            batch_size=args.batch_size,
-            split="train",
-            split_config=split_config,
-            arch=args.arch,
-            flip_augment=args.flip_augment,
-        )
-        val_dataset = BatchedParquetDataset(
-            args.data,
-            batch_size=args.batch_size,
-            split="val",
-            split_config=split_config,
-            arch=args.arch,
-        )
-    elif args.shuffle:
-        # Use shuffled dataset (recommended for training)
-        train_dataset = ShuffledParquetDataset(
-            args.data,
-            split="train",
-            split_config=split_config,
-            num_active_groups=args.num_active_groups,
-            buffer_per_group=args.buffer_per_group,
-            flip_augment=args.flip_augment,
-            arch=args.arch,
-        )
-        val_dataset = ShuffledParquetDataset(
-            args.data,
-            split="val",
-            split_config=split_config,
-            num_active_groups=4,  # Fewer for validation
-            buffer_per_group=args.buffer_per_group,
-            flip_augment=False,
-            arch=args.arch,
-        )
-    else:
-        # Use sequential dataset (for compatibility)
-        sources: list[pl.LazyFrame] = []
-        for path in args.data:
-            if path.endswith(".parquet"):
-                sources.append(pl.scan_parquet(path))
-            else:
-                sources.append(pl.scan_csv(path))
-
-        train_dataset = LazyFrameDataset(
-            sources,
-            split="train",
-            split_config=split_config,
-            flip_augment=args.flip_augment,
-            arch=args.arch,
-        )
-        val_dataset = LazyFrameDataset(
-            sources,
-            split="val",
-            split_config=split_config,
-            flip_augment=False,
-            arch=args.arch,
-        )
+    # Use unified ParquetDataset
+    train_dataset = ParquetDataset(
+        args.data,
+        batch_size=args.batch_size,
+        split="train",
+        split_config=split_config,
+        arch=args.arch,
+        flip_augment=args.flip_augment,
+        prefetch=args.prefetch,
+    )
+    val_dataset = ParquetDataset(
+        args.data,
+        batch_size=args.batch_size,
+        split="val",
+        split_config=split_config,
+        arch=args.arch,
+        flip_augment=False,
+        prefetch=args.prefetch,
+    )
 
     print(f"Train: {len(train_dataset)} rows, Val: {len(val_dataset)} rows")
 
