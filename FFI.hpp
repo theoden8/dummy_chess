@@ -71,7 +71,7 @@ struct FFI {
   // Heap-allocated because PGN contains std::string and std::vector<std::string>
   EXPORT static pgn::PGN* make_pgn_ptr(Board& board) { return new pgn::PGN(board); }
   EXPORT static void destroy_pgn_ptr(pgn::PGN* p) { delete p; }
-  EXPORT static void pgn_handle_move(pgn::PGN* p, move_t m) { p->handle_move(m); }
+  EXPORT static bool pgn_handle_move(pgn::PGN* p, move_t m) { return p->handle_move(m); }
   EXPORT static void pgn_retract_move(pgn::PGN* p) { p->retract_move(); }
   EXPORT static std::string* pgn_str(const pgn::PGN* p) { return new std::string(p->str()); }
   EXPORT static size_t pgn_size(const pgn::PGN* p) { return p->size(); }

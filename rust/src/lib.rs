@@ -105,8 +105,9 @@ impl PGN {
   }
 
   /// Handle a move (writes notation and advances board state)
-  pub fn handle_move(&mut self, m: root::move_t) {
-    unsafe { root::FFI::pgn_handle_move(self.inner, m) };
+  /// Returns false if move is invalid (corrupted PGN)
+  pub fn handle_move(&mut self, m: root::move_t) -> bool {
+    unsafe { root::FFI::pgn_handle_move(self.inner, m) }
   }
 
   /// Retract the last move
