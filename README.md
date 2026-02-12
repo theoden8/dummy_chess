@@ -10,7 +10,6 @@
 <a href="https://gitlab.com/theoden8/dummy_chess/-/commits/master">
     <img src="https://gitlab.com/theoden8/dummy_chess/badges/master/pipeline.svg" alt="Gitlab CI"/>
 </a>
-<br>
 <a href="https://lichess.org/@/theoden8_uci">
     <img src="https://img.shields.io/badge/Lichess-theoden8__uci-blue?logo=lichess" alt="Challenge on Lichess"/>
 </a>
