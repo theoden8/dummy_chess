@@ -34,7 +34,6 @@ explicit = true
 
 [tool.setuptools]
 py-modules = ["train", "preprocess"]
-ext-modules = []  # Cython extensions defined in setup.py
 
 [tool.pytest.ini_options]
 markers = [

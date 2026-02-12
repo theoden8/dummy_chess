@@ -8,8 +8,8 @@ extensions = [
     Extension(
         "fast_features",
         sources=["fast_features.pyx"],
-        include_dirs=[numpy.get_include(), ".."],  # Include parent dir for NNUE.hpp
-        extra_compile_args=["-O3", "-std=c++17"],
+        include_dirs=[numpy.get_include(), ".", ".."],  # Parent dir for FEN.hpp
+        extra_compile_args=["-O3", "-std=c++20"],
         language="c++",
     )
 ]
