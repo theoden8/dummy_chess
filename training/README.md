@@ -1,5 +1,12 @@
 # NNUE Training
 
+## Development
+
+After modifying C++ code in the parent directory, rebuild the Python bindings:
+```bash
+uv sync --reinstall-package dummy-chess
+```
+
 ## Quick Start
 
 ```bash

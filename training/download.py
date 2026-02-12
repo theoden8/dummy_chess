@@ -80,8 +80,9 @@ class TorrentStream(io.RawIOBase):
     the download saturated while processing.
     """
 
-    # Number of pieces to prefetch ahead (1 MB pieces = 64 MB prefetch buffer)
-    PREFETCH_PIECES = 64
+    # Number of pieces to prefetch ahead (1 MB pieces typical)
+    # Reduced from 64 to 32 to save memory (~32 MB prefetch buffer)
+    PREFETCH_PIECES = 32
 
     def __init__(
         self,
@@ -117,12 +118,12 @@ class TorrentStream(io.RawIOBase):
         self._piece_length = self._info.piece_length()
         self._num_pieces = self._info.num_pieces()
 
-        # Create session
+        # Create session with memory-efficient settings
         self._session = lt.session()
         settings = {
             "download_rate_limit": max_download_rate,
             "upload_rate_limit": max_upload_rate,
-            "connections_limit": 200,
+            "connections_limit": 50,  # Reduced from 200 to save memory
             "active_downloads": 1,
             "active_seeds": 1,
         }
@@ -272,7 +273,7 @@ def open_torrent_stream(
     url: str,
     save_dir: pathlib.Path | None = None,
     max_download_rate: int = 0,
-    prefetch_pieces: int = 64,
+    prefetch_pieces: int = 32,
 ) -> TorrentStream:
     """
     Open a torrent URL for streaming.
@@ -281,7 +282,7 @@ def open_torrent_stream(
         url: URL to the .torrent file (or data URL with .torrent appended)
         save_dir: Directory to save downloaded data (default: temp dir)
         max_download_rate: Max download speed in bytes/sec (0 = unlimited)
-        prefetch_pieces: Number of pieces to prefetch ahead (default 64 = ~64 MB)
+        prefetch_pieces: Number of pieces to prefetch ahead (default 32 = ~32 MB)
 
     Returns:
         TorrentStream object that can be used as a file-like object
@@ -377,17 +378,61 @@ def fetch_text(url: str) -> str | None:
         return None
 
 
-def get_games_list(variant: str = "standard") -> list[tuple[str, str]]:
+# Cache directory for games list
+CACHE_DIR = pathlib.Path(__file__).parent / ".cache"
+GAMES_LIST_CACHE_HOURS = 24  # Refresh cache after 24 hours
+
+
+def get_games_list(
+    variant: str = "standard", use_cache: bool = True
+) -> list[tuple[str, str]]:
     """
     Get list of available game archives.
 
     Returns list of (month, url) tuples, sorted newest first.
+    Uses a local cache to avoid repeated network requests.
+
+    Args:
+        variant: Game variant ("standard" or "chess960")
+        use_cache: If True, use cached list if available and not expired
     """
+    cache_file = CACHE_DIR / f"games_list_{variant}.txt"
+
+    # Try to use cache
+    if use_cache and cache_file.exists():
+        cache_age_hours = (time.time() - cache_file.stat().st_mtime) / 3600
+        if cache_age_hours < GAMES_LIST_CACHE_HOURS:
+            try:
+                content = cache_file.read_text()
+                results = []
+                for line in content.strip().split("\n"):
+                    url = line.strip()
+                    if not url:
+                        continue
+                    match = re.search(r"(\d{4}-\d{2})\.pgn\.zst$", url)
+                    if match:
+                        month = match.group(1)
+                        results.append((month, url))
+                if results:
+                    return results
+            except Exception:
+                pass  # Fall through to fetch from network
+
+    # Fetch from network
     list_url = GAMES_LIST_URL.format(variant=variant)
     content = fetch_text(list_url)
     if not content:
-        return []
+        # If network fails, try to use stale cache
+        if cache_file.exists():
+            try:
+                content = cache_file.read_text()
+                print(f"Warning: Using stale cache for {variant} games list")
+            except Exception:
+                return []
+        else:
+            return []
 
+    # Parse results
     results = []
     for line in content.strip().split("\n"):
         url = line.strip()
@@ -398,6 +443,14 @@ def get_games_list(variant: str = "standard") -> list[tuple[str, str]]:
         if match:
             month = match.group(1)
             results.append((month, url))
+
+    # Save to cache
+    if results:
+        try:
+            CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            cache_file.write_text(content)
+        except Exception:
+            pass  # Cache write failure is not critical
 
     return results  # Already sorted newest first from Lichess
 

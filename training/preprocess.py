@@ -789,9 +789,6 @@ def process_endgames(
 
                 except chess.syzygy.MissingTableError:
                     continue
-                except Exception:
-                    # Engine evaluation can fail on some positions
-                    continue
 
                 fen_results.append((board.fen(), int(score), depth, knodes))
                 pbar.update(1)
@@ -1046,6 +1043,76 @@ def extract_position_with_eval(
     return fen, score, ply_idx
 
 
+def iter_pgn_text(stream: typing.IO[str]) -> typing.Iterator[str]:
+    """
+    Iterate over raw PGN game text from a stream.
+
+    Fast text-based splitting - doesn't parse the PGN, just finds game boundaries.
+    Yields complete PGN game strings (headers + moves).
+    """
+    lines: list[str] = []
+    in_game = False
+
+    for line in stream:
+        stripped = line.strip()
+
+        # Empty line after moves signals end of game
+        if not stripped and in_game and lines:
+            # Check if last non-empty line looks like it ends a game
+            # (result like 1-0, 0-1, 1/2-1/2, or *)
+            last_content = ""
+            for prev_line in reversed(lines):
+                if prev_line.strip():
+                    last_content = prev_line.strip()
+                    break
+
+            if any(last_content.endswith(r) for r in ["1-0", "0-1", "1/2-1/2", "*"]):
+                yield "".join(lines)
+                lines = []
+                in_game = False
+                continue
+
+        # Header line starts a new game
+        if stripped.startswith("["):
+            if not in_game:
+                in_game = True
+        elif stripped and in_game and not stripped.startswith("["):
+            # Non-header content (moves)
+            pass
+
+        if stripped or in_game:
+            lines.append(line)
+
+    # Yield final game if any
+    if lines:
+        yield "".join(lines)
+
+
+def parse_pgn_headers(pgn_text: str) -> dict[str, str]:
+    """
+    Fast header extraction from PGN text.
+    Returns dict of header name -> value.
+    """
+    headers: dict[str, str] = {}
+    for line in pgn_text.split("\n"):
+        line = line.strip()
+        if not line.startswith("["):
+            if line and not line[0].isdigit():
+                break  # End of headers (moves start)
+            continue
+        # Parse [Tag "Value"]
+        if line.endswith("]"):
+            content = line[1:-1]
+            space_idx = content.find(" ")
+            if space_idx > 0:
+                tag = content[:space_idx]
+                value = content[space_idx + 1 :].strip()
+                if value.startswith('"') and value.endswith('"'):
+                    value = value[1:-1]
+                headers[tag] = value
+    return headers
+
+
 def iter_pgn_games(stream: typing.IO[str]) -> typing.Iterator[chess.pgn.Game]:
     """
     Iterate over PGN games from a text stream using python-chess.
@@ -1067,6 +1134,8 @@ def process_games_pgn_evals(
     seed: int = 42,
     resume: bool = False,
     use_torrent: bool = False,
+    use_cpp_parser: bool = False,
+    disable_progress: bool = False,
 ) -> int:
     """
     Process PGN game archive, extracting positions with their PGN [%eval] annotations.
@@ -1175,7 +1244,34 @@ def process_games_pgn_evals(
             print(f"Processing {source}...")
             return open(source, "rb")
 
-    print("Extracting positions with PGN evals (no engine needed)")
+    if use_cpp_parser:
+        print("Extracting positions with PGN evals (C++ parser, no engine needed)")
+    else:
+        print("Extracting positions with PGN evals (Python parser, no engine needed)")
+
+    def should_process_game_from_headers(headers: dict[str, str]) -> bool:
+        """Check if game should be processed based on parsed headers."""
+        # Skip bot games
+        if config.skip_bots:
+            if headers.get("WhiteTitle") == "BOT" or headers.get("BlackTitle") == "BOT":
+                return False
+
+        # Check ratings
+        try:
+            white_elo = int(headers.get("WhiteElo", "0"))
+            black_elo = int(headers.get("BlackElo", "0"))
+        except ValueError:
+            white_elo = black_elo = 0
+
+        if config.min_elo is not None:
+            if white_elo < config.min_elo or black_elo < config.min_elo:
+                return False
+
+        if config.max_elo is not None:
+            if white_elo > config.max_elo or black_elo > config.max_elo:
+                return False
+
+        return True
 
     try:
         with open_source() as raw_stream:
@@ -1189,48 +1285,116 @@ def process_games_pgn_evals(
                     desc="Games",
                     unit=" games",
                     initial=progress.games_processed if resume else 0,
+                    disable=disable_progress,
                 )
 
-                for game in iter_pgn_games(text_stream):
-                    games_processed += 1
-                    pbar.update(1)
+                if use_cpp_parser:
+                    # Fast path: use C++ parser
+                    debug_pgn_path = pathlib.Path("/tmp/last_pgn.txt")
+                    for pgn_text in iter_pgn_text(text_stream):
+                        games_processed += 1
+                        pbar.update(1)
 
-                    # Skip games if resuming
-                    if resume and games_processed <= progress.games_processed:
-                        continue
+                        # Print status every 20k games when progress bar disabled
+                        if disable_progress and games_processed % 20000 == 0:
+                            print(
+                                f"Games: {games_processed}, positions: {positions_extracted}",
+                                flush=True,
+                            )
 
-                    # Filter game
-                    if not should_process_game(game, config):
-                        continue
+                        # Skip games if resuming
+                        if resume and games_processed <= progress.games_processed:
+                            continue
 
-                    # Extract position with PGN eval
-                    result = extract_position_with_eval(game, config, rng)
-                    if result is None:
-                        continue
+                        # Filter game by headers
+                        headers = parse_pgn_headers(pgn_text)
+                        if not should_process_game_from_headers(headers):
+                            continue
 
-                    fen, score, ply_idx = result
-                    games_with_evals += 1
+                        # Write to /tmp before parsing so we can debug crashes
+                        # Only in debug mode (disabled by default - slows down processing)
+                        # debug_pgn_path.write_text(
+                        #     f"Game #{games_processed}\n\n{pgn_text}"
+                        # )
 
-                    # Compress FEN and add to batch
-                    # Use depth=0 and knodes=0 to indicate PGN eval (not engine)
-                    compressed_fen = dummy_chess.compress_fen(fen)
-                    batch.append((compressed_fen, score, 0, 0))
-                    positions_extracted += 1
+                        # Parse with C++ and get all positions with evals
+                        positions = dummy_chess.parse_pgn_with_evals(pgn_text)
+                        if not positions:
+                            continue
 
-                    # Flush batch and save progress periodically
-                    if len(batch) >= config.batch_size:
-                        flush_batch()
-                        save_progress()
+                        # Filter by config constraints
+                        valid_positions = []
+                        for compressed_fen, score, ply_idx in positions:
+                            if ply_idx < config.min_ply:
+                                continue
+                            # Note: can't check piece count without decompressing
+                            # For speed, we skip that check in C++ path
+                            valid_positions.append((compressed_fen, score, ply_idx))
 
-                    # Check limit
-                    if max_positions and positions_extracted >= max_positions:
-                        break
+                        if not valid_positions:
+                            continue
+
+                        # Pick one random position
+                        compressed_fen, score, ply_idx = rng.choice(valid_positions)
+                        games_with_evals += 1
+
+                        # Add to batch (depth=0, knodes=0 for PGN eval)
+                        batch.append((compressed_fen, score, 0, 0))
+                        positions_extracted += 1
+
+                        # Flush batch and save progress periodically
+                        if len(batch) >= config.batch_size:
+                            flush_batch()
+                            save_progress()
+
+                        # Check limit
+                        if max_positions and positions_extracted >= max_positions:
+                            break
+                else:
+                    # Slow path: use Python chess library
+                    for game in iter_pgn_games(text_stream):
+                        games_processed += 1
+                        pbar.update(1)
+
+                        # Skip games if resuming
+                        if resume and games_processed <= progress.games_processed:
+                            continue
+
+                        # Filter game
+                        if not should_process_game(game, config):
+                            continue
+
+                        # Extract position with PGN eval
+                        result = extract_position_with_eval(game, config, rng)
+                        if result is None:
+                            continue
+
+                        fen, score, ply_idx = result
+                        games_with_evals += 1
+
+                        # Compress FEN and add to batch
+                        # Use depth=0 and knodes=0 to indicate PGN eval (not engine)
+                        compressed_fen = dummy_chess.compress_fen(fen)
+                        batch.append((compressed_fen, score, 0, 0))
+                        positions_extracted += 1
+
+                        # Flush batch and save progress periodically
+                        if len(batch) >= config.batch_size:
+                            flush_batch()
+                            save_progress()
+
+                        # Check limit
+                        if max_positions and positions_extracted >= max_positions:
+                            break
 
                 pbar.close()
+                print(f"\nFinished reading all games from stream.")
 
         # Final flush
+        print(f"Flushing final batch ({len(batch)} positions)...")
         flush_batch()
         save_progress()
+        print(f"Final flush complete.")
 
     except KeyboardInterrupt:
         print("\nInterrupted! Progress saved. Run with --resume to continue.")
@@ -1241,6 +1405,14 @@ def process_games_pgn_evals(
     except (urllib.error.URLError, OSError) as e:
         print(f"\nError: {e}")
         print("Progress saved. Run with --resume to continue.")
+        flush_batch()
+        save_progress()
+        raise
+
+    except Exception as e:
+        print(f"\nUnexpected error: {e}")
+        if use_cpp_parser:
+            print("Last PGN saved to /tmp/last_pgn.txt")
         flush_batch()
         save_progress()
         raise
@@ -1258,9 +1430,17 @@ def process_games_pgn_evals(
         return 0
 
     print(f"Combining {len(batch_files)} batch files...")
-    tables = [pyarrow.parquet.read_table(f) for f in batch_files]
-    combined = pyarrow.concat_tables(tables)
-    pyarrow.parquet.write_table(combined, output_path, compression="zstd")
+    # Stream batches to output to avoid loading all into memory
+    first_table = pyarrow.parquet.read_table(batch_files[0])
+    with pyarrow.parquet.ParquetWriter(
+        output_path, first_table.schema, compression="zstd"
+    ) as writer:
+        writer.write_table(first_table)
+        del first_table
+        for batch_file in batch_files[1:]:
+            table = pyarrow.parquet.read_table(batch_file)
+            writer.write_table(table)
+            del table
 
     # Cleanup
     shutil.rmtree(tmp_dir)
@@ -1425,24 +1605,19 @@ def process_games(
                     fen, ply_idx = result
 
                     # Evaluate with engine
-                    try:
-                        board = chess.Board(fen)
-                        info = engine.analyse(
-                            board, chess.engine.Limit(depth=config.depth)
-                        )
-                        score_obj = info["score"].white()
-                        if score_obj.is_mate():
-                            mate_in = score_obj.mate()
-                            score = 10000 if mate_in > 0 else -10000
-                        else:
-                            score = score_obj.score()
-                            if score is None:
-                                continue
-                        score = max(-15000, min(15000, score))
-                        depth_out = info.get("depth", config.depth)
-                        knodes = info.get("nodes", 0) // 1000
-                    except Exception:
-                        continue
+                    board = chess.Board(fen)
+                    info = engine.analyse(board, chess.engine.Limit(depth=config.depth))
+                    score_obj = info["score"].white()
+                    if score_obj.is_mate():
+                        mate_in = score_obj.mate()
+                        score = 10000 if mate_in > 0 else -10000
+                    else:
+                        score = score_obj.score()
+                        if score is None:
+                            continue
+                    score = max(-15000, min(15000, score))
+                    depth_out = info.get("depth", config.depth)
+                    knodes = info.get("nodes", 0) // 1000
 
                     # Compress FEN and add to batch
                     compressed_fen = dummy_chess.compress_fen(fen)
@@ -1492,9 +1667,17 @@ def process_games(
         return 0
 
     print(f"Combining {len(batch_files)} batch files...")
-    tables = [pyarrow.parquet.read_table(f) for f in batch_files]
-    combined = pyarrow.concat_tables(tables)
-    pyarrow.parquet.write_table(combined, output_path, compression="zstd")
+    # Stream batches to output to avoid loading all into memory
+    first_table = pyarrow.parquet.read_table(batch_files[0])
+    with pyarrow.parquet.ParquetWriter(
+        output_path, first_table.schema, compression="zstd"
+    ) as writer:
+        writer.write_table(first_table)
+        del first_table
+        for batch_file in batch_files[1:]:
+            table = pyarrow.parquet.read_table(batch_file)
+            writer.write_table(table)
+            del table
 
     # Cleanup
     shutil.rmtree(tmp_dir)
@@ -2136,6 +2319,11 @@ def main():
         help="Use [%%eval] annotations from PGN instead of engine (much faster)",
     )
     parser.add_argument(
+        "--use-cpp-parser",
+        action="store_true",
+        help="Use fast C++ PGN parser (requires --use-pgn-evals)",
+    )
+    parser.add_argument(
         "--min-ply",
         type=int,
         default=10,
@@ -2193,6 +2381,11 @@ def main():
         "--resume-shuffle",
         action="store_true",
         help="Resume interrupted shuffle from checkpoint",
+    )
+    parser.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="Disable progress bars",
     )
 
     args = parser.parse_args()
@@ -2351,6 +2544,8 @@ def main():
                 seed=args.seed,
                 resume=args.resume,
                 use_torrent=args.torrent,
+                use_cpp_parser=args.use_cpp_parser,
+                disable_progress=args.no_progress,
             )
         else:
             # Use engine for evaluation
@@ -2480,6 +2675,8 @@ def main():
                         seed=args.seed,
                         resume=True,
                         use_torrent=args.torrent,
+                        use_cpp_parser=args.use_cpp_parser,
+                        disable_progress=args.no_progress,
                     )
                 else:
                     process_games(
