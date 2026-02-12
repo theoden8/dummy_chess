@@ -830,6 +830,7 @@ def train(
     pbar = tqdm.tqdm(total=total_batches, desc="Training", disable=quiet)
     tracker.track_epoch("epoch", f"1/{epochs}")
 
+    step = 0
     for epoch in range(epochs):
         model.train()
         tracker.track_epoch("epoch", f"{epoch + 1}/{epochs}")
@@ -853,12 +854,13 @@ def train(
                 scaler.unscale_(dense_optimizer)
                 # Clip gradients to prevent explosion (dense params only)
                 torch.nn.utils.clip_grad_norm_(dense_params, max_norm=1.0)
-                # Assert no inf/nan gradients after clipping (dense params only)
-                for name, param in model.named_parameters():
-                    if param.grad is not None and not param.grad.is_sparse:
-                        assert torch.isfinite(param.grad).all(), (
-                            f"Non-finite gradient in {name}"
-                        )
+                # Assert no inf/nan gradients (every 100 steps to reduce sync overhead)
+                if step % 100 == 0:
+                    for name, param in model.named_parameters():
+                        if param.grad is not None and not param.grad.is_sparse:
+                            assert torch.isfinite(param.grad).all(), (
+                                f"Non-finite gradient in {name} at step {step}"
+                            )
                 scaler.step(sparse_optimizer)
                 scaler.step(dense_optimizer)
                 scaler.update()
@@ -872,6 +874,7 @@ def train(
             tracker.track("train", "loss", loss.item())
             pbar.set_postfix(**tracker.postfix)
             pbar.update(1)
+            step += 1
 
         # Validation
         if val_loader is not None:
