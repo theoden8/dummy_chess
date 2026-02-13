@@ -908,12 +908,16 @@ def train(
                     pbar.update(1)
 
         scheduler.step()
-        tracker.submit_epoch()
+        epoch_metrics = tracker.submit_epoch()
+
+        # Keep val_loss visible in progress bar for next epoch
+        if "val" in epoch_metrics and "loss" in epoch_metrics["val"]:
+            tracker.track_epoch("val_loss", f"{epoch_metrics['val']['loss']:.4f}")
 
         # Print epoch summary when quiet
         if quiet:
-            train_loss = tracker["train"].get("loss", float("nan"))
-            val_loss = tracker["val"].get("loss", float("nan"))
+            train_loss = epoch_metrics.get("train", {}).get("loss", float("nan"))
+            val_loss = epoch_metrics.get("val", {}).get("loss", float("nan"))
             print(
                 f"Epoch {epoch + 1}/{epochs}: train_loss={train_loss:.6f}, val_loss={val_loss:.6f}"
             )
