@@ -8,8 +8,6 @@
 
 #include <m42.h>
 
-#define self (*this)
-
 // pieces
 typedef enum : pos_t { PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING, EMPTY, NO_PIECES=EMPTY } PIECE;
 using piece_index_t = pos_t;

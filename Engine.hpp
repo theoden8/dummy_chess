@@ -15,6 +15,8 @@
 
 #include <tbconfig.h>
 
+#define self (*this)
+
 class Engine : public Perft {
 public:
   static constexpr bool ENABLE_TT = true;
@@ -1800,6 +1802,8 @@ public:
 
   virtual ~Engine() {}
 };
+
+#undef self
 
 const int32_t TB_VALUE_FPAWN = Engine::MATERIAL_PAWN;
 const int32_t TB_VALUE_MATE = Engine::MATERIAL_KING;

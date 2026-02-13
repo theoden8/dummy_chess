@@ -14,6 +14,8 @@
 #define ENABLE_NNUE 1
 #endif
 
+#define self (*this)
+
 class NNUEEngine : public Engine {
 public:
     // NNUE components
@@ -181,3 +183,5 @@ public:
         #endif
     }
 };
+
+#undef self

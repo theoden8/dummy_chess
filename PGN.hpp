@@ -655,6 +655,7 @@ pgn::PGN PGN::load_from_file(const std::string &fname, Board &board) {
 } // namespace pgn
 
 // external methods
+#define self (*this)
 NEVER_INLINE std::string MoveLine::pgn(Board &b) const {
   return pgn::_line_str(b, self);
 }
@@ -662,3 +663,4 @@ NEVER_INLINE std::string MoveLine::pgn(Board &b) const {
 NEVER_INLINE std::string MoveLine::pgn_full(Board &b) const {
   return pgn::_line_str_full(b, self);
 }
+#undef self

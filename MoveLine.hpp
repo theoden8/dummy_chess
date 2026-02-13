@@ -10,6 +10,7 @@
 #include <Bitmask.hpp>
 #include <Piece.hpp>
 
+#define self (*this)
 
 class Board;
 
@@ -223,3 +224,5 @@ struct MoveLine {
   EXPORT NEVER_INLINE std::string pgn(Board &engine) const;
   EXPORT NEVER_INLINE std::string pgn_full(Board &engine) const;
 };
+
+#undef self
