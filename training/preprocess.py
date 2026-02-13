@@ -408,12 +408,43 @@ def process_puzzles(
 # =============================================================================
 
 
+def is_valid_fen(fen: str) -> bool:
+    """Check if FEN represents a plausibly legal position."""
+    try:
+        board = chess.Board(fen)
+        # Basic sanity checks
+        if len(board.piece_map()) > 32:
+            return False  # Too many pieces
+        if len(board.piece_map()) < 2:
+            return False  # Need at least 2 kings
+        # Count pieces by type - max possible from promotions
+        piece_counts = {}
+        for piece in board.piece_map().values():
+            key = (piece.piece_type, piece.color)
+            piece_counts[key] = piece_counts.get(key, 0) + 1
+        # Check for impossible piece counts (max 9 of any piece type per side)
+        for (piece_type, color), count in piece_counts.items():
+            if piece_type == chess.KING and count != 1:
+                return False
+            if piece_type == chess.PAWN and count > 8:
+                return False
+            if piece_type != chess.KING and count > 9:
+                return False
+        return True
+    except ValueError:
+        return False
+
+
 def process_eval_row(row: dict) -> tuple[str, int, int, int] | None:
     """Process single evaluation row from lichess_db_eval.jsonl.zst."""
     fen = row.get("fen")
     evals = row.get("evals")
 
     if not fen or not evals:
+        return None
+
+    # Filter out invalid/illegal positions
+    if not is_valid_fen(fen):
         return None
 
     # Pick eval with highest depth
