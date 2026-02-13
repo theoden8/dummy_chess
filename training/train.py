@@ -405,45 +405,57 @@ class ParquetDataset(torch.utils.data.IterableDataset):
             self._len = total
         return self._len
 
-    def _iter_row_groups(self, path: str, start: int, end: int):
-        """Yield (fens, scores) chunks from row groups in range [start, end)."""
-        pf = pyarrow.parquet.ParquetFile(path)
-        meta = pf.metadata
-        batch_size = self.batch_size or 50000  # Default chunk size for unbatched
-
-        row_offset = 0
-        for rg_idx in range(meta.num_row_groups):
-            rg_rows = meta.row_group(rg_idx).num_rows
-            rg_start = row_offset
-            rg_end = row_offset + rg_rows
-
-            if rg_end <= start:
-                row_offset = rg_end
-                continue
-            if rg_start >= end:
-                break
-
-            table = pf.read_row_group(rg_idx, columns=["fen", "score"])
-
-            slice_start = max(0, start - rg_start)
-            slice_end = min(rg_rows, end - rg_start)
-            if slice_start > 0 or slice_end < rg_rows:
-                table = table.slice(slice_start, slice_end - slice_start)
-
-            fens = table.column("fen").to_pylist()
-            scores = table.column("score").to_numpy().astype(np.float32)
-
-            for i in range(0, len(fens), batch_size):
-                yield fens[i : i + batch_size], scores[i : i + batch_size]
-
-            row_offset = rg_end
-
-    def _iter_batched(self):
-        """Yield pre-collated tensor batches (fast path)."""
+    def _build_chunk_list(self) -> list[tuple[str, int, int, int]]:
+        """Build list of (path, rg_idx, slice_start, slice_end) for all row groups."""
+        chunks = []
         for path, total_rows in self._get_metadata():
             start, end = self.split_config.get_split_indices(total_rows, self.split)
+            pf = pyarrow.parquet.ParquetFile(path)
+            meta = pf.metadata
 
-            for fens, scores in self._iter_row_groups(path, start, end):
+            row_offset = 0
+            for rg_idx in range(meta.num_row_groups):
+                rg_rows = meta.row_group(rg_idx).num_rows
+                rg_start = row_offset
+                rg_end = row_offset + rg_rows
+
+                if rg_end <= start:
+                    row_offset = rg_end
+                    continue
+                if rg_start >= end:
+                    break
+
+                slice_start = max(0, start - rg_start)
+                slice_end = min(rg_rows, end - rg_start)
+                chunks.append((path, rg_idx, slice_start, slice_end))
+                row_offset = rg_end
+
+        return chunks
+
+    def _read_chunk(self, path: str, rg_idx: int, slice_start: int, slice_end: int):
+        """Read a single row group chunk and yield batches."""
+        pf = pyarrow.parquet.ParquetFile(path)
+        table = pf.read_row_group(rg_idx, columns=["fen", "score"])
+        rg_rows = table.num_rows
+
+        if slice_start > 0 or slice_end < rg_rows:
+            table = table.slice(slice_start, slice_end - slice_start)
+
+        fens = table.column("fen").to_pylist()
+        scores = table.column("score").to_numpy().astype(np.float32)
+
+        batch_size = self.batch_size or 50000
+        for i in range(0, len(fens), batch_size):
+            yield fens[i : i + batch_size], scores[i : i + batch_size]
+
+    def _iter_batched(self):
+        """Yield pre-collated tensor batches (fast path), shuffled across all sources."""
+        # Build and shuffle chunk list for interleaving across files
+        chunks = self._build_chunk_list()
+        random.shuffle(chunks)
+
+        for path, rg_idx, slice_start, slice_end in chunks:
+            for fens, scores in self._read_chunk(path, rg_idx, slice_start, slice_end):
                 w_idx, w_off, b_idx, b_off, stm = self._get_features(fens, False)
 
                 yield (
@@ -469,11 +481,13 @@ class ParquetDataset(torch.utils.data.IterableDataset):
                     )
 
     def _iter_samples(self):
-        """Yield individual samples (slow path, for compatibility)."""
-        for path, total_rows in self._get_metadata():
-            start, end = self.split_config.get_split_indices(total_rows, self.split)
+        """Yield individual samples (slow path, for compatibility), shuffled across all sources."""
+        # Build and shuffle chunk list for interleaving across files
+        chunks = self._build_chunk_list()
+        random.shuffle(chunks)
 
-            for fens, scores in self._iter_row_groups(path, start, end):
+        for path, rg_idx, slice_start, slice_end in chunks:
+            for fens, scores in self._read_chunk(path, rg_idx, slice_start, slice_end):
                 w_idx, w_off, b_idx, b_off, stm = self._get_features(fens, False)
 
                 n = len(fens)
