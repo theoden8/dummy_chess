@@ -207,11 +207,23 @@ def uci_eval(
     return cp, actual_depth, knodes
 
 
+def dummy_chess_eval(fen: str, depth: int = 12) -> tuple[int, int, int]:
+    """Evaluate position using dummy_chess engine. Returns (score_cp, depth, knodes)."""
+    board = dummy_chess.ChessDummy(fen)
+    result = board.get_depth_move(depth)
+    # Convert score from pawns to centipawns
+    cp = int(result.score * 100)
+    knodes = result.nodes // 1000
+    return cp, depth, knodes
+
+
 def process_puzzle_row(
     row: dict, engine, depth: int = 12
 ) -> list[tuple[str, int, int, int]]:
     """
     Process single puzzle row. Returns list of (fen_str, score, depth, knodes).
+
+    If engine is None, uses dummy_chess for evaluation.
 
     Extracts two positions:
     1. Starting position (FEN) - before any moves
@@ -230,7 +242,10 @@ def process_puzzle_row(
 
     # Position 1: Starting position
     board = chess.Board(fen)
-    score, out_depth, out_knodes = uci_eval(board, engine, depth)
+    if engine is not None:
+        score, out_depth, out_knodes = uci_eval(board, engine, depth)
+    else:
+        score, out_depth, out_knodes = dummy_chess_eval(board.fen(), depth)
     score = max(-15000, min(15000, score))
     results.append((board.fen(), score, out_depth, out_knodes))
 
@@ -240,7 +255,10 @@ def process_puzzle_row(
         return results  # Return just the starting position
     board.push(move)
 
-    score, out_depth, out_knodes = uci_eval(board, engine, depth)
+    if engine is not None:
+        score, out_depth, out_knodes = uci_eval(board, engine, depth)
+    else:
+        score, out_depth, out_knodes = dummy_chess_eval(board.fen(), depth)
     score = max(-15000, min(15000, score))
     results.append((board.fen(), score, out_depth, out_knodes))
 
@@ -251,7 +269,7 @@ def process_puzzles(
     input_path: pathlib.Path,
     output_path: pathlib.Path,
     max_rows: int | None,
-    engine_path: str,
+    engine_path: str | None,
     depth: int,
     tablebase_path: str | None = None,
     batch_size: int = 100000,
@@ -259,16 +277,22 @@ def process_puzzles(
     """
     Process puzzle data, streaming to parquet in batches.
 
-    Requires a UCI engine for evaluation.
+    If engine_path is None, uses dummy_chess for evaluation.
 
     Returns the number of rows written.
     """
-    engine = chess.engine.SimpleEngine.popen_uci(engine_path)
-    print(f"Using UCI engine: {engine_path} (depth={depth})")
-
-    if tablebase_path:
-        engine.configure({"SyzygyPath": tablebase_path})
-        print(f"Using tablebases: {tablebase_path}")
+    engine = None
+    if engine_path:
+        engine = chess.engine.SimpleEngine.popen_uci(engine_path)
+        print(f"Using UCI engine: {engine_path} (depth={depth})")
+        if tablebase_path:
+            engine.configure({"SyzygyPath": tablebase_path})
+            print(f"Using tablebases: {tablebase_path}")
+    else:
+        print(f"Using dummy_chess engine (depth={depth})")
+        if tablebase_path:
+            dummy_chess.ChessDummy.set_tb_path(tablebase_path)
+            print(f"Using tablebases: {tablebase_path}")
 
     print(f"Loading {input_path}...")
     if str(input_path).endswith(".zst"):
@@ -2560,10 +2584,8 @@ def main():
                 "Download: wget https://database.lichess.org/lichess_db_puzzle.csv.zst"
             )
             sys.exit(1)
-        if not args.engine:
-            print("Error: --engine is required for puzzle preprocessing")
-            sys.exit(1)
         # Puzzles handles its own output (streaming)
+        # If no engine specified, uses dummy_chess
         process_puzzles(
             input_path,
             pathlib.Path(args.output),
