@@ -539,9 +539,12 @@ def process_evals(
                 if engine:
                     # Re-score with engine
                     board = chess.Board(fen)
-                    new_score, new_depth, new_knodes = uci_eval(
-                        board, engine, min_depth
-                    )
+                    try:
+                        new_score, new_depth, new_knodes = uci_eval(
+                            board, engine, min_depth
+                        )
+                    except chess.engine.EngineTerminatedError:
+                        raise RuntimeError(f"Engine crashed on FEN: {fen}")
                     new_score = max(-15000, min(15000, new_score))
                     batch.append((fen, new_score, new_depth, new_knodes))
                     rescored += 1
