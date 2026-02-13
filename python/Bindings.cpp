@@ -7,6 +7,7 @@
 
 #include <Engine.hpp>
 #include <PGN.hpp>
+#include <tbconfig.h>
 
 namespace py = pybind11;
 using namespace std::chrono;
@@ -230,6 +231,22 @@ public:
 
     double evaluate() {
         return float(engine.evaluate()) / Engine::MATERIAL_PAWN;
+    }
+
+    static bool set_tb_path(const std::string &path) {
+        // Free existing tablebases to avoid memory leak
+        if (TB_LARGEST > 0) {
+            tb::free();
+        }
+        return tb::init(path);
+    }
+
+    static void free_tb() {
+        tb::free();
+    }
+
+    static int tb_max_pieces() {
+        return TB_LARGEST;
     }
 
 private:
@@ -730,5 +747,11 @@ PYBIND11_MODULE(_dummychess, m) {
     .def("iterate_depths", &BoardBindings::iterate_depths)
     .def("evaluate", &BoardBindings::evaluate)
     .def("get_simple_features", &BoardBindings::get_simple_feature_set)
-    .def("get_move_from_move_t", &BoardBindings::get_move_from_move_t);
+    .def("get_move_from_move_t", &BoardBindings::get_move_from_move_t)
+    .def_static("set_tb_path", &BoardBindings::set_tb_path, py::arg("path"),
+        "Initialize Syzygy tablebases from the given path. Returns true on success.")
+    .def_static("free_tb", &BoardBindings::free_tb,
+        "Free Syzygy tablebase resources.")
+    .def_static("tb_max_pieces", &BoardBindings::tb_max_pieces,
+        "Return the maximum number of pieces supported by the loaded tablebases (0 if not loaded).");
 }
