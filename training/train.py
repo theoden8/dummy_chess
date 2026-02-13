@@ -283,7 +283,9 @@ class NNUE(torch.nn.Module):
         )
         x = torch.relu(self.l1(ft))
         x = torch.relu(self.l2(x))
-        return self.out(x) * self.output_scale
+        out = self.out(x) * self.output_scale
+        # Negate output for black's perspective (stm=1) since scores are from white's POV
+        return torch.where(stm.unsqueeze(1) == 0, out, -out)
 
 
 # ============================================================================
