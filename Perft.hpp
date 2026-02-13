@@ -4,6 +4,7 @@
 
 #include <Board.hpp>
 
+#define self (*this)
 
 class Perft : public Board {
 public:
@@ -163,3 +164,5 @@ public:
     Board(fen, zbsize)
   {}
 };
+
+#undef self
