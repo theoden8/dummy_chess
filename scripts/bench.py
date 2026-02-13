@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 
 
+import os
+import sys
+
 from uci_utilities import *
-
-
-uci_exec = './dummy_chess_uci'
 
 
 def perft_output_map(s: str) -> dict:
@@ -17,7 +17,7 @@ def perft_output_map(s: str) -> dict:
     return turnmaps
 
 
-def bench_perft_fen(maxdepth, variant=STANDARD, fen=None, shannon=None):
+def bench_perft_fen(uci_exec, maxdepth, variant=STANDARD, fen=None, shannon=None):
     print('fen', fen if fen is not None else 'startpos')
     for depth in range(1, min(maxdepth, len(shannon if shannon is not None else maxdepth)) + 1):
         sess = UCISession(variant=variant)
@@ -46,12 +46,16 @@ def bench_perft_fen(maxdepth, variant=STANDARD, fen=None, shannon=None):
     print()
 
 
-def bench_perft():
+def bench_perft(uci_exec):
     print('perft benchmarks')
-    bench_perft_fen(maxdepth=7, shannon=[20, 400, 8902, 197281, 4865609, 119060324, 3195901860, 84998978956, 2439530234167])
-    bench_perft_fen(maxdepth=5, fen='r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - ',
+    bench_perft_fen(uci_exec, maxdepth=7, shannon=[20, 400, 8902, 197281, 4865609, 119060324, 3195901860, 84998978956, 2439530234167])
+    bench_perft_fen(uci_exec, maxdepth=5, fen='r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - ',
                                    shannon=[48, 2039, 97862, 4085603, 193690690, 8031647685])
 
 
 if __name__ == "__main__":
-    bench_perft()
+    uci_exec = sys.argv[1]
+    assert os.path.exists(uci_exec), uci_exec
+    if os.path.isdir(uci_exec):
+        uci_exec = os.path.join(uci_exec, 'dummy_chess_uci')
+    bench_perft(uci_exec=uci_exec)
