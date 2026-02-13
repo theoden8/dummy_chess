@@ -423,9 +423,17 @@ def process_evals(
     shuffle: bool = True,
     seed: int = 42,
     batch_size: int = 1000000,
+    min_depth: int | None = None,
+    engine_path: str | None = None,
+    tablebase_path: str | None = None,
 ) -> int:
     """
     Process evaluation data, streaming to parquet in batches.
+
+    If min_depth is specified:
+    - Positions with depth >= min_depth are kept as-is
+    - Positions with depth < min_depth are re-scored using the engine (if provided)
+    - If no engine is provided, low-depth positions are filtered out
 
     Returns the number of rows written.
     """
@@ -438,6 +446,21 @@ def process_evals(
         print("Counting rows...")
         total_rows = len(lf)
 
+    # Setup engine for re-scoring low-depth positions
+    engine = None
+    if min_depth is not None:
+        if engine_path:
+            engine = chess.engine.SimpleEngine.popen_uci(engine_path)
+            print(f"Using UCI engine: {engine_path} (depth={min_depth})")
+            if tablebase_path:
+                engine.configure({"SyzygyPath": tablebase_path})
+                print(f"Using tablebases: {tablebase_path}")
+            print(f"Positions with depth < {min_depth} will be re-scored")
+        else:
+            print(
+                f"Positions with depth < {min_depth} will be FILTERED OUT (no engine)"
+            )
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Create temp directory for batch parquet files NEXT TO output (not in /tmp)
@@ -447,6 +470,8 @@ def process_evals(
     print("Processing evaluations...")
     count = 0
     written = 0
+    rescored = 0
+    filtered = 0
     batch_num = 0
     batch: list[tuple[str, int, int, int]] = []  # FEN strings, not compressed
 
@@ -483,7 +508,28 @@ def process_evals(
 
         result = process_eval_row(row)
         if result:
-            batch.append(result)
+            fen, score, depth, knodes = result
+
+            # Check if re-scoring is needed
+            if min_depth is not None and depth < min_depth:
+                if engine:
+                    # Re-score with engine
+                    board = chess.Board(fen)
+                    new_score, new_depth, new_knodes = uci_eval(
+                        board, engine, min_depth
+                    )
+                    new_score = max(-15000, min(15000, new_score))
+                    batch.append((fen, new_score, new_depth, new_knodes))
+                    rescored += 1
+                else:
+                    # Filter out low-depth position
+                    filtered += 1
+                    count += 1
+                    pbar.update(1)
+                    continue
+            else:
+                batch.append(result)
+
             written += 1
 
             if len(batch) >= batch_size:
@@ -495,7 +541,16 @@ def process_evals(
     pbar.close()
     flush_batch()  # Write remaining
 
+    # Cleanup engine
+    if engine:
+        engine.quit()
+
     print(f"Written {written} rows in {batch_num} batches")
+    if min_depth is not None:
+        if engine:
+            print(f"Re-scored {rescored} positions with depth < {min_depth}")
+        else:
+            print(f"Filtered out {filtered} positions with depth < {min_depth}")
 
     if batch_num == 0:
         print("No data to write")
@@ -2336,9 +2391,15 @@ def main():
     parser.add_argument("--no-shuffle", action="store_true")
     parser.add_argument("--toy", action="store_true", help="Generate toy dataset")
 
-    # Puzzle/games-specific
+    # Puzzle/games/evals-specific
     parser.add_argument("-e", "--engine", default=None, help="Path to UCI engine")
-    parser.add_argument("-d", "--depth", type=int, default=8, help="UCI engine depth")
+    parser.add_argument(
+        "-d",
+        "--depth",
+        type=int,
+        default=8,
+        help="UCI engine depth. For evals: positions with depth < this are re-scored",
+    )
 
     # Endgame-specific
     parser.add_argument(
@@ -2528,6 +2589,9 @@ def main():
             args.max,
             shuffle=not args.no_shuffle,
             seed=args.seed,
+            min_depth=args.depth if args.engine else None,
+            engine_path=args.engine,
+            tablebase_path=args.tablebase,
         )
         return
 
