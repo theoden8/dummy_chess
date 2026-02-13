@@ -263,6 +263,10 @@ class NNUE(torch.nn.Module):
         self.l2 = torch.nn.Linear(L1_OUT, L2_OUT)
         self.out = torch.nn.Linear(L2_OUT, 1)
 
+        # Output scaling factor - model outputs are scaled to centipawn range
+        # This ensures gradients flow properly with sigmoid-based loss
+        self.output_scale = SIGMOID_SCALE
+
         torch.nn.init.normal_(self.ft.weight, std=0.01)
         for m in [self.l1, self.l2, self.out]:
             torch.nn.init.kaiming_normal_(m.weight, nonlinearity="relu")
@@ -279,7 +283,7 @@ class NNUE(torch.nn.Module):
         )
         x = torch.relu(self.l1(ft))
         x = torch.relu(self.l2(x))
-        return self.out(x)
+        return self.out(x) * self.output_scale
 
 
 # ============================================================================
