@@ -18,6 +18,7 @@ setup(
     ext_modules=cythonize(
         extensions,
         language_level=3,
+        build_dir="build/cython",
         compiler_directives={
             "boundscheck": False,
             "wraparound": False,
