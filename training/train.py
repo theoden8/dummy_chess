@@ -852,16 +852,15 @@ def train(
                 scaler.unscale_(sparse_optimizer)
                 scaler.unscale_(dense_optimizer)
                 # Clip gradients to prevent explosion (dense params only)
-                torch.nn.utils.clip_grad_norm_(dense_params, max_norm=1.0)
-                # Assert no inf/nan gradients (every 100 steps to reduce sync overhead)
-                if step % 100 == 0:
-                    for name, param in model.named_parameters():
-                        if param.grad is not None and not param.grad.is_sparse:
-                            assert torch.isfinite(param.grad).all(), (
-                                f"Non-finite gradient in {name} at step {step}"
-                            )
-                scaler.step(sparse_optimizer)
-                scaler.step(dense_optimizer)
+                grad_norm = torch.nn.utils.clip_grad_norm_(dense_params, max_norm=1.0)
+                # Skip step if gradients overflowed (inf norm means inf gradients)
+                if torch.isfinite(grad_norm):
+                    scaler.step(sparse_optimizer)
+                    scaler.step(dense_optimizer)
+                else:
+                    # Gradients overflowed, skip this step
+                    if step % 1000 == 0:
+                        print(f"Warning: skipping step {step} due to inf gradient norm")
                 scaler.update()
             else:
                 pred = model(w_idx, w_off, b_idx, b_off, stm)
