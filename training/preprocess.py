@@ -547,6 +547,8 @@ def process_evals(
                         # Engine crashed on this position, restart and skip
                         assert engine_path is not None  # Already checked above
                         print(f"\nEngine crashed on FEN: {fen}, skipping...")
+                        with open("failed_fens.txt", "a") as f:
+                            f.write(fen + "\n")
                         engine = chess.engine.SimpleEngine.popen_uci(engine_path)
                         if tablebase_path:
                             engine.configure({"SyzygyPath": tablebase_path})
