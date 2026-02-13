@@ -169,14 +169,18 @@ public:
     return engine.perft(Engine::depth_t(depth));
   }
 
-  std::tuple<MoveBindings, double> get_fixed_depth_move(int depth) {
+  py::object get_fixed_depth_move(int depth) {
     init_abstorage_scope();
     Engine::iddfs_state idstate;
     const Engine::depth_t d = Engine::depth_t(depth);
     move_t bestmove = engine.start_thinking(d, idstate);
-    return std::make_tuple(
+
+    py::object namedtuple = py::module_::import("collections").attr("namedtuple");
+    py::object SearchResult = namedtuple("SearchResult", py::make_tuple("move", "score", "nodes"));
+    return SearchResult(
         MoveBindings(engine.as_board(), bestmove),
-        float(idstate.eval) / Engine::MATERIAL_PAWN
+        double(float(idstate.eval) / Engine::MATERIAL_PAWN),
+        engine.nodes_searched
     );
   }
 
