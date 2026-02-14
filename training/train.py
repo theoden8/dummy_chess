@@ -964,23 +964,31 @@ def export_nnue(model: NNUE, path: str):
         f.write(struct.pack("<I", 0))
 
         # Hidden layers
+        # Bias scale must match the dot product scale at each layer.
+        # After ClippedReLU + divide-by-NET_SCALE, activations are at scale
+        # FT_QUANT_SCALE (127). So dot(input, weights) has scale
+        # FT_QUANT_SCALE * WEIGHT_QUANT_SCALE = 8128 for all layers.
         for layer, scale in [
             (model.l1, FT_QUANT_SCALE * WEIGHT_QUANT_SCALE),
-            (model.l2, WEIGHT_QUANT_SCALE * WEIGHT_QUANT_SCALE),
+            (model.l2, FT_QUANT_SCALE * WEIGHT_QUANT_SCALE),
         ]:
             f.write(
                 (layer.bias.detach().cpu().numpy() * scale).astype(np.int32).tobytes()
             )
             f.write(
-                (layer.weight.detach().cpu().numpy().T * WEIGHT_QUANT_SCALE)
+                (layer.weight.detach().cpu().numpy() * WEIGHT_QUANT_SCALE)
                 .clip(-128, 127)
                 .astype(np.int8)
                 .tobytes()
             )
 
-        # Output
+        # Output (same bias scale as hidden layers: FT_QUANT_SCALE * WEIGHT_QUANT_SCALE)
         f.write(
-            (model.out.bias.detach().cpu().numpy() * WEIGHT_QUANT_SCALE**2)
+            (
+                model.out.bias.detach().cpu().numpy()
+                * FT_QUANT_SCALE
+                * WEIGHT_QUANT_SCALE
+            )
             .astype(np.int32)
             .tobytes()
         )
@@ -992,6 +1000,171 @@ def export_nnue(model: NNUE, path: str):
         )
 
     print(f"Exported: {path}")
+
+
+def load_nnue(path: str) -> dict:
+    """Load a quantized .nnue file into numpy arrays.
+
+    Returns a dict with keys: ft_bias, ft_weights, l1_bias, l1_weights,
+    l2_bias, l2_weights, out_bias, out_weights.
+    """
+    import numpy
+
+    with open(path, "rb") as f:
+        # Header
+        f.read(4)  # version
+        f.read(4)  # hash
+        arch_len = struct.unpack("<I", f.read(4))[0]
+        f.read(arch_len)  # architecture string
+        f.read(4)  # FT header
+
+        # Feature transformer
+        ft_bias = numpy.frombuffer(f.read(FT_OUT * 2), dtype=numpy.int16).copy()
+        ft_weights = (
+            numpy.frombuffer(f.read(HALFKP_SIZE * FT_OUT * 2), dtype=numpy.int16)
+            .reshape(HALFKP_SIZE, FT_OUT)
+            .copy()
+        )
+
+        # Network header
+        f.read(4)
+
+        # L1: (L1_OUT, L1_IN) = (32, 512)
+        l1_bias = numpy.frombuffer(f.read(L1_OUT * 4), dtype=numpy.int32).copy()
+        l1_weights = (
+            numpy.frombuffer(f.read(L1_OUT * FT_OUT * 2 * 1), dtype=numpy.int8)
+            .reshape(L1_OUT, FT_OUT * 2)
+            .copy()
+        )
+
+        # L2: (L2_OUT, L2_IN) = (32, 32)
+        l2_bias = numpy.frombuffer(f.read(L2_OUT * 4), dtype=numpy.int32).copy()
+        l2_weights = (
+            numpy.frombuffer(f.read(L2_OUT * L1_OUT * 1), dtype=numpy.int8)
+            .reshape(L2_OUT, L1_OUT)
+            .copy()
+        )
+
+        # Output: (1, 32)
+        out_bias = struct.unpack("<i", f.read(4))[0]
+        out_weights = numpy.frombuffer(f.read(L2_OUT * 1), dtype=numpy.int8).copy()
+
+    return {
+        "ft_bias": ft_bias,
+        "ft_weights": ft_weights,
+        "l1_bias": l1_bias,
+        "l1_weights": l1_weights,
+        "l2_bias": l2_bias,
+        "l2_weights": l2_weights,
+        "out_bias": out_bias,
+        "out_weights": out_weights,
+    }
+
+
+def _trunc_div(a: int, b: int) -> int:
+    """C-style integer division (truncate toward zero)."""
+    return int(a / b) if (a ^ b) >= 0 else -int((-a) / b)
+
+
+def evaluate_fen_quantized(fen: str, weights: dict) -> int:
+    """Evaluate a FEN using quantized integer arithmetic matching C++ NNUE.hpp.
+
+    This replicates the exact computation in Evaluator::evaluate() + forward()
+    so we can verify the C++ implementation is correct.
+
+    Args:
+        fen: FEN string
+        weights: dict from load_nnue()
+
+    Returns:
+        Score in centipawns from side-to-move perspective (int).
+    """
+    import numpy
+    import dummy_chess
+
+    NET_SCALE = 64
+    FT_SCALE_VAL = 127
+    SIGMOID_SCALE_VAL = 400
+
+    # Extract features
+    compressed = dummy_chess.compress_fen(fen)
+    w_idx, w_off, b_idx, b_off, stm = dummy_chess.get_halfkp_features_batch(
+        [compressed]
+    )
+
+    # Build accumulators (int16, matching C++ refresh_accumulator)
+    ft_bias = weights["ft_bias"]
+    ft_w = weights["ft_weights"]
+
+    # White perspective accumulator
+    w_acc = ft_bias.astype(numpy.int32).copy()
+    for idx in w_idx:
+        w_acc += ft_w[int(idx)].astype(numpy.int32)
+    # Clip to int16 range (accumulator is int16 in C++)
+    w_acc = numpy.clip(w_acc, -32768, 32767).astype(numpy.int16)
+
+    # Black perspective accumulator
+    b_acc = ft_bias.astype(numpy.int32).copy()
+    for idx in b_idx:
+        b_acc += ft_w[int(idx)].astype(numpy.int32)
+    b_acc = numpy.clip(b_acc, -32768, 32767).astype(numpy.int16)
+
+    # ClippedReLU: int16 -> int8, clamp [0, 127]
+    # Concatenate STM first, NSTM second (matching C++ forward)
+    stm_val = int(stm[0])
+    if stm_val == 0:  # white to move
+        stm_acc, nstm_acc = w_acc, b_acc
+    else:  # black to move
+        stm_acc, nstm_acc = b_acc, w_acc
+
+    ft_out = numpy.concatenate(
+        [
+            numpy.clip(stm_acc, 0, 127).astype(numpy.int8),
+            numpy.clip(nstm_acc, 0, 127).astype(numpy.int8),
+        ]
+    )
+
+    # L1: 512 -> 32
+    l1_out = numpy.empty(L1_OUT, dtype=numpy.int8)
+    for j in range(L1_OUT):
+        s = int(weights["l1_bias"][j])
+        s += int(
+            numpy.dot(
+                ft_out.astype(numpy.int32), weights["l1_weights"][j].astype(numpy.int32)
+            )
+        )
+        # C-style: clamp(sum / 64, 0, 127)
+        s = max(0, min(127, _trunc_div(s, NET_SCALE)))
+        l1_out[j] = s
+
+    # L2: 32 -> 32
+    l2_out = numpy.empty(L2_OUT, dtype=numpy.int8)
+    for j in range(L2_OUT):
+        s = int(weights["l2_bias"][j])
+        s += int(
+            numpy.dot(
+                l1_out.astype(numpy.int32), weights["l2_weights"][j].astype(numpy.int32)
+            )
+        )
+        s = max(0, min(127, _trunc_div(s, NET_SCALE)))
+        l2_out[j] = s
+
+    # Output: 32 -> 1
+    raw = int(weights["out_bias"])
+    raw += int(
+        numpy.dot(
+            l2_out.astype(numpy.int32), weights["out_weights"].astype(numpy.int32)
+        )
+    )
+
+    # to_centipawns: raw * 400 / 8128 (C-style truncation)
+    cp = _trunc_div(raw * SIGMOID_SCALE_VAL, FT_SCALE_VAL * NET_SCALE)
+
+    # Negate for black STM (network outputs white's perspective)
+    if stm_val == 1:
+        cp = -cp
+
+    return cp
 
 
 # ============================================================================
