@@ -42,8 +42,10 @@ namespace nnue {
 constexpr size_t KING_SQUARES = 64;
 constexpr size_t PIECE_SQUARES = 64;
 constexpr size_t PIECE_TYPES = 10;  // 5 piece types * 2 colors (no kings)
-constexpr size_t HALFKP_SIZE = KING_SQUARES * (PIECE_TYPES * PIECE_SQUARES + 1);
-// = 64 * 641 = 41024
+constexpr size_t HALFKP_FEATURES = KING_SQUARES * (PIECE_TYPES * PIECE_SQUARES + 1);
+// = 64 * 641 = 41024 (number of actual HalfKP feature indices)
+constexpr size_t HALFKP_SIZE = HALFKP_FEATURES + 1;
+// = 41025 (EmbeddingBag size in training, includes zero/padding index)
 
 // Network architecture
 constexpr size_t FT_OUT = 256;          // Feature transformer output
@@ -56,6 +58,7 @@ constexpr size_t OUT_IN = L2_OUT;
 // Quantization constants
 constexpr int FT_SCALE = 127;           // Feature transformer activation scale
 constexpr int NET_SCALE = 64;           // Hidden layer activation scale
+constexpr int SIGMOID_SCALE = 400;      // Must match training SIGMOID_SCALE
 
 // Maximum search depth for accumulator stack
 constexpr size_t MAX_PLY = 256;
@@ -677,8 +680,10 @@ public:
     
     // Convert raw network output to centipawns
     static int32_t to_centipawns(int32_t raw) {
-        // Scale factor depends on training
-        return raw * 100 / (FT_SCALE * NET_SCALE);
+        // Remove quantization scaling and apply SIGMOID_SCALE from training.
+        // During training: output = linear(x) * SIGMOID_SCALE, but the export
+        // only quantizes linear(x), so we must apply SIGMOID_SCALE here.
+        return raw * SIGMOID_SCALE / (FT_SCALE * NET_SCALE);
     }
     
     // Full evaluation (refresh + forward)
