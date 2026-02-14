@@ -193,9 +193,11 @@ def uci_eval(
     board: chess.Board,
     engine,
     depth: int = 12,
+    max_nodes: int | None = None,
 ) -> tuple[int, int, int]:
     """UCI engine evaluation. Returns (score_cp, depth, knodes)."""
-    info = engine.analyse(board, chess.engine.Limit(depth=depth))
+    limit = chess.engine.Limit(depth=depth, nodes=max_nodes)
+    info = engine.analyse(board, limit)
     score = info["score"].white()
     if score.is_mate():
         cp = 10000 if score.mate() > 0 else -10000
@@ -537,11 +539,19 @@ def process_evals(
             # Check if re-scoring is needed
             if min_depth is not None and depth < min_depth:
                 if engine:
-                    # Re-score with engine
+                    # Skip draws and checkmates - no need to re-score
+                    if score == 0 or abs(score) >= 10000:
+                        batch.append(result)
+                        written += 1
+                        count += 1
+                        pbar.update(1)
+                        continue
+
+                    # Re-score with engine (limit nodes to avoid traps)
                     board = chess.Board(fen)
                     try:
                         new_score, new_depth, new_knodes = uci_eval(
-                            board, engine, min_depth
+                            board, engine, min_depth, max_nodes=10_000_000
                         )
                     except chess.engine.EngineTerminatedError:
                         # Engine crashed on this position, restart and skip
