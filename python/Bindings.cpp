@@ -6,6 +6,7 @@
 #include <pybind11/stl.h>
 
 #include <Engine.hpp>
+#include <NNUE.hpp>
 #include <PGN.hpp>
 #include <tbconfig.h>
 
@@ -703,6 +704,45 @@ void register_preprocess_functions(py::module_ &m) {
 
 }
 
+class NNUEBindings {
+public:
+  NNUEBindings(const std::string &path) {
+    weights_ = std::make_unique<nnue::NetworkWeights>();
+    if (!nnue::NetworkLoader::load(path.c_str(), *weights_)) {
+      weights_.reset();
+      throw std::runtime_error("failed to load NNUE file: " + path);
+    }
+    eval_.set_weights(weights_.get());
+    eval_.reset();
+  }
+
+  int32_t evaluate(const std::string &fenstring) {
+    Board board(fen::load_from_string(fenstring));
+    eval_.set_weights(weights_.get());
+    eval_.reset();
+    int32_t cp = eval_.evaluate(board);
+    // Network outputs from white's perspective; negate for black STM
+    return (board.activePlayer() == BLACK) ? -cp : cp;
+  }
+
+  py::array_t<int32_t> evaluate_batch(const std::vector<std::string> &fens) {
+    auto result = py::array_t<int32_t>(fens.size());
+    auto buf = result.mutable_data();
+    for (size_t i = 0; i < fens.size(); ++i) {
+      Board board(fen::load_from_string(fens[i]));
+      eval_.set_weights(weights_.get());
+      eval_.reset();
+      int32_t cp = eval_.evaluate(board);
+      buf[i] = (board.activePlayer() == BLACK) ? -cp : cp;
+    }
+    return result;
+  }
+
+private:
+  std::unique_ptr<nnue::NetworkWeights> weights_;
+  nnue::Evaluator eval_;
+};
+
 PYBIND11_MODULE(_dummychess, m) {
   // Create preprocess submodule
   py::module_ preprocess = m.def_submodule("preprocess", "Preprocessing utilities for NNUE training");
@@ -710,6 +750,14 @@ PYBIND11_MODULE(_dummychess, m) {
   
   // Also register on main module for backward compatibility
   register_preprocess_functions(m);
+
+  py::class_<NNUEBindings>(m, "NNUE")
+    .def(py::init<const std::string &>(), py::arg("path"),
+        "Load a quantized .nnue network file")
+    .def("evaluate", &NNUEBindings::evaluate, py::arg("fen"),
+        "Evaluate a FEN string. Returns centipawns from side-to-move perspective.")
+    .def("evaluate_batch", &NNUEBindings::evaluate_batch, py::arg("fens"),
+        "Evaluate a list of FEN strings. Returns numpy array of centipawn scores.");
 
   py::enum_<BoardBindings::Status>(m, "Status")
     .value("ONGOING", BoardBindings::Status::ONGOING)
