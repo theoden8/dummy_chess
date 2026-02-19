@@ -12,6 +12,7 @@
 #include <Board.hpp>
 #include <Perft.hpp>
 #include <DebugTracer.hpp>
+#include <NNUE.hpp>
 
 #include <tbconfig.h>
 
@@ -28,6 +29,12 @@ public:
                         ENABLE_SEL_LMR = true && ENABLE_SELECTIVITY;
   static constexpr bool ENABLE_IID = true;
   static constexpr bool ENABLE_SYZYGY = true;
+  static constexpr bool ENABLE_NNUE = true;
+
+  // NNUE evaluation state
+  std::unique_ptr<nnue::NetworkWeights> nnue_weights_;
+  nnue::Evaluator nnue_eval_;
+  bool nnue_enabled_ = false;
 
   EXPORT INLINE Board &as_board() { return (Board &)self; }
   INLINE const Board &as_board() const { return (const Board &)self; }
@@ -67,6 +74,32 @@ public:
     m += piece::size(mask & bits_slid_diag & bits_slid_orth) * material_of(QUEEN);
     m += piece::size(mask & get_knight_bits()) * material_of(KNIGHT);
     return m;
+  }
+
+  // Load NNUE network from file
+  bool load_nnue(const std::string& filename) {
+    if (!ENABLE_NNUE) return false;
+    if (!nnue_weights_) {
+      nnue_weights_ = std::make_unique<nnue::NetworkWeights>();
+    }
+    if (!nnue::NetworkLoader::load(filename.c_str(), *nnue_weights_)) {
+      str::perror("Failed to load NNUE file:", filename);
+      nnue_enabled_ = false;
+      return false;
+    }
+    nnue_eval_.set_weights(nnue_weights_.get());
+    nnue_eval_.reset();
+    nnue_enabled_ = true;
+    _printf("info string NNUE loaded: %s\n", filename.c_str());
+    return true;
+  }
+
+  // NNUE evaluation using lazy refresh (full recompute each call)
+  INLINE score_t nnue_evaluate() {
+    assert(nnue_enabled_ && nnue_weights_);
+    int32_t cp = nnue_eval_.evaluate(as_board());
+    // Convert centipawns to internal score units (1 cp = CENTIPAWN/100)
+    return static_cast<score_t>(cp) * CENTIPAWN / 100;
   }
 
   INLINE bool tb_can_probe() const {
@@ -254,6 +287,9 @@ public:
       }
     } else {
       wdl_score = 0;
+    }
+    if (ENABLE_NNUE && nnue_enabled_) {
+      return wdl_score + nnue_evaluate();
     }
     return wdl_score + heuristic_of(c) - heuristic_of(enemy_of(c));
   }

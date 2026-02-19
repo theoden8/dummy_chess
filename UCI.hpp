@@ -47,6 +47,7 @@ struct UCI {
     bool chess960 = false;
     bool crazyhouse = false;
     std::optional<std::string> syzygy_path;
+    std::optional<std::string> nnue_path;
     bool tb_initialized = false;
   };
   Options engine_options;
@@ -66,6 +67,9 @@ struct UCI {
         abort();
       }
       engine_options.tb_initialized = true;
+    }
+    if(engine_options.nnue_path.has_value()) {
+      engine_ptr->load_nnue(engine_options.nnue_path.value());
     }
     engine_ab_storage_ptr.reset(new Engine::ab_storage_t(engine_ptr->get_zobrist_alphabeta_scope()));
     should_stop = false;
@@ -306,6 +310,7 @@ struct UCI {
 
   const std::map<std::string, std::string> stringOptions {
     {"SyzygyPath"s, "<empty>"s},
+    {"EvalFile"s, "<empty>"s},
   };
 
   // tell engine to stop; wait until it stops if it's running; clean up
@@ -446,6 +451,22 @@ struct UCI {
                 engine_options.syzygy_path.reset();
               }
               str::pdebug("info string setoption SyzygyPath =", optvalue.value());
+            } else if(optname.value() == "EvalFile"s) {
+              if(optvalue.value() != _dflt) {
+                std::filesystem::path nnue_path(optvalue.value());
+                if(!std::filesystem::exists(nnue_path)) {
+                  str::perror("NNUE file doesn't exist <", nnue_path, ">");
+                  abort();
+                }
+                engine_options.nnue_path.emplace(optvalue.value());
+              } else {
+                engine_options.nnue_path.reset();
+              }
+              // If engine is already initialized, load NNUE immediately
+              if(engine_ptr && engine_options.nnue_path.has_value()) {
+                engine_ptr->load_nnue(engine_options.nnue_path.value());
+              }
+              str::pdebug("info string setoption EvalFile =", optvalue.value());
             } else {
               str::pdebug("info string unknown option", optname.value());
             }
