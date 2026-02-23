@@ -1,0 +1,9 @@
+build/
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+dc0_output/
+*.bin
+*.dat
+uv.lock

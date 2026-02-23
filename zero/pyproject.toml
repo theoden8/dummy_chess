@@ -1,0 +1,15 @@
+[project]
+name = "dc0"
+version = "0.0.1"
+description = "AlphaZero-style engine for dummy_chess"
+requires-python = ">=3.11"
+dependencies = [
+    "torch==2.5.1",
+    "numpy",
+]
+
+[dependency-groups]
+dev = ["jupyter", "matplotlib", "ipykernel", "ipywidgets"]
+
+[tool.uv]
+find-links = ["https://download.pytorch.org/whl/cu124"]

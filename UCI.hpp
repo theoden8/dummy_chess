@@ -16,8 +16,20 @@
 #include <fcntl.h>
 #include <sys/select.h>
 
+// When DC0_ENABLED, torch headers must be included BEFORE engine headers.
+// The fathom/syzygy tablebase code (included transitively via Engine.hpp)
+// defines macros like 'square', 'diag', 'rank' that collide with libtorch
+// symbols (e.g., at::Tensor::square()).  Including torch first avoids this.
+#ifdef DC0_ENABLED
+#include <torch/torch.h>
+#endif
+
 #include <FEN.hpp>
 #include <Engine.hpp>
+
+#ifdef DC0_ENABLED
+#include <DC0Engine.hpp>
+#endif
 
 
 using namespace std::chrono;
@@ -48,8 +60,40 @@ struct UCI {
     bool crazyhouse = false;
     std::optional<std::string> syzygy_path;
     bool tb_initialized = false;
+#ifdef DC0_ENABLED
+    std::string search_mode = "alphabeta";
+    std::string dc0_model_path;
+    int dc0_blocks = 6;
+    int dc0_filters = 128;
+    int dc0_simulations = 800;
+    int dc0_batch_size = 64;
+    std::string dc0_device;  // empty = auto
+#endif
   };
   Options engine_options;
+
+#ifdef DC0_ENABLED
+  std::unique_ptr<dc0::DC0Engine> dc0_engine;
+
+  // Ensure dc0 engine is initialized. Returns true on success.
+  bool ensure_dc0_engine() {
+    if (dc0_engine && dc0_engine->is_initialized()) {
+      return true;
+    }
+    dc0_engine = std::make_unique<dc0::DC0Engine>();
+    bool ok = dc0_engine->init(
+        engine_options.dc0_blocks,
+        engine_options.dc0_filters,
+        engine_options.dc0_model_path,
+        engine_options.dc0_device
+    );
+    if (ok) {
+      dc0_engine->set_simulations(engine_options.dc0_simulations);
+      dc0_engine->set_batch_size(engine_options.dc0_batch_size);
+    }
+    return ok;
+  }
+#endif
 
   UCI()
   {}
@@ -298,14 +342,27 @@ struct UCI {
 
   const std::map<std::string, std::tuple<int, int, int>> spinOptions = {
     {"Hash"s, std::make_tuple(4, 4096, (int)engine_options.hash_mb)},
+#ifdef DC0_ENABLED
+    {"DC0Simulations"s, std::make_tuple(1, 100000, 800)},
+    {"DC0BatchSize"s, std::make_tuple(1, 1024, 64)},
+    {"DC0Blocks"s, std::make_tuple(1, 40, 6)},
+    {"DC0Filters"s, std::make_tuple(16, 1024, 128)},
+#endif
   };
 
   const std::map<std::string, std::pair<cmd_t, std::string>> comboOptions = {
     {"UCI_Variant"s, std::make_pair(cmd_t{"chess"s, "crazyhouse"s}, "chess"s)},
+#ifdef DC0_ENABLED
+    {"SearchMode"s, std::make_pair(cmd_t{"alphabeta"s, "dc0"s}, "alphabeta"s)},
+#endif
   };
 
   const std::map<std::string, std::string> stringOptions {
     {"SyzygyPath"s, "<empty>"s},
+#ifdef DC0_ENABLED
+    {"DC0ModelPath"s, "<empty>"s},
+    {"DC0Device"s, "<empty>"s},
+#endif
   };
 
   // tell engine to stop; wait until it stops if it's running; clean up
@@ -414,7 +471,27 @@ struct UCI {
             if(optname.value() == "Hash"s) {
               engine_options.hash_mb = val;
               str::pdebug("info string setoption Hash =", optname.value(), val);
-            } else {
+            }
+#ifdef DC0_ENABLED
+            else if(optname.value() == "DC0Simulations"s) {
+              engine_options.dc0_simulations = val;
+              if (dc0_engine) dc0_engine->set_simulations(val);
+              str::pdebug("info string setoption DC0Simulations =", val);
+            } else if(optname.value() == "DC0BatchSize"s) {
+              engine_options.dc0_batch_size = val;
+              if (dc0_engine) dc0_engine->set_batch_size(val);
+              str::pdebug("info string setoption DC0BatchSize =", val);
+            } else if(optname.value() == "DC0Blocks"s) {
+              engine_options.dc0_blocks = val;
+              dc0_engine.reset();  // force re-init with new architecture
+              str::pdebug("info string setoption DC0Blocks =", val);
+            } else if(optname.value() == "DC0Filters"s) {
+              engine_options.dc0_filters = val;
+              dc0_engine.reset();  // force re-init with new architecture
+              str::pdebug("info string setoption DC0Filters =", val);
+            }
+#endif
+            else {
               str::pdebug("info string unknown option", optname.value());
             }
           } else if(comboOptions.contains(optname.value())) {
@@ -429,7 +506,14 @@ struct UCI {
                 engine_options.crazyhouse = true;
               }
               str::pdebug("info string setoption UCI_Variant =", optname.value());
-            } else {
+            }
+#ifdef DC0_ENABLED
+            else if(optname.value() == "SearchMode"s) {
+              engine_options.search_mode = optvalue.value();
+              str::pdebug("info string setoption SearchMode =", optvalue.value());
+            }
+#endif
+            else {
               str::pdebug("info string unknown option", optname.value());
             }
           } else if(stringOptions.contains(optname.value())) {
@@ -446,7 +530,19 @@ struct UCI {
                 engine_options.syzygy_path.reset();
               }
               str::pdebug("info string setoption SyzygyPath =", optvalue.value());
-            } else {
+            }
+#ifdef DC0_ENABLED
+            else if(optname.value() == "DC0ModelPath"s) {
+              engine_options.dc0_model_path = (optvalue.value() == _dflt) ? "" : optvalue.value();
+              dc0_engine.reset();  // force re-init with new model
+              str::pdebug("info string setoption DC0ModelPath =", optvalue.value());
+            } else if(optname.value() == "DC0Device"s) {
+              engine_options.dc0_device = (optvalue.value() == _dflt) ? "" : optvalue.value();
+              dc0_engine.reset();  // force re-init with new device
+              str::pdebug("info string setoption DC0Device =", optvalue.value());
+            }
+#endif
+            else {
               str::pdebug("info string unknown option", optname.value());
             }
           }
@@ -465,6 +561,9 @@ struct UCI {
             return;
           }
           destroy();
+#ifdef DC0_ENABLED
+          if (dc0_engine) dc0_engine->new_game();
+#endif
         }
       return;
       case CMD_POSITION:
@@ -702,7 +801,89 @@ struct UCI {
                        "hashfull"s, int(round(hashfull * 1e3)));
   }
 
+#ifdef DC0_ENABLED
+  void perform_go_dc0(go_command args) {
+    _printf("GO COMMAND (dc0)\n");
+    if (!ensure_dc0_engine()) {
+      str::perror("error: failed to initialize dc0 engine");
+      respond(RESP_BESTMOVE, "0000"s);
+      return;
+    }
+
+    // Set the current board position on the dc0 engine
+    dc0_engine->set_position(engine_ptr->as_board());
+
+    // Map UCI go parameters to dc0 SearchParams
+    dc0::SearchParams sp;
+    sp.simulations = engine_options.dc0_simulations;
+    sp.batch_size = engine_options.dc0_batch_size;
+    sp.movetime = 0.0;
+    sp.infinite = args.infinite;
+
+    // nodes → simulations
+    if (args.nodes != SIZE_MAX) {
+      sp.simulations = static_cast<int>(std::min(args.nodes, size_t(100000)));
+    }
+
+    // movetime (already in seconds in go_command)
+    if (args.movetime != DBL_MAX) {
+      sp.movetime = std::max(args.movetime - 0.05, args.movetime * 0.5);
+    }
+
+    // Time control: compute movetime from wtime/btime/winc/binc
+    if (!args.infinite && args.movetime == DBL_MAX && args.nodes == SIZE_MAX) {
+      double tc_movetime = time_control_movetime(args, false);
+      if (tc_movetime < 1e9) {
+        sp.movetime = tc_movetime;
+        sp.simulations = 100000;  // effectively unlimited; time will stop us
+      }
+    }
+
+    if (args.infinite) {
+      sp.simulations = 100000;
+    }
+
+    // Info callback: emit UCI info lines
+    auto info_cb = [this](const dc0::SearchInfo& info) {
+      // Build PV string
+      std::string pv_str;
+      for (size_t i = 0; i < info.pv.size(); ++i) {
+        if (i > 0) pv_str += ' ';
+        pv_str += engine_ptr->_move_str(info.pv[i]);
+      }
+      respond(RESP_INFO, "depth"s, info.depth,
+                         "seldepth"s, static_cast<int>(info.pv.size()),
+                         "nodes"s, info.nodes,
+                         "nps"s, info.nps,
+                         "score"s, "cp "s + std::to_string(info.score_cp),
+                         "pv"s, pv_str,
+                         "time"s, info.time_ms);
+    };
+
+    // Stop check: read stdin for stop command
+    auto stop_check = [this]() -> bool {
+      continue_read_cmd(false);
+      return should_stop;
+    };
+
+    move_t bestmove = dc0_engine->go(sp, info_cb, stop_check);
+
+    if (bestmove == board::nullmove) {
+      respond(RESP_BESTMOVE, "0000"s);
+    } else {
+      respond(RESP_BESTMOVE, engine_ptr->_move_str(bestmove));
+    }
+    str::pdebug("info string NOTE: dc0 search is over");
+  }
+#endif
+
   void perform_go(go_command args) {
+#ifdef DC0_ENABLED
+    if (engine_options.search_mode == "dc0"s) {
+      perform_go_dc0(args);
+      return;
+    }
+#endif
     _printf("GO COMMAND\n");
     _printf("ponder: %d\n", args.ponder ? 1 : 0);
     _printf("wtime: %.6f, btime: %.6f\n", args.wtime, args.btime);
