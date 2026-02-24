@@ -197,3 +197,52 @@ TEST(SelfPlay, BatchedNNSelfPlayGame) {
             << "policy sum=" << sum;
     }
 }
+
+TEST(SelfPlay, ParallelSelfPlay) {
+    dc0::DC0Network model(/*n_blocks=*/2, /*n_filters=*/32);
+    torch::Device device = torch::cuda::is_available()
+        ? torch::Device(torch::kCUDA, 0) : torch::kCPU;
+    dc0::NNEvaluator evaluator(model, device);
+
+    dc0::SelfPlayConfig config;
+    config.simulations_per_move = 10;
+    config.max_game_moves = 30;
+    config.temperature_moves = 5;
+    config.batch_size = 8;
+
+    int num_games = 4;
+    int n_parallel = 2;
+    std::string output_path = "/tmp/dc0_gtest_parallel.bin";
+
+    dc0::SelfPlayStats stats = dc0::run_self_play_parallel(
+        evaluator, num_games, config, output_path, n_parallel);
+
+    // All games should have completed
+    EXPECT_EQ(stats.total_games, num_games);
+    EXPECT_GT(stats.total_moves, 0);
+    EXPECT_GT(stats.total_positions, 0);
+    EXPECT_GT(stats.elapsed_sec, 0.0);
+
+    // Win/draw/loss should sum to total games
+    EXPECT_EQ(stats.white_wins + stats.black_wins + stats.draws, num_games);
+
+    // Output file should be loadable
+    dc0::TrainingData loaded;
+    ASSERT_TRUE(loaded.load(output_path));
+    EXPECT_EQ(static_cast<int>(loaded.size()), stats.total_positions);
+
+    // Validate training examples
+    for (auto& ex : loaded.examples) {
+        EXPECT_GE(ex.result, -1.0f);
+        EXPECT_LE(ex.result, 1.0f);
+
+        float sum = 0.0f;
+        for (int i = 0; i < dc0::POLICY_SIZE; ++i) {
+            sum += ex.policy[i];
+        }
+        EXPECT_TRUE(std::abs(sum - 1.0f) < 1e-3f || sum == 0.0f)
+            << "policy sum=" << sum;
+    }
+
+    std::filesystem::remove(output_path);
+}

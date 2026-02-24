@@ -447,8 +447,14 @@ inline GenerationResult run_generation(
     NNEvaluator best_eval(current_best, device);
     std::string data_path = config.output_dir + "/selfplay_gen" + std::to_string(generation) + ".bin";
 
-    gen_result.selfplay_stats = run_self_play(
-        best_eval, config.games_per_generation, config.selfplay, data_path);
+    if (config.selfplay.n_parallel > 1) {
+        gen_result.selfplay_stats = run_self_play_parallel(
+            best_eval, config.games_per_generation, config.selfplay, data_path,
+            config.selfplay.n_parallel);
+    } else {
+        gen_result.selfplay_stats = run_self_play(
+            best_eval, config.games_per_generation, config.selfplay, data_path);
+    }
 
     // 2. Accumulate training data
     accumulated_data.append_file(data_path);
@@ -475,6 +481,11 @@ inline GenerationResult run_generation(
             gen_result.training_result.avg_value_loss,
             gen_result.training_result.avg_total_loss,
             gen_result.training_result.total_examples);
+    DC0_LOG_INFO("Self-play quality: entropy=%.2f |Q|=%.3f prior=%.3f avg_len=%.0f",
+            gen_result.selfplay_stats.avg_policy_entropy(),
+            gen_result.selfplay_stats.avg_root_q_abs(),
+            gen_result.selfplay_stats.avg_top_prior(),
+            gen_result.selfplay_stats.avg_game_length());
 
     // 4. Evaluate: new model vs current best
     DC0_LOG_INFO("=== Generation %d: Evaluation ===", generation);

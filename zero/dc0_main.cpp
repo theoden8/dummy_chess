@@ -66,6 +66,7 @@ struct Args {
     int mcts_batch_size = 64;
     int temperature_moves = 30;
     int max_game_moves = 512;
+    int parallel_games = 8;
 
     // Logging
     dc0::log::Level log_level = dc0::log::Level::INFO;
@@ -98,6 +99,7 @@ static void print_usage(const char* argv0) {
     fprintf(stderr, "  --games N            Number of games (default: 100)\n");
     fprintf(stderr, "  --sims N             MCTS sims/move (default: 800)\n");
     fprintf(stderr, "  --mcts-batch-size N  MCTS inference batch size (default: 64)\n");
+    fprintf(stderr, "  --parallel-games N   Games in flight for parallel self-play (default: 8)\n");
     fprintf(stderr, "  --output-file PATH   Output file for training data\n");
     fprintf(stderr, "\nExamples:\n");
     fprintf(stderr, "  %s train --games 50 --sims 200 --generations 10\n", argv0);
@@ -149,6 +151,7 @@ static Args parse_args(int argc, char** argv) {
         else if (arg == "--eval-games") args.eval_games = std::atoi(next());
         else if (arg == "--eval-sims") args.eval_sims = std::atoi(next());
         else if (arg == "--mcts-batch-size") args.mcts_batch_size = std::atoi(next());
+        else if (arg == "--parallel-games") args.parallel_games = std::atoi(next());
         else if (arg == "--temperature-moves") args.temperature_moves = std::atoi(next());
         else if (arg == "--max-game-moves") args.max_game_moves = std::atoi(next());
         else if (arg == "--promotion-threshold") args.promotion_threshold = std::atof(next());
@@ -186,8 +189,8 @@ static int cmd_train(const Args& args) {
     torch::Device device = get_device(args);
 
     DC0_LOG_INFO("Network: %d blocks, %d filters", args.blocks, args.filters);
-    DC0_LOG_INFO("Training: %d generations, %d games/gen, %d sims/move",
-            args.generations, args.games, args.sims);
+    DC0_LOG_INFO("Training: %d generations, %d games/gen, %d sims/move, %d parallel",
+            args.generations, args.games, args.sims, args.parallel_games);
     DC0_LOG_INFO("          batch_size=%d, lr=%.4f, epochs=%d",
             args.batch_size, args.lr, args.epochs);
     DC0_LOG_INFO("Eval:     %d games, %d sims/move, threshold=%.2f",
@@ -214,6 +217,7 @@ static int cmd_train(const Args& args) {
     gen_config.selfplay.temperature_moves = args.temperature_moves;
     gen_config.selfplay.max_game_moves = args.max_game_moves;
     gen_config.selfplay.batch_size = args.mcts_batch_size;
+    gen_config.selfplay.n_parallel = args.parallel_games;
     gen_config.training.batch_size = args.batch_size;
     gen_config.training.learning_rate = args.lr;
     gen_config.training.epochs = args.epochs;
@@ -267,7 +271,8 @@ static int cmd_selfplay(const Args& args) {
     torch::Device device = get_device(args);
 
     DC0_LOG_INFO("Network: %d blocks, %d filters", args.blocks, args.filters);
-    DC0_LOG_INFO("Self-play: %d games, %d sims/move", args.games, args.sims);
+    DC0_LOG_INFO("Self-play: %d games, %d sims/move, %d parallel",
+            args.games, args.sims, args.parallel_games);
 
     // Create model
     dc0::DC0Network model(args.blocks, args.filters);
@@ -287,6 +292,7 @@ static int cmd_selfplay(const Args& args) {
     config.temperature_moves = args.temperature_moves;
     config.max_game_moves = args.max_game_moves;
     config.batch_size = args.mcts_batch_size;
+    config.n_parallel = args.parallel_games;
 
     // Determine output path
     std::string output_path = args.output_file;
@@ -295,8 +301,14 @@ static int cmd_selfplay(const Args& args) {
         output_path = args.output_dir + "/selfplay_data.bin";
     }
 
-    dc0::SelfPlayStats stats = dc0::run_self_play(
-        evaluator, args.games, config, output_path);
+    dc0::SelfPlayStats stats;
+    if (config.n_parallel > 1) {
+        stats = dc0::run_self_play_parallel(
+            evaluator, args.games, config, output_path, config.n_parallel);
+    } else {
+        stats = dc0::run_self_play(
+            evaluator, args.games, config, output_path);
+    }
 
     DC0_LOG_INFO("Self-play complete:");
     DC0_LOG_INFO("  Games: %d, Positions: %d", stats.total_games, stats.total_positions);

@@ -406,17 +406,12 @@ public:
     MCTSNode* root() { return root_.get(); }
     const Board& root_board() const { return *root_board_; }
 
-private:
-    std::unique_ptr<MCTSNode> root_;
-    std::unique_ptr<Board> root_board_;
-    std::mt19937 rng_;
+    // --- Public types for cross-game batched MCTS ---
 
     struct PathEntry {
         MCTSNode* node;
         MCTSEdge* edge;
     };
-
-    // --- Batched MCTS helpers ---
 
     // A leaf selected during batch collection, waiting for NN eval.
     struct PendingLeaf {
@@ -427,7 +422,62 @@ private:
         bool needs_nn_eval = false;         // false if terminal
         float terminal_value = 0.0f;        // value if terminal
         int batch_index = -1;               // index into NN batch output
+        int game_index = -1;                // which game this leaf belongs to (for multi-game)
     };
+
+    // Ensure root is expanded using the batched eval function.
+    // Returns true if root is ready for search (expanded or terminal).
+    bool ensure_root_expanded(const BatchedEvalFunction& batch_eval_fn) {
+        if (!root_ || !root_board_) return false;
+        if (root_->is_expanded) return true;
+
+        float planes[ENCODING_SIZE];
+        encode_board(*root_board_, planes);
+        bool legal_mask[POLICY_SIZE];
+        encode_legal_moves(*root_board_, legal_mask);
+
+        float policy[POLICY_SIZE];
+        float value;
+        batch_eval_fn(planes, legal_mask, 1, policy, &value);
+
+        if (root_board_->is_checkmate()) {
+            root_->is_terminal = true;
+            root_->terminal_value = -1.0f;
+            root_->is_expanded = true;
+        } else if (root_board_->is_draw()) {
+            root_->is_terminal = true;
+            root_->terminal_value = 0.0f;
+            root_->is_expanded = true;
+        } else {
+            root_->expand(policy, legal_mask);
+        }
+        root_->visit_count += 1;
+        if (add_noise) {
+            root_->apply_dirichlet_noise(dirichlet_alpha, dirichlet_epsilon, rng_);
+        }
+        return true;
+    }
+
+    // Select a single leaf for batched evaluation (public for cross-game batching).
+    PendingLeaf select_leaf() {
+        return select_leaf_for_batch();
+    }
+
+    // Process a leaf after NN evaluation: expand and backpropagate.
+    void process_leaf(PendingLeaf& leaf, const float* policy, float value) {
+        if (leaf.needs_nn_eval && policy) {
+            leaf.node->expand(policy, leaf.legal_mask);
+        } else {
+            value = leaf.terminal_value;
+        }
+        remove_virtual_loss(leaf.path);
+        backpropagate(leaf.path, value);
+    }
+
+private:
+    std::unique_ptr<MCTSNode> root_;
+    std::unique_ptr<Board> root_board_;
+    std::mt19937 rng_;
 
     // Select a leaf for batched evaluation. Walks the tree using PUCT (with
     // virtual loss applied to previously selected paths). Creates the child

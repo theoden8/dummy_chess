@@ -155,24 +155,17 @@ public:
         }
         mask_tensor = mask_tensor.to(device_);
 
-        // Forward pass (no grad)
+        // Forward pass (no grad) — get logits directly, skip softmax->log round-trip
         torch::NoGradGuard no_grad;
-        auto [policy, wdl] = model_->predict(input, mask_tensor);
+        auto [policy_logits, wdl] = model_->predict_logits(input, mask_tensor);
 
-        // policy: (1, 4672) probabilities after softmax+masking
+        // policy_logits: (1, 4672) masked logits (illegal = -1e32)
         // wdl: (1, 3) probabilities [P(win), P(draw), P(loss)]
 
-        // Convert policy to vector of logits (actually probabilities, but MCTS
-        // will softmax them again — so convert back to log space)
-        auto policy_cpu = policy.squeeze(0).to(torch::kCPU);
-        auto policy_data = policy_cpu.data_ptr<float>();
+        auto logits_cpu = policy_logits.squeeze(0).to(torch::kCPU);
+        auto logits_data = logits_cpu.data_ptr<float>();
 
-        std::vector<float> policy_vec(POLICY_SIZE);
-        for (int i = 0; i < POLICY_SIZE; ++i) {
-            // Convert probability back to logit for MCTS expand() which does its own softmax
-            float p = policy_data[i];
-            policy_vec[i] = (p > 1e-8f) ? std::log(p) : -30.0f;
-        }
+        std::vector<float> policy_vec(logits_data, logits_data + POLICY_SIZE);
 
         // Convert WDL to scalar value
         auto wdl_cpu = wdl.squeeze(0).to(torch::kCPU);
@@ -208,35 +201,29 @@ public:
             {n, ENCODING_PLANES, 8, 8}, torch::kFloat32
         ).clone().to(device_);
 
-        // Build legal mask tensor: (N, POLICY_SIZE)
-        auto mask_tensor = torch::zeros({n, POLICY_SIZE}, torch::kBool);
-        auto mask_acc = mask_tensor.accessor<bool, 2>();
-        for (int i = 0; i < n; ++i) {
-            const bool* row = &masks_batch[i * POLICY_SIZE];
-            for (int j = 0; j < POLICY_SIZE; ++j) {
-                mask_acc[i][j] = row[j];
-            }
-        }
-        mask_tensor = mask_tensor.to(device_);
+        // Build legal mask tensor from bool array using memcpy + conversion.
+        // torch has no bool from_blob that works reliably across platforms,
+        // so convert through uint8 which has the same layout as bool.
+        auto mask_u8 = torch::from_blob(
+            const_cast<bool*>(masks_batch),
+            {n, POLICY_SIZE}, torch::kBool
+        ).clone().to(device_);
 
-        // Single forward pass for the whole batch
+        // Single forward pass — get logits directly (no softmax->log round-trip)
         torch::NoGradGuard no_grad;
-        auto [policy, wdl] = model_->predict(input, mask_tensor);
+        auto [policy_logits, wdl] = model_->predict_logits(input, mask_u8);
 
-        // policy: (N, POLICY_SIZE) probabilities
-        // wdl:    (N, 3) probabilities
-        auto policy_cpu = policy.to(torch::kCPU).contiguous();
+        // policy_logits: (N, POLICY_SIZE) masked logits
+        // wdl: (N, 3) probabilities
+        auto logits_cpu = policy_logits.to(torch::kCPU).contiguous();
         auto wdl_cpu = wdl.to(torch::kCPU).contiguous();
-        auto* p_data = policy_cpu.data_ptr<float>();
+        auto* p_data = logits_cpu.data_ptr<float>();
         auto* w_data = wdl_cpu.data_ptr<float>();
 
+        // Copy logits directly — no per-element log() needed
+        std::memcpy(out_policies, p_data, n * POLICY_SIZE * sizeof(float));
+
         for (int i = 0; i < n; ++i) {
-            // Convert probabilities back to logits for MCTS expand() softmax
-            const float* p_row = &p_data[i * POLICY_SIZE];
-            float* out_row = &out_policies[i * POLICY_SIZE];
-            for (int j = 0; j < POLICY_SIZE; ++j) {
-                out_row[j] = (p_row[j] > 1e-8f) ? std::log(p_row[j]) : -30.0f;
-            }
             // Convert WDL to scalar value
             out_values[i] = w_data[i * 3 + 0] - w_data[i * 3 + 2];
         }
@@ -268,6 +255,7 @@ struct SelfPlayConfig {
     float temperature = 1.0f;         // initial temperature
     int max_game_moves = 512;         // maximum moves per game before forced draw
     int batch_size = 64;              // batch size for batched MCTS inference
+    int n_parallel = 8;               // games in flight for parallel self-play
 };
 
 // Result of a single self-play game
@@ -276,6 +264,15 @@ struct GameResult {
     float outcome = 0.0f;  // from white's perspective: 1=white wins, -1=black wins, 0=draw
     bool is_checkmate = false;
     bool is_draw = false;
+
+    // Metrics accumulated during the game
+    float sum_policy_entropy = 0.0f;   // sum of -sum(p*log(p)) over moves
+    float sum_root_q = 0.0f;           // sum of abs(root Q) over moves
+    float sum_top_prior = 0.0f;        // sum of NN prior of the move MCTS picked
+
+    float avg_policy_entropy() const { return num_moves > 0 ? sum_policy_entropy / num_moves : 0.0f; }
+    float avg_root_q_abs() const { return num_moves > 0 ? sum_root_q / num_moves : 0.0f; }
+    float avg_top_prior() const { return num_moves > 0 ? sum_top_prior / num_moves : 0.0f; }
 };
 
 // Play a single self-play game and collect training examples.
@@ -428,6 +425,40 @@ inline GameResult play_self_play_game_batched(
         pe.side_to_move = board.activePlayer();
         pending.push_back(pe);
 
+        // Collect metrics from the MCTS search
+        {
+            auto stats = tree.get_move_stats();
+            // Policy entropy: -sum(p * log(p)) where p is the visit distribution
+            float entropy = 0.0f;
+            uint32_t total_visits = 0;
+            for (auto& s : stats) total_visits += s.visits;
+            if (total_visits > 0) {
+                for (auto& s : stats) {
+                    if (s.visits == 0) continue;
+                    float p = float(s.visits) / float(total_visits);
+                    entropy -= p * std::log(p);
+                }
+            }
+            result.sum_policy_entropy += entropy;
+
+            // Root Q: average Q of best move (by visits)
+            float best_q = 0.0f;
+            uint32_t best_visits = 0;
+            float selected_prior = 0.0f;
+            move_t selected = tree.select_move(temp);
+            for (auto& s : stats) {
+                if (s.visits > best_visits) {
+                    best_visits = s.visits;
+                    best_q = s.q_value;
+                }
+                if (s.move == selected) {
+                    selected_prior = s.prior;
+                }
+            }
+            result.sum_root_q += std::abs(best_q);
+            result.sum_top_prior += selected_prior;
+        }
+
         move_t m = tree.select_move(temp);
         if (m == board::nullmove) {
             result.is_draw = true;
@@ -472,10 +503,20 @@ struct SelfPlayStats {
     int64_t total_nodes = 0;       // total MCTS simulations across all games
     double elapsed_sec = 0.0;      // wall-clock time for all games
 
+    // Accumulated quality metrics
+    float sum_policy_entropy = 0.0f;
+    float sum_root_q_abs = 0.0f;
+    float sum_top_prior = 0.0f;
+    int metric_count = 0;          // total moves across all games for averaging
+
     // Derived metrics
     double nodes_per_sec() const { return elapsed_sec > 0 ? total_nodes / elapsed_sec : 0; }
     double positions_per_sec() const { return elapsed_sec > 0 ? total_positions / elapsed_sec : 0; }
     double sec_per_game() const { return total_games > 0 ? elapsed_sec / total_games : 0; }
+    float avg_policy_entropy() const { return metric_count > 0 ? sum_policy_entropy / metric_count : 0.0f; }
+    float avg_root_q_abs() const { return metric_count > 0 ? sum_root_q_abs / metric_count : 0.0f; }
+    float avg_top_prior() const { return metric_count > 0 ? sum_top_prior / metric_count : 0.0f; }
+    float avg_game_length() const { return total_games > 0 ? float(total_moves) / total_games : 0.0f; }
 };
 
 // Run multiple self-play games and write training data to disk.
@@ -507,6 +548,12 @@ inline SelfPlayStats run_self_play(
         else if (result.outcome < -0.5f) stats.black_wins++;
         else stats.draws++;
 
+        // Accumulate quality metrics
+        stats.sum_policy_entropy += result.sum_policy_entropy;
+        stats.sum_root_q_abs += result.sum_root_q;
+        stats.sum_top_prior += result.sum_top_prior;
+        stats.metric_count += result.num_moves;
+
         auto t_now = std::chrono::steady_clock::now();
         double elapsed = std::chrono::duration<double>(t_now - t_start).count();
         stats.elapsed_sec = elapsed;
@@ -516,10 +563,11 @@ inline SelfPlayStats run_self_play(
             ? (result.outcome > 0 ? "1-0" : "0-1")
             : (result.is_draw ? "1/2" : "???");
         DC0_LOG_INFO("Game %d/%d: %s in %d moves (%.1fs) | "
-                "total: %d pos, %.1f pos/s, %.0f nodes/s, %.1f s/game",
+                "entropy=%.2f |Q|=%.3f prior=%.3f | "
+                "%.0f nodes/s, %.1f s/game",
                 game + 1, num_games, outcome_str, result.num_moves, game_sec,
-                stats.total_positions,
-                stats.positions_per_sec(), stats.nodes_per_sec(), stats.sec_per_game());
+                result.avg_policy_entropy(), result.avg_root_q_abs(), result.avg_top_prior(),
+                stats.nodes_per_sec(), stats.sec_per_game());
     }
 
     auto t_end = std::chrono::steady_clock::now();
@@ -530,6 +578,346 @@ inline SelfPlayStats run_self_play(
             "(%.1f pos/s, %.0f nodes/s, %.1f s/game)",
             stats.total_games, stats.total_positions, stats.elapsed_sec,
             stats.positions_per_sec(), stats.nodes_per_sec(), stats.sec_per_game());
+    DC0_LOG_INFO("Quality: entropy=%.2f |Q|=%.3f prior=%.3f avg_len=%.0f "
+            "W/D/L=%d/%d/%d",
+            stats.avg_policy_entropy(), stats.avg_root_q_abs(), stats.avg_top_prior(),
+            stats.avg_game_length(),
+            stats.white_wins, stats.draws, stats.black_wins);
+
+    // Save to disk
+    if (!output_path.empty()) {
+        if (data.save(output_path)) {
+            DC0_LOG_INFO("Saved %zu training examples to %s",
+                    data.size(), output_path.c_str());
+        } else {
+            DC0_LOG_ERROR("Failed to save training data to %s",
+                    output_path.c_str());
+        }
+    }
+
+    return stats;
+}
+
+// --- Parallel multi-game self-play ---
+// Plays N games concurrently, batching NN evaluations across all game trees.
+// This keeps the GPU busy by filling batches from multiple games.
+
+inline SelfPlayStats run_self_play_parallel(
+    NNEvaluator& evaluator,
+    int num_games,
+    const SelfPlayConfig& config,
+    const std::string& output_path,
+    int n_parallel = 8
+) {
+    TrainingData data;
+    data.reserve(num_games * 200);
+
+    SelfPlayStats stats;
+    auto batch_eval_fn = evaluator.get_batched_eval_function();
+    auto t_start = std::chrono::steady_clock::now();
+
+    static const char* START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+
+    // Per-position pending example (mirrors the sequential version's struct).
+    struct PendingExample {
+        float planes[ENCODING_SIZE];
+        float policy[POLICY_SIZE];
+        COLOR side_to_move;
+    };
+
+    // State for each active game slot.
+    // Board has deleted copy-assignment (const members), so we use unique_ptr.
+    struct Slot {
+        MCTSTree tree;
+        std::unique_ptr<Board> board;
+        std::vector<PendingExample> pending;
+        GameResult result;
+        int sims_this_move = 0;
+        int move_num = 0;
+        bool active = false;
+        int game_id = -1;
+
+        void start_new_game(int id, const SelfPlayConfig& cfg) {
+            board = std::make_unique<Board>(fen::load_from_string(START_FEN));
+            tree = MCTSTree();
+            tree.c_puct = cfg.c_puct;
+            tree.dirichlet_alpha = cfg.dirichlet_alpha;
+            tree.dirichlet_epsilon = cfg.dirichlet_epsilon;
+            tree.add_noise = true;
+            tree.set_root(*board);
+            pending.clear();
+            result = GameResult();
+            sims_this_move = 0;
+            move_num = 0;
+            active = true;
+            game_id = id;
+        }
+    };
+
+    std::vector<Slot> slots(n_parallel);
+    int next_game_id = 0;
+    int games_completed = 0;
+
+    // Finalize a completed game: convert pending examples, update stats,
+    // log, and either start a new game or deactivate the slot.
+    auto finalize_game = [&](Slot& slot) {
+        // Convert pending examples to training data
+        for (auto& pe : slot.pending) {
+            TrainingExample ex;
+            std::memcpy(ex.planes, pe.planes, sizeof(ex.planes));
+            std::memcpy(ex.policy, pe.policy, sizeof(ex.policy));
+            if (pe.side_to_move == WHITE) {
+                ex.result = slot.result.outcome;
+            } else {
+                ex.result = -slot.result.outcome;
+            }
+            data.add(ex);
+        }
+
+        // Update stats
+        games_completed++;
+        stats.total_games++;
+        stats.total_moves += slot.result.num_moves;
+        stats.total_nodes += static_cast<int64_t>(slot.result.num_moves)
+                             * config.simulations_per_move;
+        if (slot.result.outcome > 0.5f) stats.white_wins++;
+        else if (slot.result.outcome < -0.5f) stats.black_wins++;
+        else stats.draws++;
+
+        stats.sum_policy_entropy += slot.result.sum_policy_entropy;
+        stats.sum_root_q_abs += slot.result.sum_root_q;
+        stats.sum_top_prior += slot.result.sum_top_prior;
+        stats.metric_count += slot.result.num_moves;
+
+        auto t_now = std::chrono::steady_clock::now();
+        double elapsed = std::chrono::duration<double>(t_now - t_start).count();
+        stats.elapsed_sec = elapsed;
+        stats.total_positions = static_cast<int>(data.size());
+
+        const char* outcome_str = slot.result.is_checkmate
+            ? (slot.result.outcome > 0 ? "1-0" : "0-1")
+            : (slot.result.is_draw ? "1/2" : "???");
+        DC0_LOG_INFO("Game %d/%d: %s in %d moves | "
+                "entropy=%.2f |Q|=%.3f prior=%.3f | "
+                "%.0f nodes/s, %.1f s/game",
+                games_completed, num_games, outcome_str, slot.result.num_moves,
+                slot.result.avg_policy_entropy(), slot.result.avg_root_q_abs(),
+                slot.result.avg_top_prior(),
+                stats.nodes_per_sec(), stats.sec_per_game());
+
+        // Start next game or deactivate slot
+        if (next_game_id < num_games) {
+            slot.start_new_game(next_game_id++, config);
+            slot.tree.ensure_root_expanded(batch_eval_fn);
+        } else {
+            slot.active = false;
+        }
+    };
+
+    // Initialize slots
+    for (int i = 0; i < n_parallel && next_game_id < num_games; ++i) {
+        slots[i].start_new_game(next_game_id++, config);
+    }
+
+    // Expand all roots
+    for (auto& slot : slots) {
+        if (slot.active) {
+            slot.tree.ensure_root_expanded(batch_eval_fn);
+        }
+    }
+
+    // Shared batch buffers
+    const int max_batch = config.batch_size;
+    std::vector<float> planes_buf(max_batch * ENCODING_SIZE);
+    std::unique_ptr<bool[]> masks_buf(new bool[max_batch * POLICY_SIZE]);
+    std::vector<float> policies_buf(max_batch * POLICY_SIZE);
+    std::vector<float> values_buf(max_batch);
+
+    // Main loop: keep running until all games are done
+    while (games_completed < num_games) {
+        // Phase 0: Finalize any games whose roots are already terminal
+        // (e.g. after advance() lands on checkmate/draw).
+        for (auto& slot : slots) {
+            if (!slot.active) continue;
+            if (slot.board->is_checkmate()) {
+                slot.result.is_checkmate = true;
+                slot.result.outcome = (slot.board->activePlayer() == WHITE) ? -1.0f : 1.0f;
+                finalize_game(slot);
+            } else if (slot.board->is_draw()) {
+                slot.result.is_draw = true;
+                slot.result.outcome = 0.0f;
+                finalize_game(slot);
+            }
+        }
+
+        // Check if all games done after terminal finalization
+        if (games_completed >= num_games) break;
+
+        // Phase 1: Collect leaves from all active games
+        std::vector<MCTSTree::PendingLeaf> pending_leaves;
+        pending_leaves.reserve(max_batch);
+        int nn_count = 0;
+
+        // Collect multiple leaves per game to fill the batch
+        int active_count = 0;
+        for (auto& slot : slots) {
+            if (slot.active) active_count++;
+        }
+        int leaves_per_game = active_count > 0
+            ? std::max(1, max_batch / active_count) : 1;
+
+        for (int slot_idx = 0; slot_idx < n_parallel; ++slot_idx) {
+            auto& slot = slots[slot_idx];
+            if (!slot.active) continue;
+            if (slot.tree.is_terminal()) continue;
+
+            int remaining_sims = config.simulations_per_move - slot.sims_this_move;
+            int n_leaves = std::min(leaves_per_game, remaining_sims);
+            n_leaves = std::min(n_leaves, max_batch - (int)pending_leaves.size());
+
+            for (int l = 0; l < n_leaves; ++l) {
+                auto leaf = slot.tree.select_leaf();
+                leaf.game_index = slot_idx;
+                if (leaf.needs_nn_eval) {
+                    std::memcpy(&planes_buf[nn_count * ENCODING_SIZE],
+                                leaf.planes, ENCODING_SIZE * sizeof(float));
+                    std::memcpy(&masks_buf[nn_count * POLICY_SIZE],
+                                leaf.legal_mask, POLICY_SIZE * sizeof(bool));
+                    leaf.batch_index = nn_count;
+                    nn_count++;
+                }
+                pending_leaves.push_back(std::move(leaf));
+            }
+
+            if ((int)pending_leaves.size() >= max_batch) break;
+        }
+
+        // If no leaves collected, all remaining active games must have
+        // terminal trees. They'll be caught by Phase 0 on the next iteration.
+        if (pending_leaves.empty()) continue;
+
+        // Phase 2: Batch NN evaluation
+        if (nn_count > 0) {
+            batch_eval_fn(planes_buf.data(), masks_buf.get(), nn_count,
+                          policies_buf.data(), values_buf.data());
+        }
+
+        // Phase 3: Process leaves — expand and backpropagate
+        for (auto& leaf : pending_leaves) {
+            auto& slot = slots[leaf.game_index];
+            if (leaf.needs_nn_eval) {
+                float* policy = &policies_buf[leaf.batch_index * POLICY_SIZE];
+                float value = values_buf[leaf.batch_index];
+                slot.tree.process_leaf(leaf, policy, value);
+            } else {
+                slot.tree.process_leaf(leaf, nullptr, leaf.terminal_value);
+            }
+            slot.sims_this_move++;
+        }
+
+        // Phase 4: Check which games have finished their simulations for the current move
+        for (int slot_idx = 0; slot_idx < n_parallel; ++slot_idx) {
+            auto& slot = slots[slot_idx];
+            if (!slot.active) continue;
+
+            // Not enough sims yet for this move
+            if (slot.sims_this_move < config.simulations_per_move) continue;
+
+            // Sims done for this move — record example and pick move
+            float temp = (slot.move_num < config.temperature_moves) ? config.temperature : 0.0f;
+
+            // Record training example
+            PendingExample pe;
+            encode_board(*slot.board, pe.planes);
+            slot.tree.get_policy(pe.policy,
+                (slot.move_num < config.temperature_moves) ? 1.0f : 0.0f);
+            pe.side_to_move = slot.board->activePlayer();
+            slot.pending.push_back(pe);
+
+            // Collect metrics
+            {
+                auto mstats = slot.tree.get_move_stats();
+                float entropy = 0.0f;
+                uint32_t total_visits = 0;
+                for (auto& s : mstats) total_visits += s.visits;
+                if (total_visits > 0) {
+                    for (auto& s : mstats) {
+                        if (s.visits == 0) continue;
+                        float p = float(s.visits) / float(total_visits);
+                        entropy -= p * std::log(p);
+                    }
+                }
+                slot.result.sum_policy_entropy += entropy;
+
+                float best_q = 0.0f;
+                uint32_t best_visits = 0;
+                for (auto& s : mstats) {
+                    if (s.visits > best_visits) {
+                        best_visits = s.visits;
+                        best_q = s.q_value;
+                    }
+                }
+                slot.result.sum_root_q += std::abs(best_q);
+            }
+
+            // Pick and play move
+            move_t m = slot.tree.select_move(temp);
+            if (m == board::nullmove) {
+                slot.result.is_draw = true;
+                slot.result.outcome = 0.0f;
+                finalize_game(slot);
+                continue;
+            }
+
+            // Record prior of selected move
+            {
+                auto mstats = slot.tree.get_move_stats();
+                for (auto& s : mstats) {
+                    if (s.move == m) {
+                        slot.result.sum_top_prior += s.prior;
+                        break;
+                    }
+                }
+            }
+
+            slot.board->make_move(m);
+            slot.tree.advance(m, *slot.board);
+            slot.result.num_moves++;
+            slot.move_num++;
+            slot.sims_this_move = 0;
+
+            // Expand new root
+            if (!slot.tree.is_terminal()) {
+                slot.tree.ensure_root_expanded(batch_eval_fn);
+            }
+
+            // Check move limit
+            if (slot.move_num >= config.max_game_moves) {
+                slot.result.is_draw = true;
+                slot.result.outcome = 0.0f;
+                finalize_game(slot);
+                continue;
+            }
+
+            // Terminal positions after the move are caught by Phase 0
+            // on the next iteration of the main loop.
+        }
+    }
+
+    auto t_end = std::chrono::steady_clock::now();
+    stats.elapsed_sec = std::chrono::duration<double>(t_end - t_start).count();
+    stats.total_positions = static_cast<int>(data.size());
+
+    DC0_LOG_INFO("Self-play done: %d games, %d positions in %.1f s "
+            "(%.1f pos/s, %.0f nodes/s, %.1f s/game) [%d parallel]",
+            stats.total_games, stats.total_positions, stats.elapsed_sec,
+            stats.positions_per_sec(), stats.nodes_per_sec(), stats.sec_per_game(),
+            n_parallel);
+    DC0_LOG_INFO("Quality: entropy=%.2f |Q|=%.3f prior=%.3f avg_len=%.0f "
+            "W/D/L=%d/%d/%d",
+            stats.avg_policy_entropy(), stats.avg_root_q_abs(), stats.avg_top_prior(),
+            stats.avg_game_length(),
+            stats.white_wins, stats.draws, stats.black_wins);
 
     // Save to disk
     if (!output_path.empty()) {

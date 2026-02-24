@@ -167,7 +167,7 @@ struct DC0NetworkImpl : torch::nn::Module {
         return {p, v};
     }
 
-    // Forward with legal move masking and softmax
+    // Forward with legal move masking and softmax (returns probabilities)
     std::pair<torch::Tensor, torch::Tensor> predict(
         torch::Tensor x, torch::Tensor legal_mask
     ) {
@@ -179,6 +179,21 @@ struct DC0NetworkImpl : torch::nn::Module {
         auto wdl = torch::softmax(wdl_logits, /*dim=*/1);
 
         return {policy, wdl};
+    }
+
+    // Forward with legal move masking, returning masked logits + WDL probabilities.
+    // This avoids the softmax->log->softmax round-trip in the evaluator.
+    // MCTS expand() does its own softmax over legal moves, so logits are ideal.
+    std::pair<torch::Tensor, torch::Tensor> predict_logits(
+        torch::Tensor x, torch::Tensor legal_mask
+    ) {
+        auto [policy_logits, wdl_logits] = forward(x);
+
+        // Mask illegal moves with large negative value
+        policy_logits = policy_logits.masked_fill(~legal_mask, -1e32f);
+        auto wdl = torch::softmax(wdl_logits, /*dim=*/1);
+
+        return {policy_logits, wdl};
     }
 
     // Convert WDL probabilities to scalar value in [-1, 1]

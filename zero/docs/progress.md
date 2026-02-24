@@ -2,8 +2,8 @@
 
 ## Current Status
 
-**Phase 5 complete**: CLI binary `dc0` builds and runs. Full training loop verified end-to-end on GPU.
-Phases 1-5 done. Next: UCI integration (Phase 6), then optimizations (Phase 7).
+**Phase 6 complete**: UCI integration done. `dc0_uci` binary plays via UCI protocol using MCTS+NN.
+Phases 1-6 done. Next: multi-game parallelism for higher GPU utilization, then optimizations (Phase 7).
 
 ## Phase Summary
 
@@ -16,8 +16,8 @@ Phases 1-5 done. Next: UCI integration (Phase 6), then optimizations (Phase 7).
 | 3 | Self-play pipeline | Done |
 | 4 | Training loop | Done |
 | 5 | CLI binary | Done |
-| 6 | UCI integration | Not started |
-| 7 | Optimizations | Not started |
+| 6 | UCI integration | Done |
+| 7 | Optimizations | In progress |
 
 ## Phase 1: Neural Network + Move Encoding (Done)
 
@@ -32,6 +32,7 @@ Phases 1-5 done. Next: UCI integration (Phase 6), then optimizations (Phase 7).
 - `model.py`: Python reference matching C++ architecture
 - Default config: 6 blocks, 128 filters = 2,146,988 parameters
 - GPU inference verified on RTX 4090. Save/load weights working.
+- `predict_logits()` method added to skip softmax when returning to MCTS (optimization)
 - `test_network.cpp`: all passing (CPU + GPU)
 
 ### 1c: Board Encoding
@@ -51,18 +52,19 @@ Phases 1-5 done. Next: UCI integration (Phase 6), then optimizations (Phase 7).
 - Dirichlet noise at root for training exploration
 - Temperature-based move selection (temp=0 for greedy, temp=1 for proportional)
 - Tree reuse via `advance(move, new_board)` — subtree preservation
-- `expand_node()` returns value to avoid double NN evaluation per leaf
-- `test_mcts.cpp`: 7 tests, all passing
+- Batched MCTS with virtual loss for GPU batch inference
+- `test_mcts.cpp`: 11 tests (7 unbatched + 4 batched), all passing
 
 ## Phase 3: Self-Play Pipeline (Done)
 
 - `SelfPlay.hpp`:
   - `TrainingExample`: 1408 floats (board) + 4672 floats (policy) + 1 float (result) = 24324 bytes
   - `TrainingData`: binary serialization with magic header `0xDC000001`, version 1
-  - `NNEvaluator`: bridges DC0Network to `EvalFunction` for MCTS. Handles board encoding, legal move masking, probability-to-logit conversion.
-  - `play_self_play_game()`: single game with MCTS, collects examples, assigns results post-game
-  - `run_self_play()`: N sequential games with progress reporting, writes binary output
-- `test_selfplay.cpp`: 7 tests (serialization, random eval game, NN evaluator, NN game, save/load), all passing
+  - `NNEvaluator`: bridges DC0Network to MCTS eval functions. Uses `predict_logits()` to pass logits directly (avoids softmax->log->softmax round-trip).
+  - `play_self_play_game_batched()`: batched MCTS game with per-move quality metrics
+  - `run_self_play()`: N sequential games with progress reporting + metric aggregation
+- Per-move metrics collected: policy entropy, root Q, NN prior of MCTS-selected move
+- `test_selfplay.cpp`: 8 tests, all passing
 
 ## Phase 4: Training Loop (Done)
 
@@ -72,7 +74,7 @@ Phases 1-5 done. Next: UCI integration (Phase 6), then optimizations (Phase 7).
   - `evaluate_models()`: head-to-head games between two models, alternating colors
   - `run_generation()`: full generation loop: self-play -> train -> evaluate -> conditionally promote
   - `GenerationConfig`: all hyperparameters in one struct
-- `test_training.cpp`: 6 tests (dataset shape, training step, loss decreases, checkpoint roundtrip, LR schedule, trained-model-as-evaluator), all passing
+- `test_training.cpp`: 6 tests, all passing
 - Verified: loss drops from ~8.8 to ~4.5 over 5 training passes on random self-play data
 
 ## Phase 5: CLI Binary (Done)
@@ -81,10 +83,6 @@ Phases 1-5 done. Next: UCI integration (Phase 6), then optimizations (Phase 7).
 - Three modes: `train`, `selfplay`, `eval`
 - Full argument parsing with `--model`, `--games`, `--sims`, `--blocks`, `--filters`, etc.
 - Smoke-tested: 3-generation training run with 2-block/32-filter network on RTX 4090
-  - Self-play generates games and writes binary training data
-  - Training reduces policy loss (8.0 -> 2.98 within one generation)
-  - Evaluation pits new vs old model; promotes on win_rate >= 55%
-  - Generation 2 model promoted with 75% win rate
 
 ### Usage
 ```bash
@@ -114,18 +112,70 @@ CUDA_VISIBLE_DEVICES=0 ./build/dc0 eval \
   --games 20 --sims 200
 ```
 
+## Phase 6: UCI Integration (Done)
+
+- `DC0Engine.hpp`: self-contained MCTS+NN engine wrapper for UCI
+  - `init()`, `new_game()`, `set_position()`, `go()` with SearchParams, info callback, stop check
+  - Configurable simulations, batch size, c_puct
+- `UCI.hpp` modified with `#ifdef DC0_ENABLED` guards:
+  - Options: `SearchMode` (alphabeta/dc0), `DC0ModelPath`, `DC0Device`, `DC0Simulations`, `DC0BatchSize`, `DC0Blocks`, `DC0Filters`
+  - `perform_go_dc0()`: maps UCI go params to dc0 search, emits info lines, handles time control
+  - `ensure_dc0_engine()`: lazy initialization on first use
+  - Torch headers included before engine headers to avoid fathom macro clashes (`square`, `diag`, `rank`)
+- `dc0_uci` target in CMakeLists: compiles `uci.cpp` with `-DDC0_ENABLED` + libtorch
+- Tested: ~3,800 nps with batch_size=64 on RTX 4090, proper UCI info lines and bestmove output
+
+### UCI usage
+```bash
+# Start UCI engine with dc0 neural network search
+CUDA_VISIBLE_DEVICES=0 ./build/dc0_uci
+
+# In the UCI session:
+# setoption name SearchMode value dc0
+# setoption name DC0ModelPath value /path/to/model.bin
+# setoption name DC0Simulations value 800
+# position startpos
+# go wtime 60000 btime 60000
+```
+
+## Self-Play Quality Metrics
+
+Per-game and per-generation metrics are logged during self-play:
+
+| Metric | Description | Untrained | Learning signal |
+|--------|-------------|-----------|-----------------|
+| **entropy** | Policy entropy: -sum(p*log(p)) of MCTS visit distribution | ~3.0 (uniform over ~20 moves) | Should decrease as model gets confident |
+| **\|Q\|** | Average absolute root Q-value | ~0.01 (model uncertain) | Increases as model evaluates positions |
+| **prior** | NN prior probability of MCTS-selected move | ~0.05 (1/20 random) | Should increase (NN agrees with search) |
+| **avg_len** | Average game length | ~150 (random, many draws) | Stabilizes; decisive games get shorter |
+| **policy_loss** | Cross-entropy: MCTS target vs NN output | ~7-8 | Should decrease over generations |
+| **value_loss** | WDL cross-entropy: game result vs NN prediction | ~0.7-1.1 | Should decrease over generations |
+
+Example output:
+```
+Game 1/3: 1/2 in 88 moves (1.6s) | entropy=3.28 |Q|=0.015 prior=0.049 | 2747 nodes/s, 1.6 s/game
+Quality: entropy=3.01 |Q|=0.014 prior=0.093 avg_len=149 W/D/L=0/3/0
+Training done: policy_loss=7.3180 value_loss=0.7316 total=8.0495 (448 examples)
+```
+
+## Optimizations Done
+
+1. **Batched MCTS**: virtual loss for path diversification, ~7,100 nps at bs=128 (21x over unbatched)
+2. **Direct logit passing**: `NNEvaluator` uses `predict_logits()` instead of `predict()`, eliminating the softmax->log->softmax round-trip. Logits go directly from network to MCTS `expand()`.
+3. **Bulk mask copy**: legal move mask built via `torch::from_blob` on bool array instead of per-element accessor loop.
+
 ## Test Suites
 
-All 6 test binaries build and pass:
+Single unified test binary `dc0_tests` with 46 tests across 6 suites:
 
-| Binary | Requires | Tests |
-|--------|----------|-------|
-| `dc0_test_move_encoding` | — | encode/decode roundtrip, valid count |
-| `dc0_test_board_encoding` | Board, m42 | plane values, legal mask, promotions |
-| `dc0_test_network` | libtorch, CUDA | shapes, param count, GPU inference, save/load |
-| `dc0_test_mcts` | Board, m42 | search, deterministic select, policy output, terminal, noise, tree reuse, game play |
-| `dc0_test_selfplay` | libtorch, Board | serialization, random game, NN evaluator, NN game, data roundtrip |
-| `dc0_test_training` | libtorch, Board | dataset, training step, loss decrease, checkpoint, LR, train+eval cycle |
+| Suite | Tests | Coverage |
+|-------|-------|----------|
+| MoveEncoding | 8 | encode/decode roundtrip, valid count, symmetry |
+| BoardEncoding | 7 | plane values, legal mask, promotions, positions |
+| Network | 6 | shapes, param count, GPU inference, save/load |
+| MCTS | 11 | single + batched search, policy, terminal, noise, tree reuse |
+| SelfPlay | 8 | serialization, random game, NN evaluator, batched game, save/load |
+| Training | 6 | dataset, training step, loss decrease, checkpoint, LR, train+eval |
 
 ### Build commands
 ```bash
@@ -136,12 +186,7 @@ cmake --build build -j$(nproc)
 
 ### Run all tests
 ```bash
-./build/dc0_test_move_encoding
-./build/dc0_test_board_encoding
-CUDA_VISIBLE_DEVICES=0 ./build/dc0_test_network
-./build/dc0_test_mcts
-CUDA_VISIBLE_DEVICES=0 ./build/dc0_test_selfplay
-CUDA_VISIBLE_DEVICES=0 ./build/dc0_test_training
+CUDA_VISIBLE_DEVICES=0 ./build/dc0_tests
 ```
 
 ## Discoveries & Gotchas
@@ -157,12 +202,17 @@ CUDA_VISIBLE_DEVICES=0 ./build/dc0_test_training
    - `CMAKE_CUDA_STANDARD 17` (cmake 3.25 doesn't know CUDA20)
    - Dummy `CUDA::nvToolsExt` target (missing in newer CUDA)
    - Installed `cuda-nvrtc-dev-12-4` and `libnvjitlink-dev-12-4` for linking
+   - `_GLIBCXX_USE_CXX11_ABI=0` globally (libtorch forces old ABI; gtest must match)
 
 5. **RTX 4090 on device 0**, GTX 1080 Ti on device 1 (incompatible with torch 2.5.1+cu124). Always use `CUDA_VISIBLE_DEVICES=0`.
 
 6. **Double-eval bug (fixed)**: Original MCTS `expand_node` discarded the NN value, then the caller called `eval_fn` again. Fixed by having `expand_node` return the value.
 
-7. **NNEvaluator logit conversion**: Network `predict()` returns probabilities (post-softmax), but MCTS `expand()` does its own softmax. `NNEvaluator` converts back to log-space: `log(p)` for p > 1e-8, else -30.
+7. **NNEvaluator logit conversion (fixed)**: Previously: `predict()` softmax -> probabilities, then `evaluate_batch()` -> `log(p)`, then `expand()` -> softmax again. Now: `predict_logits()` returns masked logits directly for MCTS.
+
+8. **Fathom macro clashes**: `tbchess.c` defines `#define square(r,f)`, `#define diag(s)`, `#define rank(s)` which collide with libtorch's `at::Tensor::square()` etc. Fixed by including `<torch/torch.h>` before engine headers in `UCI.hpp`.
+
+9. **Engine header ODR issues**: Headers like `Zobrist.hpp`, `FEN.hpp`, `Piece.hpp` have non-inline function definitions. Fixed with `LINKER:--allow-multiple-definition`.
 
 ## File Inventory
 
@@ -175,9 +225,9 @@ zero/
   # C++ core
   MoveEncoding.hpp           # move_t <-> policy index (constexpr tables)
   BoardEncoding.hpp          # Board -> (22,8,8) tensor + legal move mask
-  Network.hpp                # SE-ResNet (libtorch nn::Module)
-  MCTS.hpp                   # PUCT tree search (single + batched)
-  SelfPlay.hpp               # Self-play games + binary data format + NNEvaluator
+  Network.hpp                # SE-ResNet (libtorch nn::Module), predict + predict_logits
+  MCTS.hpp                   # PUCT tree search (single + batched with virtual loss)
+  SelfPlay.hpp               # Self-play games + binary data + NNEvaluator + quality metrics
   Training.hpp               # Training loop, loss, eval, generation loop
   DC0Engine.hpp              # UCI-facing MCTS engine wrapper
   Logging.hpp                # Log levels, timestamps, configurable verbosity
@@ -201,6 +251,6 @@ zero/
 
 ## Next Steps
 
-1. **Multi-game parallelism**: Play N games concurrently, batching NN evals across all trees for higher GPU utilization
-2. **Optimizations (Phase 7)**: FP16 inference, transposition table
+1. **Multi-game parallelism**: Play N games concurrently, batching NN evals across all trees for higher GPU utilization (currently ~10-16% GPU util, single-game bottleneck)
+2. **FP16 inference**: Half-precision forward pass for ~2x throughput
 3. **Production training run**: Full-scale with 6 blocks, 128 filters, 800 sims, 100+ generations
