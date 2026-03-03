@@ -16,26 +16,37 @@
 #include <fcntl.h>
 #include <sys/select.h>
 
-// When DC0_ENABLED, torch headers must be included BEFORE engine headers.
-// The fathom/syzygy tablebase code (included transitively via Engine.hpp)
-// defines macros like 'square', 'diag', 'rank' that collide with libtorch
-// symbols (e.g., at::Tensor::square()).  Including torch first avoids this.
-#ifdef DC0_ENABLED
-#include <torch/torch.h>
-#endif
-
 #include <FEN.hpp>
 #include <Engine.hpp>
-
-#ifdef DC0_ENABLED
-#include <DC0Engine.hpp>
-#endif
 
 
 using namespace std::chrono;
 
 
-struct UCI {
+// fully parametrized go-command
+typedef struct _go_command {
+  std::vector<move_t> searchmoves = {};
+  bool ponder = false;
+  double wtime = DBL_MAX;
+  double btime = DBL_MAX;
+  double winc = 0;
+  double binc = 0;
+  int movestogo = 0;
+  Engine::depth_t depth = INT16_MAX;
+  size_t nodes = SIZE_MAX;
+  size_t mate = SIZE_MAX;
+  double movetime = DBL_MAX;
+  bool infinite = false;
+} go_command;
+
+// same but only for perft, this is not in the UCI spec
+typedef struct _go_perft_command {
+  Engine::depth_t depth;
+} go_perft_command;
+
+using cmd_t = std::vector<std::string>;
+
+struct EngineUCI {
   // engine singleton
   std::unique_ptr<Engine> engine_ptr;
   // must take ownership of ttables and such so that initialization
@@ -44,62 +55,17 @@ struct UCI {
   // last IDDFS state (for ponderhit)
   Engine::iddfs_state engine_idstate;
 
-  using score_t = typename Engine::score_t;
-  using depth_t = typename Engine::depth_t;
-
-  // state-changing message passing
-  bool debug_mode = false;
-  bool should_quit = false;
-  bool should_stop = false;
-  bool should_ponderhit = false;
-
-  // these are used to initialize engine for a new game
   struct Options {
     size_t hash_mb = 64;
     bool chess960 = false;
     bool crazyhouse = false;
     std::optional<std::string> syzygy_path;
     bool tb_initialized = false;
-#ifdef DC0_ENABLED
-    std::string search_mode = "alphabeta";
-    std::string dc0_model_path;
-    int dc0_blocks = 6;
-    int dc0_filters = 128;
-    int dc0_simulations = 800;
-    int dc0_batch_size = 64;
-    std::string dc0_device;  // empty = auto
-#endif
   };
+
   Options engine_options;
 
-#ifdef DC0_ENABLED
-  std::unique_ptr<dc0::DC0Engine> dc0_engine;
-
-  // Ensure dc0 engine is initialized. Returns true on success.
-  bool ensure_dc0_engine() {
-    if (dc0_engine && dc0_engine->is_initialized()) {
-      return true;
-    }
-    dc0_engine = std::make_unique<dc0::DC0Engine>();
-    bool ok = dc0_engine->init(
-        engine_options.dc0_blocks,
-        engine_options.dc0_filters,
-        engine_options.dc0_model_path,
-        engine_options.dc0_device
-    );
-    if (ok) {
-      dc0_engine->set_simulations(engine_options.dc0_simulations);
-      dc0_engine->set_batch_size(engine_options.dc0_batch_size);
-    }
-    return ok;
-  }
-#endif
-
-  UCI()
-  {}
-
-  // initialize engine according to the currently set options
-  void init(const fen::FEN &f) {
+  bool init(const fen::FEN &f) {
     _printf("init\n");
     const size_t zobrist_size = (engine_options.hash_mb << (20 - 7));
     engine_ptr.reset(new Engine(f, zobrist_size));
@@ -112,7 +78,21 @@ struct UCI {
       engine_options.tb_initialized = true;
     }
     engine_ab_storage_ptr.reset(new Engine::ab_storage_t(engine_ptr->get_zobrist_alphabeta_scope()));
-    should_stop = false;
+    return true;
+  }
+
+  Engine &get_engine() {
+    return *engine_ptr;
+  }
+
+  const Engine &get_engine() const {
+    return *engine_ptr;
+  }
+
+  void make_moves(const MoveLine &mline) {
+    for(move_t m : mline) {
+      engine_ptr->make_move(m);
+    }
   }
 
   // remove engine: no memory leaks, no nothing, ready to start again
@@ -125,6 +105,190 @@ struct UCI {
         tb::free();
       }
     }
+  }
+
+  // bunch of options
+  const std::map<std::string, bool> boolOptions = {
+    {"UCI_Chess960"s, false},
+    {"Ponder"s, false},
+  };
+
+  const std::map<std::string, std::tuple<int, int, int>> spinOptions = {
+    {"Hash"s, std::make_tuple(4, 4096, (int)engine_options.hash_mb)},
+  };
+
+  const std::map<std::string, std::pair<cmd_t, std::string>> comboOptions = {
+    {"UCI_Variant"s, std::make_pair(cmd_t{"chess"s, "crazyhouse"s}, "chess"s)},
+  };
+
+  const std::map<std::string, std::string> stringOptions {
+    {"SyzygyPath"s, "<empty>"s},
+  };
+
+  bool opt_bool(const std::string &optname, const bool val) {
+    if(optname == "UCI_Chess960"s) {
+      engine_options.chess960 = val;
+      str::pdebug("info string setoption UCI_Chess960 =", val);
+      return true;
+    }
+    return false;
+  }
+
+  bool opt_spin(const std::string &optname, const int val) {
+    if(optname == "Hash"s) {
+      engine_options.hash_mb = val;
+      str::pdebug("info string setoption Hash =", optname, val);
+      return true;
+    }
+    return false;
+  }
+
+  bool opt_combo(const std::string &optname, const std::string &optvalue) {
+    if(optname == "UCI_Variant"s) {
+      if(optvalue == "chess"s) {
+        engine_options.crazyhouse = false;
+      } else if(optvalue == "crazyhouse"s) {
+        engine_options.crazyhouse = true;
+      }
+      str::pdebug("info string setoption UCI_Variant =", optname);
+      return true;
+    }
+    return false;
+  }
+
+  bool opt_string(const std::string &optname, const std::string &val, const std::string &val_default) {
+    if(optname == "SyzygyPath"s) {
+      if(val != val_default) {
+        std::filesystem::path syzygy_path(val);
+        if(!std::filesystem::exists(syzygy_path)) {
+          str::perror("syzygy path doesn't exist <", syzygy_path, ">");
+          abort();
+        }
+        engine_options.syzygy_path.emplace(val);
+      } else {
+        engine_options.syzygy_path.reset();
+      }
+      return true;
+    }
+    return false;
+  }
+
+  bool set_position(fen::FEN &f) {
+    f.chess960 = engine_options.chess960;
+    // use set_fen if engine exists with matching variants, otherwise init
+    if(engine_ptr && engine_ptr->chess960 == f.chess960 && engine_ptr->crazyhouse == f.crazyhouse) {
+      engine_ptr->set_fen(f);
+      return true;
+    }
+    return init(f);
+  }
+
+  bool set_position_with_moves(fen::FEN &f, const MoveLine &mline) {
+    if(!set_position(f)) {
+      return false;
+    }
+    for(move_t m : mline) {
+      engine_ptr->make_move(m);
+    }
+    return true;
+  }
+
+  template <typename UCI>
+  void perform_go(go_command args, UCI &uci) {
+    _printf("GO COMMAND\n");
+    _printf("ponder: %d\n", args.ponder ? 1 : 0);
+    _printf("wtime: %.6f, btime: %.6f\n", args.wtime, args.btime);
+    _printf("winc: %.6f, binc: %.6f\n", args.winc, args.binc);
+    _printf("movestogo: %d\n", args.movestogo);
+    _printf("depth: %hd\n", args.depth);
+    _printf("nodes: %lu\n", args.nodes);
+    _printf("mate: %lu\n", args.mate);
+    _printf("movetime: %.6f\n", args.movetime);
+    _printf("infinite: %d\n", args.infinite ? 1 : 0);
+    std::vector<std::string> searchmoves_s;
+    for(auto&s:args.searchmoves)searchmoves_s.emplace_back(engine_ptr->_move_str(s));
+    std::string s = str::join(searchmoves_s, ", "s);
+    _printf("searchmoves: [%s]\n", s.c_str());
+    // TODO mate, movestogo
+    double movetime = uci.time_control_movetime(args, args.ponder);
+    const auto start = system_clock::now();
+    double time_spent = 0.;
+    size_t nodes_searched = 0;
+    const std::unordered_set<move_t> searchmoves(args.searchmoves.begin(), args.searchmoves.end());
+    if(!args.ponder) {
+      engine_idstate.reset();
+    } else if(engine_idstate.pline.size() >= 2) {
+      engine_idstate.ponderhit();
+      engine_idstate.ponderhit();
+    }
+    bool pondering = args.ponder;
+    bool return_from_search = false;
+    const move_t bestmove = engine_ptr->start_thinking(args.depth, engine_idstate, [&](bool verbose) mutable -> bool {
+      uci.continue_read_cmd(false);
+      if(engine_idstate.pline.empty()) {
+        return true;
+      } else if(return_from_search) {
+        return false;
+      }
+      // update stats
+      const size_t nps = uci.update_nodes_per_second(start, time_spent, nodes_searched);
+      // switch from infinite pondering to thinking
+      if(pondering && movetime > 1e9 && uci.should_ponderhit) {
+        pondering = false;
+        const double new_movetime = uci.time_control_movetime(args, false);
+        movetime = std::max(new_movetime / 3, new_movetime - time_spent / 4);
+        time_spent = .0;
+        str::pdebug("info string changed time", movetime);
+      }
+      // check exit condition
+      return_from_search = return_from_search || uci.check_if_should_stop(args, time_spent, movetime);
+      if(verbose && !pondering && !uci.should_stop) {
+        uci.respond_full_iddfs(engine_idstate, nps, time_spent);
+      }
+      return !return_from_search;
+    }, searchmoves);
+    // if we ended search early in pondering mode, we should wait for an explicit stop or ponderhit
+    while(pondering && !uci.should_stop) {
+      uci.continue_read_cmd(false);
+      if(uci.should_ponderhit) {
+        pondering = false;
+      }
+    }
+    // this is what we do when we timed out
+    if(!pondering && !uci.should_stop) {
+      uci.respond_final_iddfs(engine_idstate, bestmove, time_spent);
+    }
+    if(engine_idstate.pondermove() != board::nullmove) {
+      uci.respond(uci.RESP_BESTMOVE, engine_ptr->_move_str(bestmove), "ponder"s, engine_ptr->_move_str(engine_idstate.pondermove()));
+    } else {
+      uci.respond(uci.RESP_BESTMOVE, engine_ptr->_move_str(bestmove));
+    }
+    str::pdebug("info string NOTE: search is over");
+    uci.should_ponderhit = false;
+  }
+};
+
+
+template <typename EngineT = EngineUCI>
+struct UCI {
+  using score_t = typename Engine::score_t;
+  using depth_t = typename Engine::depth_t;
+
+  // state-changing message passing
+  bool debug_mode = false;
+  bool should_quit = false;
+  bool should_stop = false;
+  bool should_ponderhit = false;
+
+  EngineT engine_wrapper;
+  EngineT::Options &engine_options = engine_wrapper.engine_options;
+
+  UCI()
+  {}
+
+  // remove engine: no memory leaks, no nothing, ready to start again
+  void destroy() {
+    engine_wrapper.destroy();
   }
 
   // https://gist.github.com/DOBRO/2592c6dad754ba67e6dcaec8c90165bf
@@ -309,61 +473,14 @@ struct UCI {
     return bitmask::_pos_pair(i, j);
   }
 
-  // fully parametrized go-command
-  typedef struct _go_command {
-    std::vector<move_t> searchmoves = {};
-    bool ponder = false;
-    double wtime = DBL_MAX;
-    double btime = DBL_MAX;
-    double winc = 0;
-    double binc = 0;
-    int movestogo = 0;
-    depth_t depth = INT16_MAX;
-    size_t nodes = SIZE_MAX;
-    size_t mate = SIZE_MAX;
-    double movetime = DBL_MAX;
-    bool infinite = false;
-  } go_command;
-
-  // same but only for perft, this is not in the UCI spec
-  typedef struct _go_perft_command {
-    depth_t depth;
-  } go_perft_command;
-
   std::string to_string(const cmd_t &cmd) {
     return "{"s + str::join(cmd, ", "s) + "}"s;
   }
 
-  // bunch of options
-  const std::map<std::string, bool> boolOptions = {
-    {"UCI_Chess960"s, false},
-    {"Ponder"s, false},
-  };
-
-  const std::map<std::string, std::tuple<int, int, int>> spinOptions = {
-    {"Hash"s, std::make_tuple(4, 4096, (int)engine_options.hash_mb)},
-#ifdef DC0_ENABLED
-    {"DC0Simulations"s, std::make_tuple(1, 100000, 800)},
-    {"DC0BatchSize"s, std::make_tuple(1, 1024, 64)},
-    {"DC0Blocks"s, std::make_tuple(1, 40, 6)},
-    {"DC0Filters"s, std::make_tuple(16, 1024, 128)},
-#endif
-  };
-
-  const std::map<std::string, std::pair<cmd_t, std::string>> comboOptions = {
-    {"UCI_Variant"s, std::make_pair(cmd_t{"chess"s, "crazyhouse"s}, "chess"s)},
-#ifdef DC0_ENABLED
-    {"SearchMode"s, std::make_pair(cmd_t{"alphabeta"s, "dc0"s}, "alphabeta"s)},
-#endif
-  };
-
-  const std::map<std::string, std::string> stringOptions {
-    {"SyzygyPath"s, "<empty>"s},
-#ifdef DC0_ENABLED
-    {"DC0ModelPath"s, "<empty>"s},
-    {"DC0Device"s, "<empty>"s},
-#endif
-  };
+  const std::map<std::string, bool> &boolOptions = engine_wrapper.boolOptions;
+  const std::map<std::string, std::tuple<int, int, int>> &spinOptions = engine_wrapper.spinOptions;
+  const std::map<std::string, std::pair<cmd_t, std::string>> &comboOptions = engine_wrapper.comboOptions;
+  const std::map<std::string, std::string> &stringOptions = engine_wrapper.stringOptions;
 
   // tell engine to stop; wait until it stops if it's running; clean up
   void sched_stop_engine() {
@@ -377,9 +494,9 @@ struct UCI {
 
   void process_cmd(cmd_t &cmd, bool main_loop) {
     if(!main_loop) {
-      assert(engine_ptr);
+      assert(engine_wrapper.engine_ptr);
     }
-    assert(engine_ptr || main_loop);
+    assert(engine_wrapper.engine_ptr || main_loop);
     str::pdebug("info string processing cmd", to_string(cmd));
     while(!cmdmap.contains(cmd.front())) {
       str::perror("error: unknown command", cmd.front());
@@ -458,40 +575,14 @@ struct UCI {
               str::perror("error: unknown optvalue", optvalue.value(), "for option", optname.value());
               abort();
             }
-            if(optname.value() == "UCI_Chess960"s) {
-              engine_options.chess960 = val;
-              str::pdebug("info string setoption UCI_Chess960 =", optvalue.value());
-            } else {
+            if(!engine_wrapper.opt_bool(optname.value(), val)) {
               str::pdebug("info string unknown option", optname.value());
             }
           } else if(spinOptions.contains(optname.value())) {
             const auto &[_lo, _hi, _dflt] = spinOptions.at(optname.value());
             int v = atoi(optvalue.value().c_str());
             int val = std::min(_hi, std::max(_lo, v));
-            if(optname.value() == "Hash"s) {
-              engine_options.hash_mb = val;
-              str::pdebug("info string setoption Hash =", optname.value(), val);
-            }
-#ifdef DC0_ENABLED
-            else if(optname.value() == "DC0Simulations"s) {
-              engine_options.dc0_simulations = val;
-              if (dc0_engine) dc0_engine->set_simulations(val);
-              str::pdebug("info string setoption DC0Simulations =", val);
-            } else if(optname.value() == "DC0BatchSize"s) {
-              engine_options.dc0_batch_size = val;
-              if (dc0_engine) dc0_engine->set_batch_size(val);
-              str::pdebug("info string setoption DC0BatchSize =", val);
-            } else if(optname.value() == "DC0Blocks"s) {
-              engine_options.dc0_blocks = val;
-              dc0_engine.reset();  // force re-init with new architecture
-              str::pdebug("info string setoption DC0Blocks =", val);
-            } else if(optname.value() == "DC0Filters"s) {
-              engine_options.dc0_filters = val;
-              dc0_engine.reset();  // force re-init with new architecture
-              str::pdebug("info string setoption DC0Filters =", val);
-            }
-#endif
-            else {
+            if(!engine_wrapper.opt_spin(optname.value(), val)) {
               str::pdebug("info string unknown option", optname.value());
             }
           } else if(comboOptions.contains(optname.value())) {
@@ -499,50 +590,12 @@ struct UCI {
             if(std::find(_vals.begin(), _vals.end(), optvalue.value()) == std::end(_vals)) {
               str::perror("error: unknown optvalue", optvalue.value(), "for option", optname.value());
             }
-            if(optname.value() == "UCI_Variant"s) {
-              if(optvalue.value() == "chess"s) {
-                engine_options.crazyhouse = false;
-              } else if(optvalue.value() == "crazyhouse"s) {
-                engine_options.crazyhouse = true;
-              }
-              str::pdebug("info string setoption UCI_Variant =", optname.value());
-            }
-#ifdef DC0_ENABLED
-            else if(optname.value() == "SearchMode"s) {
-              engine_options.search_mode = optvalue.value();
-              str::pdebug("info string setoption SearchMode =", optvalue.value());
-            }
-#endif
-            else {
+            if(!engine_wrapper.opt_combo(optname.value(), optvalue.value())) {
               str::pdebug("info string unknown option", optname.value());
             }
           } else if(stringOptions.contains(optname.value())) {
-            const auto &_dflt = stringOptions.at(optname.value());
-            if(optname.value() == "SyzygyPath"s) {
-              if(optvalue.value() != _dflt) {
-                std::filesystem::path syzygy_path(optvalue.value());
-                if(!std::filesystem::exists(syzygy_path)) {
-                  str::perror("syzygy path doesn't exist <", syzygy_path, ">");
-                  abort();
-                }
-                engine_options.syzygy_path.emplace(optvalue.value());
-              } else {
-                engine_options.syzygy_path.reset();
-              }
-              str::pdebug("info string setoption SyzygyPath =", optvalue.value());
-            }
-#ifdef DC0_ENABLED
-            else if(optname.value() == "DC0ModelPath"s) {
-              engine_options.dc0_model_path = (optvalue.value() == _dflt) ? "" : optvalue.value();
-              dc0_engine.reset();  // force re-init with new model
-              str::pdebug("info string setoption DC0ModelPath =", optvalue.value());
-            } else if(optname.value() == "DC0Device"s) {
-              engine_options.dc0_device = (optvalue.value() == _dflt) ? "" : optvalue.value();
-              dc0_engine.reset();  // force re-init with new device
-              str::pdebug("info string setoption DC0Device =", optvalue.value());
-            }
-#endif
-            else {
+            const auto &val_default = stringOptions.at(optname.value());
+            if(!engine_wrapper.opt_string(optname.value(), optvalue.value(), val_default)) {
               str::pdebug("info string unknown option", optname.value());
             }
           }
@@ -561,9 +614,6 @@ struct UCI {
             return;
           }
           destroy();
-#ifdef DC0_ENABLED
-          if (dc0_engine) dc0_engine->new_game();
-#endif
         }
       return;
       case CMD_POSITION:
@@ -595,22 +645,16 @@ struct UCI {
         }
         f.chess960 = engine_options.chess960;
         // use set_fen if engine exists with matching variants, otherwise init
-        if(engine_ptr && engine_ptr->chess960 == f.chess960 && engine_ptr->crazyhouse == f.crazyhouse) {
-          engine_ptr->set_fen(f);
-          should_stop = false;
-        } else {
-          init(f);
-        }
+        MoveLine moves;
         if(ind < cmd.size() && cmd[ind++] == "moves"s) {
-          MoveLine moves;
           for(; ind < cmd.size(); ++ind) {
             moves.put(scan_move(cmd[ind]));
           }
-          str::pdebug("info string moves"s, engine_ptr->_line_str(moves, true));
-          for(const auto m : moves) {
-            engine_ptr->make_move(m);
-          }
+          str::pdebug("info string moves"s, engine_wrapper.get_engine()._line_str(moves, true));
         }
+        bool r = engine_wrapper.set_position_with_moves(f, moves);
+        assert(r);
+        should_stop = false;
         str::pdebug("info string position set");
         //engine_ptr->print();
       }
@@ -621,18 +665,19 @@ struct UCI {
           sched_cmd(cmd);
           return;
         }
-        if(!engine_ptr) {
+        if(!engine_wrapper.engine_ptr) {
           cmd_t forwarded_cmd{"position"s, "startpos"s};
           process_cmd(forwarded_cmd, main_loop);
         }
-        const fen::FEN f = engine_ptr->export_as_fen();
+        Engine &engine = engine_wrapper.get_engine();
+        const fen::FEN f = engine.export_as_fen();
         respond(RESP_DISPLAY, "fen:"s, fen::export_as_string(f));
-        const double hashfull = double(engine_ptr->zb_occupied) / double(engine_ptr->zobrist_size);
-        const double hit_rate = double(engine_ptr->zb_hit) / double(1e-9 + engine_ptr->zb_hit + engine_ptr->zb_miss);
+        const double hashfull = double(engine.zb_occupied) / double(engine.zobrist_size);
+        const double hit_rate = double(engine.zb_hit) / double(1e-9 + engine.zb_hit + engine.zb_miss);
         respond(RESP_DISPLAY, "stat_hashfull:"s, hashfull);
         respond(RESP_DISPLAY, "stat_hit_rate:"s, hit_rate);
-        respond(RESP_DISPLAY, "stat_tb_hits:"s, engine_ptr->tb_hit);
-        respond(RESP_DISPLAY, "stat_nodes_searched:"s, engine_ptr->nodes_searched);
+        respond(RESP_DISPLAY, "stat_tb_hits:"s, engine.tb_hit);
+        respond(RESP_DISPLAY, "stat_nodes_searched:"s, engine.nodes_searched);
       }
       return;
       case CMD_GO:
@@ -642,7 +687,7 @@ struct UCI {
           sched_cmd(cmd);
           return;
         }
-        assert(engine_ptr);
+        assert(engine_wrapper.engine_ptr);
         // perft command
         size_t ind = 1;
         if(cmd.size() > ind && cmd[ind] == "perft"s) {
@@ -717,7 +762,9 @@ struct UCI {
       }
       return;
       default:
+      {
         str::perror("error: unknown command");
+      }
       return;
     }
   }
@@ -727,7 +774,7 @@ struct UCI {
     const double prev_time_spent = time_spent;
     const size_t prev_nodes_searched = nodes_searched;
     time_spent = 1e-9*duration_cast<nanoseconds>(system_clock::now()-start).count();
-    nodes_searched = engine_ptr->nodes_searched;
+    nodes_searched = engine_wrapper.get_engine().nodes_searched;
     const double nps = double(nodes_searched - prev_nodes_searched) / (time_spent - prev_time_spent);
     return nps;
   }
@@ -736,23 +783,24 @@ struct UCI {
     return (
         should_stop
         || (!args.infinite && time_spent >= args.movetime)
-        || engine_ptr->nodes_searched >= args.nodes
+        || engine_wrapper.get_engine().nodes_searched >= args.nodes
         || time_spent >= time_to_use
     );
   }
 
   std::string get_score_type_string(score_t score) const {
     std::string s = ""s;
-    if(!engine_ptr->score_is_mate(score)) {
+    const Engine &engine = engine_wrapper.get_engine();
+    if(!engine.score_is_mate(score)) {
       s += "cp"s;
     } else {
       s += "mate"s;
     }
     s += " "s;
-    if(!engine_ptr->score_is_mate(score)) {
+    if(!engine.score_is_mate(score)) {
       s += std::to_string(score / Engine::CENTIPAWN);
     } else {
-      depth_t mate_in_ply = engine_ptr->score_mate_in(score);
+      depth_t mate_in_ply = engine.score_mate_in(score);
       mate_in_ply -= (mate_in_ply < 0) ? 1 : -1;
       s += std::to_string(mate_in_ply / 2);
     }
@@ -766,7 +814,7 @@ struct UCI {
     } else if(args.movetime != DBL_MAX) {
       return std::max(args.movetime - 1., args.movetime * .5);
     }
-    const COLOR c = engine_ptr->activePlayer();
+    const COLOR c = engine_wrapper.get_engine().activePlayer();
     double inctime = (c == WHITE) ? args.winc : args.binc;
     inctime = std::max(inctime - 2., inctime * .3);
     double tottime = (c == WHITE) ? args.wtime : args.btime;
@@ -776,199 +824,51 @@ struct UCI {
 
   // intermediate responses while thinking. when pondering, this might confuse the GUI
   void respond_full_iddfs(const Engine::iddfs_state &engine_idstate, size_t nps, double time_spent) {
-    const double hashfull = double(engine_ptr->zb_occupied) / double(engine_ptr->zobrist_size);
+    Engine &engine = engine_wrapper.get_engine();
+    const double hashfull = double(engine.zb_occupied) / double(engine.zobrist_size);
     respond(RESP_INFO, "depth"s, engine_idstate.curdepth,
                        "seldepth"s, engine_idstate.pline.size(),
-                       "nodes"s, engine_ptr->nodes_searched,
+                       "nodes"s, engine.nodes_searched,
                        "nps"s, size_t(nps),
-                       "tb_hits", engine_ptr->tb_hit,
+                       "tb_hits", engine.tb_hit,
                        "score"s, get_score_type_string(engine_idstate.eval),
-                       "pv"s, engine_ptr->_line_str(engine_idstate.pline, true),
+                       "pv"s, engine._line_str(engine_idstate.pline, true),
                        "time"s, int(round(time_spent * 1e3)),
                        "hashfull"s, int(round(hashfull * 1e3)));
   }
 
   // when out of time, spit out this final response.
   void respond_final_iddfs(const Engine::iddfs_state &engine_idstate, move_t bestmove, double time_spent) {
-    const double hashfull = double(engine_ptr->zb_occupied) / double(engine_ptr->zobrist_size);
+    Engine &engine = engine_wrapper.get_engine();
+    const double hashfull = double(engine.zb_occupied) / double(engine.zobrist_size);
     respond(RESP_INFO, "depth"s, engine_idstate.curdepth,
                        "seldepth"s, engine_idstate.pline.size(),
-                       "nodes"s, engine_ptr->nodes_searched,
-                       "tb_hits", engine_ptr->tb_hit,
+                       "nodes"s, engine.nodes_searched,
+                       "tb_hits", engine.tb_hit,
                        "score"s, get_score_type_string(engine_idstate.eval),
-                       "pv"s, engine_ptr->_line_str(engine_idstate.pline, true),
+                       "pv"s, engine._line_str(engine_idstate.pline, true),
                        "time"s, int(round(time_spent * 1e3)),
                        "hashfull"s, int(round(hashfull * 1e3)));
   }
 
-#ifdef DC0_ENABLED
-  void perform_go_dc0(go_command args) {
-    _printf("GO COMMAND (dc0)\n");
-    if (!ensure_dc0_engine()) {
-      str::perror("error: failed to initialize dc0 engine");
-      respond(RESP_BESTMOVE, "0000"s);
-      return;
-    }
-
-    // Set the current board position on the dc0 engine
-    dc0_engine->set_position(engine_ptr->as_board());
-
-    // Map UCI go parameters to dc0 SearchParams
-    dc0::SearchParams sp;
-    sp.simulations = engine_options.dc0_simulations;
-    sp.batch_size = engine_options.dc0_batch_size;
-    sp.movetime = 0.0;
-    sp.infinite = args.infinite;
-
-    // nodes → simulations
-    if (args.nodes != SIZE_MAX) {
-      sp.simulations = static_cast<int>(std::min(args.nodes, size_t(100000)));
-    }
-
-    // movetime (already in seconds in go_command)
-    if (args.movetime != DBL_MAX) {
-      sp.movetime = std::max(args.movetime - 0.05, args.movetime * 0.5);
-    }
-
-    // Time control: compute movetime from wtime/btime/winc/binc
-    if (!args.infinite && args.movetime == DBL_MAX && args.nodes == SIZE_MAX) {
-      double tc_movetime = time_control_movetime(args, false);
-      if (tc_movetime < 1e9) {
-        sp.movetime = tc_movetime;
-        sp.simulations = 100000;  // effectively unlimited; time will stop us
-      }
-    }
-
-    if (args.infinite) {
-      sp.simulations = 100000;
-    }
-
-    // Info callback: emit UCI info lines
-    auto info_cb = [this](const dc0::SearchInfo& info) {
-      // Build PV string
-      std::string pv_str;
-      for (size_t i = 0; i < info.pv.size(); ++i) {
-        if (i > 0) pv_str += ' ';
-        pv_str += engine_ptr->_move_str(info.pv[i]);
-      }
-      respond(RESP_INFO, "depth"s, info.depth,
-                         "seldepth"s, static_cast<int>(info.pv.size()),
-                         "nodes"s, info.nodes,
-                         "nps"s, info.nps,
-                         "score"s, "cp "s + std::to_string(info.score_cp),
-                         "pv"s, pv_str,
-                         "time"s, info.time_ms);
-    };
-
-    // Stop check: read stdin for stop command
-    auto stop_check = [this]() -> bool {
-      continue_read_cmd(false);
-      return should_stop;
-    };
-
-    move_t bestmove = dc0_engine->go(sp, info_cb, stop_check);
-
-    if (bestmove == board::nullmove) {
-      respond(RESP_BESTMOVE, "0000"s);
-    } else {
-      respond(RESP_BESTMOVE, engine_ptr->_move_str(bestmove));
-    }
-    str::pdebug("info string NOTE: dc0 search is over");
-  }
-#endif
-
   void perform_go(go_command args) {
-#ifdef DC0_ENABLED
-    if (engine_options.search_mode == "dc0"s) {
-      perform_go_dc0(args);
-      return;
-    }
-#endif
-    _printf("GO COMMAND\n");
-    _printf("ponder: %d\n", args.ponder ? 1 : 0);
-    _printf("wtime: %.6f, btime: %.6f\n", args.wtime, args.btime);
-    _printf("winc: %.6f, binc: %.6f\n", args.winc, args.binc);
-    _printf("movestogo: %d\n", args.movestogo);
-    _printf("depth: %hd\n", args.depth);
-    _printf("nodes: %lu\n", args.nodes);
-    _printf("mate: %lu\n", args.mate);
-    _printf("movetime: %.6f\n", args.movetime);
-    _printf("infinite: %d\n", args.infinite ? 1 : 0);
-    std::vector<std::string> searchmoves_s;
-    for(auto&s:args.searchmoves)searchmoves_s.emplace_back(engine_ptr->_move_str(s));
-    std::string s = str::join(searchmoves_s, ", "s);
-    _printf("searchmoves: [%s]\n", s.c_str());
-    // TODO mate, movestogo
-    double movetime = time_control_movetime(args, args.ponder);
-    const auto start = system_clock::now();
-    double time_spent = 0.;
-    size_t nodes_searched = 0;
-    const std::unordered_set<move_t> searchmoves(args.searchmoves.begin(), args.searchmoves.end());
-    if(!args.ponder) {
-      engine_idstate.reset();
-    } else if(engine_idstate.pline.size() >= 2) {
-      engine_idstate.ponderhit();
-      engine_idstate.ponderhit();
-    }
-    bool pondering = args.ponder;
-    bool return_from_search = false;
-    const move_t bestmove = engine_ptr->start_thinking(args.depth, engine_idstate, [&](bool verbose) mutable -> bool {
-      continue_read_cmd(false);
-      if(engine_idstate.pline.empty()) {
-        return true;
-      } else if(return_from_search) {
-        return false;
-      }
-      // update stats
-      const size_t nps = update_nodes_per_second(start, time_spent, nodes_searched);
-      // switch from infinite pondering to thinking
-      if(pondering && movetime > 1e9 && should_ponderhit) {
-        pondering = false;
-        const double new_movetime = time_control_movetime(args, false);
-        movetime = std::max(new_movetime / 3, new_movetime - time_spent / 4);
-        time_spent = .0;
-        str::pdebug("info string changed time", movetime);
-      }
-      // check exit condition
-      return_from_search = return_from_search || check_if_should_stop(args, time_spent, movetime);
-      if(verbose && !pondering && !should_stop) {
-        respond_full_iddfs(engine_idstate, nps, time_spent);
-      }
-      return !return_from_search;
-    }, searchmoves);
-    // if we ended search early in pondering mode, we should wait for an explicit stop or ponderhit
-    while(pondering && !should_stop) {
-      continue_read_cmd(false);
-      if(should_ponderhit) {
-        pondering = false;
-      }
-    }
-    // this is what we do when we timed out
-    if(!pondering && !should_stop) {
-      respond_final_iddfs(engine_idstate, bestmove, time_spent);
-    }
-    if(engine_idstate.pondermove() != board::nullmove) {
-      respond(RESP_BESTMOVE, engine_ptr->_move_str(bestmove), "ponder"s, engine_ptr->_move_str(engine_idstate.pondermove()));
-    } else {
-      respond(RESP_BESTMOVE, engine_ptr->_move_str(bestmove));
-    }
-    str::pdebug("info string NOTE: search is over");
-    should_ponderhit = false;
+    engine_wrapper.perform_go(args, *this);
   }
 
   void perform_go_perft(go_perft_command args) {
     const depth_t depth = args.depth;
     size_t total = 0;
     {
-      decltype(auto) store_scope = engine_ptr->get_zobrist_perft_scope();
-      engine_ptr->iter_moves([&](pos_t i, pos_t j) mutable -> void {
+      Engine &engine = engine_wrapper.get_engine();
+      decltype(auto) store_scope = engine.get_zobrist_perft_scope();
+      engine.iter_moves([&](pos_t i, pos_t j) mutable -> void {
         continue_read_cmd(false);
         const move_t m = bitmask::_pos_pair(i, j);
-        std::string sm = engine_ptr->_move_str(m);
-        engine_ptr->make_move(m);
+        std::string sm = engine._move_str(m);
+        decltype(auto) mscope = engine.move_scope(m);
         size_t nds = 0;
         if(depth > 1) {
-          nds = engine_ptr->perft(depth-1);
+          nds = engine.perft(depth-1);
         } else if(depth == 1) {
           nds = 1;
         } else {
@@ -976,7 +876,6 @@ struct UCI {
         }
         str::print(sm + ":", nds);
         total += nds;
-        engine_ptr->retract_move();
       });
     }
     str::print();
