@@ -74,7 +74,7 @@ public:
         // Input: (22, 8, 8) float tensor
         auto input = torch::from_blob(
             const_cast<float*>(ex.planes),
-            {ENCODING_PLANES, 8, 8}, torch::kFloat32
+            {ENCODING_PLANES, board::LEN, board::LEN}, torch::kFloat32
         ).clone();
 
         // Target: policy (4672) + value (1 float, but stored as index into {win, draw, loss})
@@ -523,3 +523,4 @@ inline GenerationResult run_generation(
 }
 
 } // namespace dc0
+

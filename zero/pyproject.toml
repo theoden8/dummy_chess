@@ -4,8 +4,9 @@ version = "0.0.1"
 description = "AlphaZero-style engine for dummy_chess"
 requires-python = ">=3.11"
 dependencies = [
-    "torch==2.5.1",
-    "numpy",
+    #"torch==2.5.1",
+    "torch==2.10.0",
+    "numpy==2.4.2",
 ]
 
 [dependency-groups]

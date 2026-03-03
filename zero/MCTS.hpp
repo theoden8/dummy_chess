@@ -83,7 +83,9 @@ struct MCTSNode {
         }
 
         if (legal_moves.empty()) {
-            // Terminal node (no legal moves) — handled by caller
+            // No legal moves passed policy filter — treat as terminal (draw)
+            is_terminal = true;
+            terminal_value = 0.0f;
             return;
         }
 
@@ -100,11 +102,12 @@ struct MCTSNode {
 
         // Create edges
         edges.reserve(legal_moves.size());
-        for (auto& mi : legal_moves) {
-            MCTSEdge edge;
-            edge.move = mi.move;
-            edge.policy_index = mi.policy_index;
-            edge.prior = mi.raw_policy / sum_exp;
+        for (const auto& mi : legal_moves) {
+            MCTSEdge edge = (MCTSEdge){
+              .move=mi.move,
+              .policy_index=mi.policy_index,
+              .prior=mi.raw_policy / sum_exp,
+            };
             edges.push_back(std::move(edge));
         }
     }
@@ -135,22 +138,6 @@ struct MCTSNode {
     }
 };
 
-// Evaluation function signature:
-// Given a board position, return (policy_logits[4672], value_for_current_player).
-// value is from the perspective of the side to move: +1 = winning, -1 = losing.
-using EvalFunction = std::function<std::pair<std::vector<float>, float>(const Board&)>;
-
-// Batched evaluation: encode N boards, return N (policy, value) pairs.
-// Input: encoded planes (N * ENCODING_SIZE floats), legal masks (N * POLICY_SIZE bools), count N.
-// Output: policies (N * POLICY_SIZE floats as logits), values (N floats).
-using BatchedEvalFunction = std::function<void(
-    const float* planes_batch,     // N * ENCODING_SIZE
-    const bool* masks_batch,       // N * POLICY_SIZE
-    int batch_size,
-    float* out_policies,           // N * POLICY_SIZE (logits)
-    float* out_values              // N
-)>;
-
 // MCTS search tree
 class MCTSTree {
 public:
@@ -170,12 +157,13 @@ public:
     }
 
     // Run N simulations from the root.
-    void run_simulations(int n_simulations, const EvalFunction& eval_fn) {
+    template <typename EvalF>
+    void run_simulations(int n_simulations, EvalF &&eval_fn) {
         if (!root_ || !root_board_) return;
 
         // Expand root if needed
         if (!root_->is_expanded) {
-            float root_value = expand_node(root_.get(), *root_board_, eval_fn);
+            float root_value = expand_node(*root_.get(), *root_board_, std::forward<EvalF>(eval_fn));
             root_->visit_count += 1;  // count the root expansion
             (void)root_value;  // root value not backed up further
             if (add_noise) {
@@ -186,15 +174,16 @@ public:
         for (int sim = 0; sim < n_simulations; ++sim) {
             // Make a working copy of the board for tree traversal
             Board board(*root_board_);
-            run_single_simulation(root_.get(), board, eval_fn);
+            run_single_simulation(root_.get(), board, std::forward<EvalF>(eval_fn));
         }
     }
 
     // Run N simulations using batched neural network evaluation.
     // Collects up to batch_size leaves per GPU call for much higher throughput.
+    template <typename BatchedEvalF>
     void run_simulations_batched(
         int n_simulations,
-        const BatchedEvalFunction& batch_eval_fn,
+        BatchedEvalF &&batch_eval_fn,
         int batch_size = 64
     ) {
         if (!root_ || !root_board_) return;
@@ -427,7 +416,8 @@ public:
 
     // Ensure root is expanded using the batched eval function.
     // Returns true if root is ready for search (expanded or terminal).
-    bool ensure_root_expanded(const BatchedEvalFunction& batch_eval_fn) {
+    template <typename BatchedEvalF>
+    bool ensure_root_expanded(BatchedEvalF && batch_eval_fn) {
         if (!root_ || !root_board_) return false;
         if (root_->is_expanded) return true;
 
@@ -550,7 +540,7 @@ private:
     // UCB(s,a) = Q(s,a) + c_puct * P(s,a) * sqrt(N(s)) / (1 + N(s,a))
     // Virtual losses are included in Q and N for batched MCTS diversification.
     MCTSEdge* select_edge(MCTSNode* node) {
-        assert(node->is_expanded && !node->edges.empty());
+        assert(node != nullptr && node->is_expanded && !node->edges.empty());
 
         // Include virtual losses in parent visit count
         int32_t total_vl = 0;
@@ -575,19 +565,20 @@ private:
 
     // Expand a leaf node: evaluate with the neural network and create edges.
     // Returns the value of this position from the side-to-move's perspective.
-    float expand_node(MCTSNode* node, Board& board, const EvalFunction& eval_fn) {
+    template <typename EvalF>
+    float expand_node(MCTSNode &node, Board& board, EvalF &&eval_fn) {
         // Check for terminal position
         if (board.is_checkmate()) {
-            node->is_terminal = true;
+            node.is_terminal = true;
             // The side to move is checkmated -> loss for current player
-            node->terminal_value = -1.0f;
-            node->is_expanded = true;
+            node.terminal_value = -1.0f;
+            node.is_expanded = true;
             return -1.0f;
         }
         if (board.is_draw()) {
-            node->is_terminal = true;
-            node->terminal_value = 0.0f;
-            node->is_expanded = true;
+            node.is_terminal = true;
+            node.terminal_value = 0.0f;
+            node.is_expanded = true;
             return 0.0f;
         }
 
@@ -599,18 +590,20 @@ private:
         auto [policy, value] = eval_fn(board);
 
         // Expand with policy
-        node->expand(policy.data(), legal_mask);
+        node.expand(policy.data(), legal_mask);
 
         return value;
     }
 
     // Run a single MCTS simulation: select -> expand -> backprop.
     // board is modified during traversal and restored after.
-    void run_single_simulation(MCTSNode* root, Board& board, const EvalFunction& eval_fn) {
+    template <typename EvalF>
+    void run_single_simulation(MCTSNode* root, Board& board, EvalF &&eval_fn) {
         // Path from root to leaf for backpropagation
         std::vector<PathEntry> path;
 
         MCTSNode* node = root;
+        decltype(auto) rec_mscope = board.recursive_move_scope();
 
         // Selection: walk down the tree picking best edges
         while (node->is_expanded && !node->is_terminal) {
@@ -620,42 +613,29 @@ private:
             path.push_back({node, edge});
 
             // Make the move on the board
-            board.make_move(edge->move);
+            rec_mscope.scope(edge->move);
 
             if (!edge->child) {
                 // Leaf: create and expand child, get value in one NN call
                 edge->child = std::make_unique<MCTSNode>();
-                float leaf_value = expand_node(edge->child.get(), board, eval_fn);
+                float leaf_value = expand_node(*edge->child.get(), board, std::forward<EvalF>(eval_fn));
 
                 // Backpropagate (value is from leaf's perspective)
                 backpropagate(path, leaf_value);
 
-                // Undo all moves
-                for (size_t i = path.size(); i > 0; --i) {
-                    board.retract_move();
-                }
                 return;
             }
 
             node = edge->child.get();
         }
 
-        // Reached a terminal node or an expanded node with no edges
-        float value;
-        if (node->is_terminal) {
-            value = node->terminal_value;
-        } else {
-            // Shouldn't happen in normal flow, but handle gracefully
-            auto [policy, val] = eval_fn(board);
-            value = val;
-        }
-
+        // Reached a terminal node — backpropagate its value
+        // Note: do NOT use abort()/__builtin_unreachable() in the else branch.
+        // [[noreturn]] enables the compiler to eliminate the edges.empty() break
+        // in the while loop above, causing select_edge() on empty edges → nullptr → UB.
+        assert(node->is_terminal);
+        float value = node->is_terminal ? node->terminal_value : 0.0f;
         backpropagate(path, value);
-
-        // Undo all moves
-        for (size_t i = path.size(); i > 0; --i) {
-            board.retract_move();
-        }
     }
 
     // Backpropagate value up the path.

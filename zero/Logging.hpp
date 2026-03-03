@@ -88,14 +88,7 @@ inline void reset_clock() { detail::start_time() = std::chrono::steady_clock::no
 } // namespace log
 } // namespace dc0
 
-#define DC0_LOG_DEBUG(fmt, ...) \
-    dc0::log::detail::log_msg(dc0::log::Level::DEBUG, __FILE__, __LINE__, fmt, ##__VA_ARGS__)
-
-#define DC0_LOG_INFO(fmt, ...) \
-    dc0::log::detail::log_msg(dc0::log::Level::INFO, __FILE__, __LINE__, fmt, ##__VA_ARGS__)
-
-#define DC0_LOG_WARN(fmt, ...) \
-    dc0::log::detail::log_msg(dc0::log::Level::WARN, __FILE__, __LINE__, fmt, ##__VA_ARGS__)
-
-#define DC0_LOG_ERROR(fmt, ...) \
-    dc0::log::detail::log_msg(dc0::log::Level::ERROR, __FILE__, __LINE__, fmt, ##__VA_ARGS__)
+#define DC0_LOG_DEBUG(fmt, ...) dc0::log::detail::log_msg(dc0::log::Level::DEBUG, __FILE__, __LINE__, fmt, ##__VA_ARGS__)
+#define DC0_LOG_INFO(fmt, ...) dc0::log::detail::log_msg(dc0::log::Level::INFO, __FILE__, __LINE__, fmt, ##__VA_ARGS__)
+#define DC0_LOG_WARN(fmt, ...) dc0::log::detail::log_msg(dc0::log::Level::WARN, __FILE__, __LINE__, fmt, ##__VA_ARGS__)
+#define DC0_LOG_ERROR(fmt, ...) dc0::log::detail::log_msg(dc0::log::Level::ERROR, __FILE__, __LINE__, fmt, ##__VA_ARGS__)

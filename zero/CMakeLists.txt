@@ -97,9 +97,18 @@ FetchContent_Declare(
 )
 # Prevent gtest from overriding compiler/linker settings on Windows
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
-# libtorch forces _GLIBCXX_USE_CXX11_ABI=0 (old ABI).  gtest must match,
-# otherwise std::string symbols from test TUs won't resolve against libgtest.a.
-add_compile_definitions(_GLIBCXX_USE_CXX11_ABI=0)
+# Match libtorch's CXX11 ABI setting so all symbols agree at link time.
+# torch 2.5 used old ABI (=0); torch 2.10+ uses new ABI (=1, the default).
+# TORCH_CXX_FLAGS contains "-D_GLIBCXX_USE_CXX11_ABI=0" when old ABI is used;
+# when it's empty/unset, torch was built with the new ABI.
+if(DC0_USE_TORCH)
+    if(TORCH_CXX_FLAGS)
+        string(FIND "${TORCH_CXX_FLAGS}" "-D_GLIBCXX_USE_CXX11_ABI=0" _abi0_pos)
+        if(_abi0_pos GREATER_EQUAL 0)
+            add_compile_definitions(_GLIBCXX_USE_CXX11_ABI=0)
+        endif()
+    endif()
+endif()
 FetchContent_MakeAvailable(googletest)
 
 # --- Unified test binary: dc0_tests ---

@@ -53,11 +53,11 @@ static constexpr int UNDERPROMO_DFILES[3] = {-1, 0, 1};
 // Underpromotion pieces (not queen — queen promo is a queen-move-type)
 static constexpr PIECE UNDERPROMO_PIECES[3] = {KNIGHT, BISHOP, ROOK};
 
-static constexpr int file_of(int sq) { return sq % 8; }
-static constexpr int rank_of(int sq) { return sq / 8; }
-static constexpr int sq_of(int file, int rank) { return file + rank * 8; }
+static constexpr int file_of(int sq) { return sq % board::LEN; }
+static constexpr int rank_of(int sq) { return sq / board::LEN; }
+static constexpr int sq_of(int file, int rank) { return file + rank * board::LEN; }
 static constexpr bool on_board(int file, int rank) {
-    return file >= 0 && file < 8 && rank >= 0 && rank < 8;
+    return file >= 0 && file < board::LEN && rank >= 0 && rank < board::LEN;
 }
 
 // Encode table: [from_sq][to_sq][promo_idx] -> policy index (-1 if invalid)
@@ -90,7 +90,7 @@ static constexpr PIECE promo_idx_to_piece(int idx) {
 
 struct Tables {
     // encode_table[from_sq][to_sq][promo_idx] -> policy index, -1 if invalid
-    int16_t encode_table[64][64][5];
+    int16_t encode_table[board::SIZE][board::SIZE][5];
     // decode_table[policy_idx] -> DecodedMove
     DecodedMove decode_table[POLICY_SIZE];
     // valid[policy_idx] -> true if this slot maps to a real move
@@ -98,8 +98,8 @@ struct Tables {
 
     constexpr Tables() : encode_table{}, decode_table{}, valid{} {
         // Initialize encode table to -1
-        for (int i = 0; i < 64; ++i)
-            for (int j = 0; j < 64; ++j)
+        for (int i = 0; i < board::SIZE; ++i)
+            for (int j = 0; j < board::SIZE; ++j)
                 for (int k = 0; k < 5; ++k)
                     encode_table[i][j][k] = -1;
 
@@ -110,7 +110,7 @@ struct Tables {
         }
 
         // Queen/king moves: 8 directions x 7 distances
-        for (int from_sq = 0; from_sq < 64; ++from_sq) {
+        for (int from_sq = 0; from_sq < board::SIZE; ++from_sq) {
             int ff = file_of(from_sq);
             int fr = rank_of(from_sq);
 
@@ -162,7 +162,7 @@ struct Tables {
                     if (!on_board(tf, promo_to)) continue;
                     int to_sq = sq_of(tf, promo_to);
                     for (int piece_idx = 0; piece_idx < 3; ++piece_idx) {
-                        int mt = 64 + dir_idx * 3 + piece_idx;
+                        int mt = board::SIZE + dir_idx * 3 + piece_idx;
                         int policy_idx = from_sq * NUM_MOVE_TYPES + mt;
                         int promo_idx = piece_to_promo_idx(UNDERPROMO_PIECES[piece_idx]);
                         encode_table[from_sq][to_sq][promo_idx] = (int16_t)policy_idx;
@@ -203,7 +203,7 @@ inline bool is_valid_policy_index(int policy_idx) {
 }
 
 // Encode from engine move_t format.
-// move_t: (from_sq << 8) | to_byte, where to_byte bits 5-0 = to_sq, bits 7-6 = promo
+// move_t: (from_sq << board::LEN) | to_byte, where to_byte bits 5-0 = to_sq, bits 7-6 = promo
 inline int encode_move_t(move_t m) {
     pos_t from_sq = bitmask::first(m) & board::MOVEMASK;
     pos_t to_sq = bitmask::second(m) & board::MOVEMASK;

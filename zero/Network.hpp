@@ -59,11 +59,13 @@ struct ResBlockImpl : torch::nn::Module {
     SEBlock se{nullptr};
 
     ResBlockImpl(int channels, int se_ratio = 4) {
-        conv1 = register_module("conv1",
-            torch::nn::Conv2d(torch::nn::Conv2dOptions(channels, channels, 3).padding(1).bias(false)));
+        conv1 = register_module("conv1", torch::nn::Conv2d(
+            torch::nn::Conv2dOptions(channels, channels, 3).padding(1).bias(false))
+        );
         bn1 = register_module("bn1", torch::nn::BatchNorm2d(channels));
-        conv2 = register_module("conv2",
-            torch::nn::Conv2d(torch::nn::Conv2dOptions(channels, channels, 3).padding(1).bias(false)));
+        conv2 = register_module("conv2", torch::nn::Conv2d(
+            torch::nn::Conv2dOptions(channels, channels, 3).padding(1).bias(false))
+        );
         bn2 = register_module("bn2", torch::nn::BatchNorm2d(channels));
         se = register_module("se", SEBlock(channels, se_ratio));
     }

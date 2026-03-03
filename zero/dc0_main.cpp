@@ -233,8 +233,7 @@ static int cmd_train(const Args& args) {
 
     // Run generations
     for (int gen = 0; gen < args.generations; ++gen) {
-        dc0::GenerationResult result = dc0::run_generation(
-            gen, best_model, train_model, device, gen_config, accumulated_data);
+        dc0::GenerationResult result = dc0::run_generation(gen, best_model, train_model, device, gen_config, accumulated_data);
 
         DC0_LOG_INFO("--- Generation %d summary ---", gen);
         DC0_LOG_INFO("  Self-play: %d games, %d positions, W/B/D = %d/%d/%d",

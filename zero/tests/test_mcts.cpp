@@ -33,8 +33,7 @@ void random_batch_eval(
 }
 
 Board starting_board() {
-    fen::FEN f = fen::load_from_string(
-        "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+    fen::FEN f = fen::starting_pos;
     return Board(f);
 }
 
@@ -90,8 +89,7 @@ TEST(MCTS, PolicyOutput) {
 }
 
 TEST(MCTS, TerminalCheckmate) {
-    fen::FEN f = fen::load_from_string(
-        "rnb1kbnr/pppp1ppp/4p3/8/6Pq/5P2/PPPPP2P/RNBQKBNR w KQkq - 1 3");
+    fen::FEN f = fen::load_from_string("rnb1kbnr/pppp1ppp/4p3/8/6Pq/5P2/PPPPP2P/RNBQKBNR w KQkq - 1 3");
     Board board(f);
 
     ASSERT_TRUE(board.is_checkmate());
@@ -227,8 +225,7 @@ TEST(MCTS, BatchedPlaysLegalGame) {
 }
 
 TEST(MCTS, BatchedTerminalCheckmate) {
-    fen::FEN f = fen::load_from_string(
-        "rnb1kbnr/pppp1ppp/4p3/8/6Pq/5P2/PPPPP2P/RNBQKBNR w KQkq - 1 3");
+    fen::FEN f = fen::load_from_string("rnb1kbnr/pppp1ppp/4p3/8/6Pq/5P2/PPPPP2P/RNBQKBNR w KQkq - 1 3");
     Board board(f);
 
     ASSERT_TRUE(board.is_checkmate());
@@ -240,3 +237,4 @@ TEST(MCTS, BatchedTerminalCheckmate) {
     EXPECT_TRUE(tree.is_terminal());
     EXPECT_TRUE(tree.root()->edges.empty());
 }
+

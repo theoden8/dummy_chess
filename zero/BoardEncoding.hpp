@@ -63,7 +63,7 @@ inline void bitboard_to_plane(piece_bitboard_t bb, float* plane) {
 
 // Fill a plane with a constant value.
 inline void fill_plane(float* plane, float value) {
-    for (int i = 0; i < 64; ++i) {
+    for (int i = 0; i < board::SIZE; ++i) {
         plane[i] = value;
     }
 }
@@ -79,46 +79,46 @@ inline void encode_board(const Board& board, float* out) {
     for (COLOR c : {WHITE, BLACK}) {
         for (PIECE p : {PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING}) {
             piece_bitboard_t bb = board.get_mask(Piece(p, c));
-            bitboard_to_plane(bb, out + plane * 64);
+            bitboard_to_plane(bb, out + plane * board::SIZE);
             ++plane;
         }
     }
 
     // Planes 12-13: repetition
     int reps = count_repetitions(board);
-    if (reps >= 2) fill_plane(out + 12 * 64, 1.0f);
-    if (reps >= 3) fill_plane(out + 13 * 64, 1.0f);
+    if (reps >= 2) fill_plane(out + 12 * board::SIZE, 1.0f);
+    if (reps >= 3) fill_plane(out + 13 * board::SIZE, 1.0f);
 
     // Plane 14: color to move (1.0 = white, 0.0 = black)
     if (board.activePlayer() == WHITE) {
-        fill_plane(out + 14 * 64, 1.0f);
+        fill_plane(out + 14 * board::SIZE, 1.0f);
     }
 
     // Plane 15: fullmove count / 100
     int fullmove = ((board.get_current_ply() - 1) / 2) + 1;
-    fill_plane(out + 15 * 64, float(fullmove) / 100.0f);
+    fill_plane(out + 15 * board::SIZE, float(fullmove) / 100.0f);
 
     // Planes 16-19: castling rights
-    if (board.is_castling(WHITE, KING_SIDE))  fill_plane(out + 16 * 64, 1.0f);
-    if (board.is_castling(WHITE, QUEEN_SIDE)) fill_plane(out + 17 * 64, 1.0f);
-    if (board.is_castling(BLACK, KING_SIDE))  fill_plane(out + 18 * 64, 1.0f);
-    if (board.is_castling(BLACK, QUEEN_SIDE)) fill_plane(out + 19 * 64, 1.0f);
+    if (board.is_castling(WHITE, KING_SIDE))  fill_plane(out + 16 * board::SIZE, 1.0f);
+    if (board.is_castling(WHITE, QUEEN_SIDE)) fill_plane(out + 17 * board::SIZE, 1.0f);
+    if (board.is_castling(BLACK, KING_SIDE))  fill_plane(out + 18 * board::SIZE, 1.0f);
+    if (board.is_castling(BLACK, QUEEN_SIDE)) fill_plane(out + 19 * board::SIZE, 1.0f);
 
     // Plane 20: en passant target square
     pos_t ep = board.enpassant_trace();
     if (ep != board::nopos) {
-        out[20 * 64 + ep] = 1.0f;
+        out[20 * board::SIZE + ep] = 1.0f;
     }
 
     // Plane 21: halfmove clock / 100
     pos_t halfmoves = board.get_halfmoves();
-    fill_plane(out + 21 * 64, float(halfmoves) / 100.0f);
+    fill_plane(out + 21 * board::SIZE, float(halfmoves) / 100.0f);
 }
 
 // Encode legal moves as a boolean mask over the policy vector (4672 elements).
 // Sets mask[policy_idx] = true for each legal move.
 inline void encode_legal_moves(Board& board, bool* mask) {
-    std::memset(mask, 0, POLICY_SIZE * sizeof(bool));
+    std::memset(mask, 0x00, POLICY_SIZE * sizeof(bool));
     // iter_moves is from Perft (Board's parent doesn't have it, but Engine/Perft does).
     // We use the Board's move/attack masks directly.
     for (pos_t from_sq = 0; from_sq < board::SIZE; ++from_sq) {
@@ -126,8 +126,8 @@ inline void encode_legal_moves(Board& board, bool* mask) {
         if (moves == 0) continue;
         bitmask::foreach(moves, [&](pos_t to_sq) noexcept -> void {
             // Check if this is a promotion
-            int from_rank = from_sq / 8;
-            int to_rank = to_sq / 8;
+            int from_rank = from_sq / board::LEN;
+            int to_rank = to_sq / board::LEN;
             bool is_pawn = (board.get_mask(Piece(PAWN, board.activePlayer())) >> from_sq) & 1;
             bool is_promo = is_pawn &&
                 ((to_rank == 7 && from_rank == 6) || (to_rank == 0 && from_rank == 1));

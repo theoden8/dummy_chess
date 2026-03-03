@@ -177,7 +177,7 @@ public:
     }
 
     // Get the EvalFunction for MCTS (single-position, unbatched)
-    EvalFunction get_eval_function() {
+    decltype(auto) get_eval_function() {
         return [this](const Board& board) -> std::pair<std::vector<float>, float> {
             return evaluate(board);
         };
@@ -230,7 +230,7 @@ public:
     }
 
     // Get the BatchedEvalFunction for batched MCTS
-    BatchedEvalFunction get_batched_eval_function() {
+    decltype(auto) get_batched_eval_function() {
         return [this](const float* planes, const bool* masks, int n,
                       float* out_policies, float* out_values) {
             evaluate_batch(planes, masks, n, out_policies, out_values);
@@ -277,14 +277,13 @@ struct GameResult {
 
 // Play a single self-play game and collect training examples.
 // Returns the game result. Appends training examples to `data`.
+template <typename EvalF>
 inline GameResult play_self_play_game(
-    const EvalFunction& eval_fn,
+    EvalF&& eval_fn,
     const SelfPlayConfig& config,
     TrainingData& data
 ) {
-    fen::FEN start = fen::load_from_string(
-        "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
-    Board board(start);
+    Board board(fen::starting_pos);
 
     MCTSTree tree;
     tree.c_puct = config.c_puct;
@@ -310,15 +309,14 @@ inline GameResult play_self_play_game(
             result.is_checkmate = true;
             result.outcome = (board.activePlayer() == WHITE) ? -1.0f : 1.0f;
             break;
-        }
-        if (board.is_draw()) {
+        } else if (board.is_draw()) {
             result.is_draw = true;
             result.outcome = 0.0f;
             break;
         }
 
         // Run MCTS
-        tree.run_simulations(config.simulations_per_move, eval_fn);
+        tree.run_simulations(config.simulations_per_move, std::forward<EvalF>(eval_fn));
 
         if (move_num > 0 && move_num % 50 == 0) {
             DC0_LOG_DEBUG("  game move %d ...", move_num);
@@ -372,13 +370,13 @@ inline GameResult play_self_play_game(
 
 // Play a single self-play game using batched MCTS inference.
 // Same interface as play_self_play_game but uses run_simulations_batched.
+template <typename BatchedEvalF>
 inline GameResult play_self_play_game_batched(
-    const BatchedEvalFunction& batch_eval_fn,
+    BatchedEvalF &&batch_eval_fn,
     const SelfPlayConfig& config,
     TrainingData& data
 ) {
-    fen::FEN start = fen::load_from_string(
-        "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+    fen::FEN start = fen::starting_pos;
     Board board(start);
 
     MCTSTree tree;
@@ -411,8 +409,7 @@ inline GameResult play_self_play_game_batched(
         }
 
         // Run batched MCTS
-        tree.run_simulations_batched(
-            config.simulations_per_move, batch_eval_fn, config.batch_size);
+        tree.run_simulations_batched(config.simulations_per_move, std::forward<BatchedEvalF>(batch_eval_fn), config.batch_size);
 
         if (move_num > 0 && move_num % 50 == 0) {
             DC0_LOG_DEBUG("  game move %d ...", move_num);
@@ -616,8 +613,6 @@ inline SelfPlayStats run_self_play_parallel(
     auto batch_eval_fn = evaluator.get_batched_eval_function();
     auto t_start = std::chrono::steady_clock::now();
 
-    static const char* START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
-
     // Per-position pending example (mirrors the sequential version's struct).
     struct PendingExample {
         float planes[ENCODING_SIZE];
@@ -638,7 +633,7 @@ inline SelfPlayStats run_self_play_parallel(
         int game_id = -1;
 
         void start_new_game(int id, const SelfPlayConfig& cfg) {
-            board = std::make_unique<Board>(fen::load_from_string(START_FEN));
+            board = std::make_unique<Board>(fen::starting_pos);
             tree = MCTSTree();
             tree.c_puct = cfg.c_puct;
             tree.dirichlet_alpha = cfg.dirichlet_alpha;
