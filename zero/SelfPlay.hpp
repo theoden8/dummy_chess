@@ -731,14 +731,20 @@ inline SelfPlayStats run_self_play_parallel(
     // Main loop: keep running until all games are done
     while (games_completed < num_games) {
         // Phase 0: Finalize any games whose roots are already terminal
-        // (e.g. after advance() lands on checkmate/draw).
+        // (e.g. after advance() lands on checkmate/draw, or the MCTS tree
+        // itself is terminal because expand() found no legal moves).
         for (auto& slot : slots) {
             if (!slot.active) continue;
             if (slot.board->is_checkmate()) {
                 slot.result.is_checkmate = true;
                 slot.result.outcome = (slot.board->activePlayer() == WHITE) ? -1.0f : 1.0f;
                 finalize_game(slot);
-            } else if (slot.board->is_draw()) {
+            } else if (slot.board->is_draw() || slot.tree.is_terminal()) {
+                if (slot.tree.is_terminal() && !slot.board->is_draw()) {
+                    std::string pos = fen::export_as_string(slot.board->export_as_fen());
+                    DC0_LOG_WARN("Game %d move %d: tree terminal but board not checkmate/draw (encoding bug?). FEN: %s",
+                                 slot.game_id + 1, slot.move_num, pos.c_str());
+                }
                 slot.result.is_draw = true;
                 slot.result.outcome = 0.0f;
                 finalize_game(slot);
