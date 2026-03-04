@@ -39,7 +39,12 @@ elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.venv")
         RESULT_VARIABLE _torch_result
     )
     if(_torch_result EQUAL 0)
-        list(APPEND CMAKE_PREFIX_PATH "${_torch_prefix}")
+        # _torch_prefix is .../torch/share/cmake.  The torch install root
+        # (two levels up) must go into CMAKE_PREFIX_PATH so that both
+        # find_package (looks in <prefix>/share/cmake/) and find_library
+        # (looks in <prefix>/lib/) resolve from the venv before /usr/local.
+        get_filename_component(_torch_root "${_torch_prefix}/../.." ABSOLUTE)
+        list(APPEND CMAKE_PREFIX_PATH "${_torch_root}")
         # Pin Caffe2_DIR so find_package(Caffe2) inside TorchConfig.cmake
         # picks the venv's Caffe2, not a stale system-installed one.
         set(Caffe2_DIR "${_torch_prefix}/Caffe2" CACHE PATH "" FORCE)
