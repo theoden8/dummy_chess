@@ -58,6 +58,10 @@ find_package(Torch REQUIRED)
 # TORCH_LIBRARIES.  Filter it out when the file doesn't exist.
 list(FILTER TORCH_LIBRARIES EXCLUDE REGEX "nvToolsExt")
 
+# Ensure the venv's libtorch directory is searched before /usr/local/lib
+# so the correct libc10_cuda.so (matching our CUDA version) is found.
+link_directories(BEFORE "${TORCH_INSTALL_PREFIX}/lib")
+
 # Match libtorch's CXX11 ABI so all symbols agree at link time.
 if(TORCH_CXX_FLAGS)
     string(FIND "${TORCH_CXX_FLAGS}" "-D_GLIBCXX_USE_CXX11_ABI=0" _abi0_pos)
