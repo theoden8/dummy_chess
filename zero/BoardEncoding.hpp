@@ -125,19 +125,23 @@ inline void encode_legal_moves(Board& board, bool* mask) {
         piece_bitboard_t moves = board.state.moves[from_sq];
         if (moves == 0) continue;
         bitmask::foreach(moves, [&](pos_t to_sq) noexcept -> void {
-            // Check if this is a promotion
             int from_rank = from_sq / board::LEN;
             int to_rank = to_sq / board::LEN;
+            bool back_rank = (to_rank == 7 && from_rank == 6)
+                          || (to_rank == 0 && from_rank == 1);
             bool is_pawn = (board.get_mask(Piece(PAWN, board.activePlayer())) >> from_sq) & 1;
-            bool is_promo = is_pawn &&
-                ((to_rank == 7 && from_rank == 6) || (to_rank == 0 && from_rank == 1));
 
-            if (is_promo) {
-                // All 4 promotions are legal
+            if (is_pawn && back_rank) {
+                // Pawn promotion: all 4 promotion types
                 for (PIECE pp : {KNIGHT, BISHOP, ROOK, QUEEN}) {
                     int idx = encode_move(from_sq, to_sq, pp);
                     if (idx >= 0) mask[idx] = true;
                 }
+            } else if (back_rank) {
+                // Non-pawn to back rank: encoding table stores these under
+                // the queen-promotion slot (AlphaZero geometric encoding).
+                int idx = encode_move(from_sq, to_sq, QUEEN);
+                if (idx >= 0) mask[idx] = true;
             } else {
                 int idx = encode_move(from_sq, to_sq, EMPTY);
                 if (idx >= 0) mask[idx] = true;
