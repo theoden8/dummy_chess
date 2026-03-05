@@ -137,13 +137,13 @@ inline void encode_legal_moves(Board& board, bool* mask) {
                     int idx = encode_move(from_sq, to_sq, pp);
                     if (idx >= 0) mask[idx] = true;
                 }
-            } else if (back_rank) {
-                // Non-pawn to back rank: encoding table stores these under
-                // the queen-promotion slot (AlphaZero geometric encoding).
-                int idx = encode_move(from_sq, to_sq, QUEEN);
-                if (idx >= 0) mask[idx] = true;
             } else {
                 int idx = encode_move(from_sq, to_sq, EMPTY);
+                // Queen-direction moves to the back rank are stored under
+                // the queen-promotion slot (AlphaZero convention).  Knight
+                // moves keep their own type, so try EMPTY first.
+                if (idx < 0 && back_rank)
+                    idx = encode_move(from_sq, to_sq, QUEEN);
                 if (idx >= 0) mask[idx] = true;
             }
         });

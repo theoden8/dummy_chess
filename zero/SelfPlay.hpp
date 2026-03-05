@@ -742,8 +742,9 @@ inline SelfPlayStats run_self_play_parallel(
             } else if (slot.board->is_draw() || slot.tree.is_terminal()) {
                 if (slot.tree.is_terminal() && !slot.board->is_draw()) {
                     std::string pos = fen::export_as_string(slot.board->export_as_fen());
-                    DC0_LOG_WARN("Game %d move %d: tree terminal but board not checkmate/draw (encoding bug?). FEN: %s",
-                                 slot.game_id + 1, slot.move_num, pos.c_str());
+                    DC0_LOG_ERROR("Game %d move %d: tree terminal but board not checkmate/draw (encoding bug). FEN: %s",
+                                  slot.game_id + 1, slot.move_num, pos.c_str());
+                    std::abort();
                 }
                 slot.result.is_draw = true;
                 slot.result.outcome = 0.0f;
