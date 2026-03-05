@@ -299,8 +299,58 @@ struct EvalResult {
     float win_rate = 0.0f;  // new model's win rate
 };
 
+// Diverse opening positions for evaluation games.
+// Each game starts from a different opening to avoid deterministic repetition.
+// Positions are after a few moves of common openings (white to move unless noted).
+inline const std::vector<const char*>& eval_openings() {
+    static const std::vector<const char*> openings = {
+        // Starting position
+        "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+        // 1. e4
+        "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1",
+        // 1. d4
+        "rnbqkbnr/pppppppp/8/8/3P4/8/PPP1PPPP/RNBQKBNR b KQkq d3 0 1",
+        // 1. e4 e5 (Open game)
+        "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq e6 0 2",
+        // 1. e4 c5 (Sicilian)
+        "rnbqkbnr/pp1ppppp/8/2p5/4P3/8/PPPP1PPP/RNBQKBNR w KQkq c6 0 2",
+        // 1. e4 e6 (French)
+        "rnbqkbnr/pppp1ppp/4p3/8/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2",
+        // 1. e4 c6 (Caro-Kann)
+        "rnbqkbnr/pp1ppppp/2p5/8/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2",
+        // 1. d4 d5 (Closed game)
+        "rnbqkbnr/ppp1pppp/8/3p4/3P4/8/PPP1PPPP/RNBQKBNR w KQkq d6 0 2",
+        // 1. d4 Nf6 (Indian)
+        "rnbqkb1r/pppppppp/5n2/8/3P4/8/PPP1PPPP/RNBQKBNR w KQkq - 1 2",
+        // 1. c4 (English)
+        "rnbqkbnr/pppppppp/8/8/2P5/8/PP1PPPPP/RNBQKBNR b KQkq c3 0 1",
+        // 1. Nf3 (Reti)
+        "rnbqkbnr/pppppppp/8/8/8/5N2/PPPPPPPP/RNBQKB1R b KQkq - 1 1",
+        // 1. e4 e5 2. Nf3 Nc6 (Four Knights setup)
+        "r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3",
+        // 1. e4 e5 2. Nf3 Nf6 (Petrov)
+        "rnbqkb1r/pppp1ppp/5n2/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3",
+        // 1. d4 d5 2. c4 (QGD)
+        "rnbqkbnr/ppp1pppp/8/3p4/2PP4/8/PP2PPPP/RNBQKBNR b KQkq c3 0 2",
+        // 1. d4 Nf6 2. c4 g6 (King's Indian setup)
+        "rnbqkb1r/pppppp1p/5np1/8/2PP4/8/PP2PPPP/RNBQKBNR w KQkq - 0 3",
+        // 1. e4 d5 (Scandinavian)
+        "rnbqkbnr/ppp1pppp/8/3p4/4P3/8/PPPP1PPP/RNBQKBNR w KQkq d6 0 2",
+        // 1. d4 f5 (Dutch)
+        "rnbqkbnr/ppppp1pp/8/5p2/3P4/8/PPP1PPPP/RNBQKBNR w KQkq f6 0 2",
+        // 1. e4 e5 2. f4 (King's Gambit)
+        "rnbqkbnr/pppp1ppp/8/4p3/4PP2/8/PPPP2PP/RNBQKBNR b KQkq f3 0 2",
+        // 1. e4 c5 2. Nf3 d6 (Sicilian Najdorf setup)
+        "rnbqkbnr/pp2pppp/3p4/2p5/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 0 3",
+        // 1. e4 e5 2. Bc4 (Bishop's Opening)
+        "rnbqkbnr/pppp1ppp/8/4p3/2B1P3/8/PPPP1PPP/RNBQK1NR b KQkq - 1 2",
+    };
+    return openings;
+}
+
 // Play evaluation games between two models.
-// new_model plays white for half the games, black for half.
+// Each game starts from a different opening position; new_model alternates
+// colors. This ensures diverse games and avoids deterministic repetition.
 //
 // Note: uses unbatched MCTS because each leaf expansion routes to one of two
 // models based on board.activePlayer(). Batching would require splitting the
@@ -322,6 +372,8 @@ inline EvalResult evaluate_models(
     config.temperature = 0.0f;
     config.max_game_moves = 256;
 
+    const auto& openings = eval_openings();
+
     EvalResult result;
     result.games = num_games;
 
@@ -338,10 +390,10 @@ inline EvalResult evaluate_models(
             }
         };
 
-        // Play the game
-        fen::FEN start = fen::load_from_string(
-            "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
-        Board board(start);
+        // Select opening position — cycle through openings, each played twice
+        // (once with new_model as white, once as black)
+        const char* opening_fen = openings[(game / 2) % openings.size()];
+        Board board(fen::load_from_string(opening_fen));
 
         MCTSTree tree;
         tree.c_puct = config.c_puct;
@@ -384,12 +436,12 @@ inline EvalResult evaluate_models(
 
         const char* res_str = (new_model_outcome > 0.5f) ? "W"
                             : (new_model_outcome < -0.5f) ? "L" : "D";
-        DC0_LOG_INFO("Eval game %d/%d (%s as %s): %s in %d moves | "
+        DC0_LOG_INFO("Eval game %d/%d (%s as %s): %s in %d moves [%s] | "
                 "running: +%d -%d =%d",
                 game + 1, num_games,
                 res_str, new_is_white ? "white" : "black",
                 game_over ? (outcome > 0 ? "1-0" : (outcome < 0 ? "0-1" : "draw")) : "draw",
-                moves_played,
+                moves_played, opening_fen,
                 result.new_wins, result.old_wins, result.draws);
     }
 
