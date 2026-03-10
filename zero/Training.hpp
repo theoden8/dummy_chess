@@ -399,9 +399,14 @@ inline EvalResult evaluate_models(
         const char* opening_fen = openings[(game / 2) % openings.size()];
         Board board(fen::load_from_string(opening_fen));
 
-        MCTSTree tree;
-        tree.c_puct = config.c_puct;
-        tree.add_noise = false;
+        // Each player gets their own tree — ensures all node values come from
+        // that player's model only.  Both trees track the same game via
+        // advance(), giving proper tree reuse without mixing evaluations.
+        MCTSTree new_tree, old_tree;
+        new_tree.c_puct = config.c_puct;  new_tree.add_noise = false;
+        old_tree.c_puct = config.c_puct;  old_tree.add_noise = false;
+        new_tree.set_root(board);
+        old_tree.set_root(board);
 
         int moves_played = 0;
         float outcome = 0.0f;
@@ -419,21 +424,22 @@ inline EvalResult evaluate_models(
                 break;
             }
 
-            // Active player's model handles all NN evals in their search.
-            // Reset tree before each search since models differ — reused
-            // nodes contain values from the other model's evaluations.
-            tree.set_root(board);
+            // Active player searches their own tree, picks a move.
             bool is_new_model_turn = (board.activePlayer() == WHITE) == new_is_white;
+            MCTSTree& active_tree = is_new_model_turn ? new_tree : old_tree;
             if (is_new_model_turn) {
-                tree.run_simulations(config.simulations_per_move, new_eval_fn);
+                active_tree.run_simulations(config.simulations_per_move, new_eval_fn);
             } else {
-                tree.run_simulations(config.simulations_per_move, old_eval_fn);
+                active_tree.run_simulations(config.simulations_per_move, old_eval_fn);
             }
 
-            move_t m = tree.select_move(0.0f);
+            move_t m = active_tree.select_move(0.0f);
             if (m == board::nullmove) break;
 
             board.make_move(m);
+            // Advance both trees so each can reuse its own subtree.
+            new_tree.advance(m, board);
+            old_tree.advance(m, board);
             moves_played++;
         }
 
