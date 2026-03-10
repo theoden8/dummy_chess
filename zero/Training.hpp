@@ -67,6 +67,15 @@ public:
                               other.examples.begin(), other.examples.end());
     }
 
+    // Trim to keep only the most recent `max_examples` examples (sliding window).
+    void trim(size_t max_examples) {
+        if (data_.examples.size() > max_examples) {
+            size_t excess = data_.examples.size() - max_examples;
+            data_.examples.erase(data_.examples.begin(),
+                                 data_.examples.begin() + excess);
+        }
+    }
+
     // Dataset interface
     torch::data::Example<> get(size_t index) override {
         const auto& ex = data_.examples[index];
@@ -380,15 +389,10 @@ inline EvalResult evaluate_models(
     for (int game = 0; game < num_games; ++game) {
         bool new_is_white = (game % 2 == 0);
 
-        // Create eval function that routes to the correct model based on side to move
-        auto eval_fn = [&](const Board& board) -> std::pair<std::vector<float>, float> {
-            bool is_white = (board.activePlayer() == WHITE);
-            if ((is_white && new_is_white) || (!is_white && !new_is_white)) {
-                return new_eval.evaluate(board);
-            } else {
-                return old_eval.evaluate(board);
-            }
-        };
+        // Each player's MCTS uses only their own model for ALL leaf evaluations.
+        // (Mixing models within one search creates inconsistent value estimates.)
+        auto new_eval_fn = [&](const Board& b) { return new_eval.evaluate(b); };
+        auto old_eval_fn = [&](const Board& b) { return old_eval.evaluate(b); };
 
         // Select opening position — cycle through openings, each played twice
         // (once with new_model as white, once as black)
@@ -398,7 +402,6 @@ inline EvalResult evaluate_models(
         MCTSTree tree;
         tree.c_puct = config.c_puct;
         tree.add_noise = false;
-        tree.set_root(board);
 
         int moves_played = 0;
         float outcome = 0.0f;
@@ -416,12 +419,21 @@ inline EvalResult evaluate_models(
                 break;
             }
 
-            tree.run_simulations(config.simulations_per_move, eval_fn);
+            // Active player's model handles all NN evals in their search.
+            // Reset tree before each search since models differ — reused
+            // nodes contain values from the other model's evaluations.
+            tree.set_root(board);
+            bool is_new_model_turn = (board.activePlayer() == WHITE) == new_is_white;
+            if (is_new_model_turn) {
+                tree.run_simulations(config.simulations_per_move, new_eval_fn);
+            } else {
+                tree.run_simulations(config.simulations_per_move, old_eval_fn);
+            }
+
             move_t m = tree.select_move(0.0f);
             if (m == board::nullmove) break;
 
             board.make_move(m);
-            tree.advance(m, board);
             moves_played++;
         }
 
@@ -508,11 +520,9 @@ inline GenerationResult run_generation(
             best_eval, config.games_per_generation, config.selfplay, data_path);
     }
 
-    // 2. Accumulate training data
+    // 2. Accumulate training data (sliding window)
     accumulated_data.append_file(data_path);
-
-    // Trim to max window size
-    // (TrainingDataset doesn't support trimming yet, but the data is there)
+    accumulated_data.trim(config.training.max_examples);
 
     // 3. Train
     DC0_LOG_INFO("=== Generation %d: Training ===", generation);
