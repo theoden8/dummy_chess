@@ -27,6 +27,7 @@ STYLE: Do NOT use import aliases (e.g. `import numpy as np`) - use full module n
 
 import argparse
 import dataclasses
+import gc
 import hashlib
 import io
 import itertools
@@ -807,6 +808,7 @@ TABLEBASE_DEPTH = 255
 
 def process_endgames(
     n_positions: int,
+    output_path: pathlib.Path,
     tablebase_path: str | None = None,
     min_pieces: int = 3,
     max_pieces: int | None = None,
@@ -814,9 +816,12 @@ def process_endgames(
     use_dtz: bool = True,
     engine_path: str | None = None,
     engine_depth: int = 12,
-) -> list[tuple[bytes, int, int, int]]:
+    shuffle: bool = True,
+    seed: int = 42,
+    batch_size: int = 100_000,
+) -> int:
     """
-    Generate endgame positions with evaluations.
+    Generate endgame positions with evaluations, streaming to parquet in batches.
 
     Scoring priority:
     1. If engine_path provided: use UCI engine evaluation
@@ -824,6 +829,8 @@ def process_endgames(
     3. Otherwise: use WDL tablebase scores
 
     Tablebase is always used to filter positions (only include positions with valid WDL).
+
+    Returns the number of positions written.
     """
     if tablebase_path is None:
         tablebase_path = DEFAULT_TABLEBASE_PATH
@@ -855,69 +862,119 @@ def process_endgames(
         except chess.engine.EngineError:
             pass  # Engine may not support Syzygy
 
-    # Collect FEN strings first, then batch compress
-    fen_results: list[tuple[str, int, int, int]] = []
+    arrow_schema = pyarrow.schema(
+        [
+            ("fen", pyarrow.large_binary()),
+            ("score", pyarrow.int64()),
+            ("depth", pyarrow.int64()),
+            ("knodes", pyarrow.int64()),
+        ]
+    )
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    rng = random.Random(seed)
+    total_written = 0
+    batch_fens: list[str] = []
+    batch_scores: list[int] = []
+    batch_depths: list[int] = []
+    batch_knodes: list[int] = []
     attempts = 0
     max_attempts = n_positions * 1000
 
+    def _flush_batch(writer: pyarrow.parquet.ParquetWriter) -> None:
+        nonlocal batch_fens, batch_scores, batch_depths, batch_knodes, total_written
+        if not batch_fens:
+            return
+        compressed = dummy_chess.preprocess.compress_fens_batch(batch_fens)
+        if shuffle:
+            indices = list(range(len(batch_fens)))
+            rng.shuffle(indices)
+            compressed = [compressed[i] for i in indices]
+            batch_scores = [batch_scores[i] for i in indices]
+            batch_depths = [batch_depths[i] for i in indices]
+            batch_knodes = [batch_knodes[i] for i in indices]
+        table = pyarrow.table(
+            {
+                "fen": compressed,
+                "score": batch_scores,
+                "depth": batch_depths,
+                "knodes": batch_knodes,
+            },
+            schema=arrow_schema,
+        )
+        writer.write_table(table)
+        total_written += len(batch_fens)
+        batch_fens = []
+        batch_scores = []
+        batch_depths = []
+        batch_knodes = []
+
     try:
-        with tqdm.auto.tqdm(total=n_positions, desc="Endgames") as pbar:
-            while len(fen_results) < n_positions and attempts < max_attempts:
-                attempts += 1
+        with pyarrow.parquet.ParquetWriter(
+            output_path, arrow_schema, compression="zstd"
+        ) as writer:
+            with tqdm.auto.tqdm(total=n_positions, desc="Endgames") as pbar:
+                while (total_written + len(batch_fens)) < n_positions and attempts < max_attempts:
+                    attempts += 1
 
-                board = generate_random_position(config, resolved_max_pieces)
-                if board is None:
-                    continue
-
-                try:
-                    # Always check tablebase WDL to filter valid positions
-                    wdl = tablebase.probe_wdl(board)
-                    if wdl is None:
+                    board = generate_random_position(config, resolved_max_pieces)
+                    if board is None:
                         continue
 
-                    # Get score based on configured method
-                    if engine:
-                        # Use UCI engine for scoring
-                        score, depth, knodes = uci_eval(board, engine, engine_depth)
-                    elif use_dtz:
-                        dtz = tablebase.probe_dtz(board)
-                        if dtz is None:
-                            score = wdl_to_score(wdl, board.turn)
+                    try:
+                        # Always check tablebase WDL to filter valid positions
+                        wdl = tablebase.probe_wdl(board)
+                        if wdl is None:
+                            continue
+
+                        # Get score based on configured method
+                        if engine:
+                            # Use UCI engine for scoring
+                            score, depth, knodes = uci_eval(board, engine, engine_depth)
+                        elif use_dtz:
+                            dtz = tablebase.probe_dtz(board)
+                            if dtz is None:
+                                score = wdl_to_score(wdl, board.turn)
+                            else:
+                                score = dtz_to_score(dtz, wdl, board.turn)
+                            depth = TABLEBASE_DEPTH
+                            knodes = 0
                         else:
-                            score = dtz_to_score(dtz, wdl, board.turn)
-                        depth = TABLEBASE_DEPTH
-                        knodes = 0
-                    else:
-                        score = wdl_to_score(wdl, board.turn)
-                        depth = TABLEBASE_DEPTH
-                        knodes = 0
+                            score = wdl_to_score(wdl, board.turn)
+                            depth = TABLEBASE_DEPTH
+                            knodes = 0
 
-                except chess.syzygy.MissingTableError:
-                    continue
+                    except chess.syzygy.MissingTableError:
+                        continue
 
-                fen_results.append((board.fen(), int(score), depth, knodes))
-                pbar.update(1)
+                    batch_fens.append(board.fen())
+                    batch_scores.append(int(score))
+                    batch_depths.append(depth)
+                    batch_knodes.append(knodes)
+                    pbar.update(1)
+
+                    if len(batch_fens) >= batch_size:
+                        _flush_batch(writer)
+
+            # Generation done - free tablebase/engine memory before final write
+            tablebase.close()
+            tablebase = None
+            if engine:
+                engine.quit()
+                engine = None
+            gc.collect()
+
+            # Flush remaining
+            _flush_batch(writer)
 
     finally:
-        tablebase.close()
-        if engine:
+        if tablebase is not None:
+            tablebase.close()
+        if engine is not None:
             engine.quit()
 
-    # Batch compress all FENs
-    if fen_results:
-        fens = [row[0] for row in fen_results]
-        compressed_fens = dummy_chess.preprocess.compress_fens_batch(fens)
-        results: list[tuple[bytes, int, int, int]] = [
-            (
-                compressed_fens[i],
-                fen_results[i][1],
-                fen_results[i][2],
-                fen_results[i][3],
-            )
-            for i in range(len(fen_results))
-        ]
-        return results
-    return []
+    print(f"Saved {total_written} rows -> {output_path}")
+    return total_written
 
 
 # =============================================================================
@@ -2814,8 +2871,9 @@ def main():
     elif args.source == "endgames":
         if args.max is None:
             args.max = 100000
-        data = process_endgames(
+        n_written = process_endgames(
             args.max,
+            pathlib.Path(args.output),
             args.tablebase,
             args.min_pieces,
             args.max_pieces,
@@ -2823,16 +2881,10 @@ def main():
             not args.no_dtz,
             engine_path=args.engine,
             engine_depth=args.depth,
-        )
-
-        print(f"Valid: {len(data)}")
-
-        save_data(
-            data,
-            pathlib.Path(args.output),
             shuffle=not args.no_shuffle,
             seed=args.seed,
         )
+        print(f"Valid: {n_written}")
         return
 
     elif args.source == "games":
