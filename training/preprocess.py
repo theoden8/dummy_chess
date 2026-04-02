@@ -2514,6 +2514,100 @@ def save_data(
 # =============================================================================
 
 
+def concat_parquet(
+    input_paths: list[pathlib.Path],
+    output_path: pathlib.Path,
+    row_group_size: int = 500_000,
+) -> None:
+    """
+    Concatenate multiple parquet files into one, streaming row-group-by-row-group.
+    At most one output row group is buffered in memory at a time.
+
+    Ensures the fen column is large_binary (not binary_view).
+    Writes to a temp file, then atomically renames.
+    """
+    if not input_paths:
+        print("No input files")
+        return
+
+    # Use schema from first file
+    first_pf = pyarrow.parquet.ParquetFile(str(input_paths[0]))
+    schema = first_pf.schema_arrow
+
+    # Ensure fen column is large_binary in output schema
+    fen_idx = schema.get_field_index("fen")
+    if fen_idx >= 0 and schema.field(fen_idx).type != pyarrow.large_binary():
+        schema = pyarrow.schema(
+            [
+                (
+                    field.name,
+                    pyarrow.large_binary() if field.name == "fen" else field.type,
+                )
+                for field in schema
+            ]
+        )
+
+    total_rows = sum(
+        pyarrow.parquet.ParquetFile(str(p)).metadata.num_rows for p in input_paths
+    )
+    n_output_rgs = (total_rows + row_group_size - 1) // row_group_size
+    print(
+        f"Concatenating {len(input_paths)} files ({total_rows:,} rows) "
+        f"-> {n_output_rgs} row groups ({row_group_size:,} rows/rg)"
+    )
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=output_path.parent, suffix=".parquet.tmp")
+    os.close(tmp_fd)
+    tmp_path = pathlib.Path(tmp_path)
+
+    try:
+        with pyarrow.parquet.ParquetWriter(
+            str(tmp_path), schema, compression="zstd"
+        ) as writer:
+            buffer: pyarrow.Table | None = None
+            buffer_rows = 0
+
+            for file_path in tqdm.auto.tqdm(input_paths, desc="Files", unit=" files"):
+                pf = pyarrow.parquet.ParquetFile(str(file_path))
+                for rg_idx in range(pf.metadata.num_row_groups):
+                    table = pf.read_row_group(rg_idx)
+
+                    # Cast fen if needed
+                    fi = table.schema.get_field_index("fen")
+                    if fi >= 0 and table.column("fen").type != pyarrow.large_binary():
+                        fen_col = table.column("fen").cast(pyarrow.large_binary())
+                        table = table.set_column(fi, "fen", fen_col)
+
+                    if buffer is None:
+                        buffer = table
+                        buffer_rows = len(table)
+                    else:
+                        buffer = pyarrow.concat_tables([buffer, table])
+                        buffer_rows = len(buffer)
+
+                    del table
+
+                    # Flush complete row groups from buffer
+                    while buffer_rows >= row_group_size:
+                        chunk = buffer.slice(0, row_group_size)
+                        writer.write_table(chunk)
+                        buffer = buffer.slice(row_group_size)
+                        buffer_rows = len(buffer)
+                        del chunk
+
+            # Flush remaining rows
+            if buffer is not None and buffer_rows > 0:
+                writer.write_table(buffer)
+            del buffer
+
+        tmp_path.rename(output_path)
+        print(f"Saved {total_rows:,} rows -> {output_path}")
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
+
+
 def repack_parquet(
     input_path: pathlib.Path,
     output_path: pathlib.Path | None = None,
@@ -2654,8 +2748,9 @@ def main():
             "shuffle",
             "dedupe",
             "repack",
+            "concat",
         ],
-        help="Data source or tool: 'puzzles', 'evals', 'endgames', 'games', 'games-all', 'shuffle', 'dedupe', or 'repack'",
+        help="Data source or tool: 'puzzles', 'evals', 'endgames', 'games', 'games-all', 'shuffle', 'dedupe', 'repack', or 'concat'",
     )
     parser.add_argument("-i", "--input", default=None, help="Input file")
     parser.add_argument("-o", "--output", default=None, help="Output file")
@@ -2811,7 +2906,7 @@ def main():
         elif args.source == "evals":
             args.input = "data/lichess_db_eval.jsonl.zst"
 
-    if args.output is None and args.source != "repack":
+    if args.output is None and args.source not in ("repack", "concat"):
         args.output = f"data/{args.source}.parquet"
 
     if args.toy:
@@ -3173,6 +3268,36 @@ def main():
 
         output = pathlib.Path(args.output) if args.output else None
         repack_parquet(input_path, output, row_group_size=args.row_group_size)
+        return
+
+    elif args.source == "concat":
+        if args.input is None:
+            print("Error: --input is required for concat (glob pattern or path)")
+            sys.exit(1)
+        if args.output is None:
+            print("Error: --output is required for concat")
+            sys.exit(1)
+
+        # Expand glob pattern
+        input_pattern = pathlib.Path(args.input)
+        if any(c in args.input for c in "*?["):
+            input_files = sorted(input_pattern.parent.glob(input_pattern.name))
+        else:
+            input_files = [input_pattern]
+
+        if not input_files:
+            print(f"Error: no files matched '{args.input}'")
+            sys.exit(1)
+        for f in input_files:
+            if not f.exists():
+                print(f"Error: {f} not found")
+                sys.exit(1)
+
+        concat_parquet(
+            input_files,
+            pathlib.Path(args.output),
+            row_group_size=args.row_group_size,
+        )
         return
 
 
