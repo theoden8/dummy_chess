@@ -26,6 +26,7 @@ STYLE: Do NOT use import aliases (e.g. `import numpy as np`) - use full module n
 """
 
 import argparse
+import ctypes
 import dataclasses
 import gc
 import hashlib
@@ -55,6 +56,39 @@ import tqdm.auto
 import zstandard
 
 import download
+
+
+# =============================================================================
+# Memory tuning for long-running streaming jobs
+# =============================================================================
+# Under ulimit -v 4G, large lichess months (3+ GB compressed) plus libtorrent's
+# default per-thread glibc arenas (up to ~1 GB of VM overhead) saturate the
+# address space and OOM. Two small interventions keep VmSize stable:
+#
+#   1. Cap glibc's per-thread arenas at 2 (mallopt M_ARENA_MAX = -8).
+#      Saves ~1 GB of virtual memory that's otherwise reserved but unused.
+#      Must be set before libtorrent/stockfish threads create their arenas.
+#      (The MALLOC_ARENA_MAX env var does the same thing if preferred.)
+#
+#   2. After long-running loops, release free arena memory back to the OS
+#      via malloc_trim(0). Complements pymalloc's arena reuse.
+
+try:
+    _libc = ctypes.CDLL("libc.so.6", use_errno=False)
+    _libc.mallopt.argtypes = [ctypes.c_int, ctypes.c_int]
+    _libc.mallopt.restype = ctypes.c_int
+    _libc.malloc_trim.argtypes = [ctypes.c_size_t]
+    _libc.malloc_trim.restype = ctypes.c_int
+    # M_ARENA_MAX = -8 (from glibc malloc.h)
+    _libc.mallopt(-8, 2)
+
+    def release_memory() -> None:
+        gc.collect()
+        _libc.malloc_trim(0)
+
+except (OSError, AttributeError):
+    def release_memory() -> None:
+        gc.collect()
 
 
 # =============================================================================
@@ -1380,6 +1414,8 @@ def process_games_pgn_evals(
         pyarrow.parquet.write_table(table, batch_path, compression="zstd")
         batch_num += 1
         batch = []
+        del table
+        release_memory()
 
     def save_progress() -> None:
         progress.games_processed = games_processed
@@ -1744,6 +1780,8 @@ def process_games(
         pyarrow.parquet.write_table(table, batch_path, compression="zstd")
         batch_num += 1
         batch = []
+        del table
+        release_memory()
 
     def save_progress() -> None:
         progress.games_processed = games_processed

@@ -119,14 +119,36 @@ class TorrentStream(io.RawIOBase):
         self._piece_length = self._info.piece_length()
         self._num_pieces = self._info.num_pieces()
 
-        # Create session with memory-efficient settings
+        # Create session with memory-efficient settings.
+        # Under ulimit -v 4G the Python process + engine + pyarrow can only
+        # afford ~100–200 MB for libtorrent. Without these caps, disk cache +
+        # per-peer receive buffers grow linearly during long streaming reads
+        # (measured ~50 MB per 500 games at depth 10), and eventually OOM.
         self._session = lt.session()
         settings = {
             "download_rate_limit": max_download_rate,
             "upload_rate_limit": max_upload_rate,
-            "connections_limit": 50,  # Reduced from 200 to save memory
+            "connections_limit": 20,  # fewer peers => smaller recv-buffer sum
             "active_downloads": 1,
             "active_seeds": 1,
+            # Disk cache: we stream-read via open()/seek()/read() through the
+            # OS page cache, so libtorrent's own cache is pure overhead.
+            "cache_size": 16,  # 16 * 16 KB = 256 KB
+            "max_queued_disk_bytes": 128 * 1024,  # 128 KB (default 1 MB)
+            # THE BIG ONE: default (auto_mmap_write=2) mmaps the target file,
+            # so VmSize includes the full compressed file (~3 GB for 2017-03),
+            # saturating ulimit -v before we read a byte. Force pwrite(2)
+            # instead so the file isn't mapped into our address space.
+            "disk_write_mode": int(lt.mmap_write_mode_t.always_pwrite),
+            # Send buffer: we don't upload, keep it small.
+            "send_buffer_watermark": 64 * 1024,  # 64 KB
+            # Receive buffers: the big one. Default is 2 MB per peer.
+            "max_peer_recv_buffer_size": 256 * 1024,  # 256 KB per peer
+            # Turn off services we don't need for sequential streaming.
+            "enable_dht": False,
+            "enable_lsd": False,
+            "enable_upnp": False,
+            "enable_natpmp": False,
         }
         self._session.apply_settings(settings)
 
