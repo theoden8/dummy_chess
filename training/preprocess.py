@@ -1778,12 +1778,17 @@ def process_games(
                     initial=progress.games_processed if resume else 0,
                 )
 
-                for game in iter_pgn_games(text_stream):
+                for pgn_text in iter_pgn_text(text_stream):
                     games_processed += 1
                     pbar.update(1)
 
-                    # Skip games if resuming
+                    # Skip games if resuming - text-only, no parse
                     if resume and games_processed <= progress.games_processed:
+                        continue
+
+                    # Parse only games we actually process
+                    game = chess.pgn.read_game(io.StringIO(pgn_text))
+                    if game is None:
                         continue
 
                     # Filter game
