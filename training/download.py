@@ -28,7 +28,6 @@ import re
 import socket
 import subprocess
 import sys
-import tempfile
 import time
 import typing
 import urllib.request
@@ -72,111 +71,58 @@ GAMES_HASH_URL = "https://database.lichess.org/{variant}/sha256sums.txt"
 import libtorrent as lt
 
 
+# libtorrent's HTTP web seed silently breaks when pyarrow is loaded in the same
+# process — reproducible bisect: `import pyarrow` alone, then any libtorrent
+# session refuses to attach to the BEP-19 web seed (peer_info has zero entries
+# of conn_type http_seed/web_seed) even when DNS is pre-resolved. Lichess
+# torrents have ~1 seeder per month, so without the web seed we get nothing.
+# Workaround: run libtorrent in a subprocess that imports only stdlib +
+# libtorrent (no pyarrow), pipe bytes back over stdout.
+TORRENT_CHILD_SCRIPT = pathlib.Path(__file__).resolve().parent / "_torrent_child.py"
+
+
 class TorrentStream(io.RawIOBase):
     """
-    A file-like object that streams data from a BitTorrent download.
+    File-like stream over a BitTorrent download, run in an isolated subprocess.
 
-    Uses sequential download mode to ensure pieces are downloaded in order,
-    allowing the file to be read as it downloads. Prefetches ahead to keep
-    the download saturated while processing.
+    Parent fetches metadata (name, total_size) from the .torrent file, then
+    spawns a child that opens the libtorrent session and pumps file bytes to
+    stdout. Read calls forward to the child's stdout pipe.
     """
-
-    # Number of pieces to prefetch ahead (1 MB pieces typical)
-    # Reduced from 64 to 32 to save memory (~32 MB prefetch buffer)
-    PREFETCH_PIECES = 32
 
     def __init__(
         self,
         torrent_url: str,
         save_dir: pathlib.Path | None = None,
-        max_download_rate: int = 0,
-        max_upload_rate: int = 100 * 1024,
-        prefetch_pieces: int = 64,
     ):
-        """
-        Initialize torrent stream.
-
-        Args:
-            torrent_url: URL to .torrent file
-            save_dir: Directory to save the file (default: temp directory)
-            max_download_rate: Max download speed in bytes/sec (0 = unlimited)
-            max_upload_rate: Max upload speed in bytes/sec
-            prefetch_pieces: Number of pieces to prefetch ahead (default 64 = ~64 MB)
-        """
         super().__init__()
-        self._torrent_url = torrent_url
-        self._position = 0
         self._closed = False
-        self._prefetch_pieces = prefetch_pieces
 
-        # Fetch torrent file
+        # Fetch + parse torrent metadata in the parent. Pure parsing (bdecode +
+        # torrent_info) doesn't trigger the libtorrent-vs-pyarrow bug; only
+        # actually downloading does.
         with urllib.request.urlopen(torrent_url, timeout=30) as resp:
-            torrent_data = resp.read()
+            tdata = resp.read()
+        info = lt.torrent_info(lt.bdecode(tdata))
+        self._name = info.name()
+        self._total_size = info.total_size()
+        del info
 
-        # Parse torrent
-        self._info = lt.torrent_info(lt.bdecode(torrent_data))
-        self._total_size = self._info.total_size()
-        self._piece_length = self._info.piece_length()
-        self._num_pieces = self._info.num_pieces()
-
-        # Create session with memory-efficient settings.
-        # Under ulimit -v 4G the Python process + engine + pyarrow can only
-        # afford ~100–200 MB for libtorrent. Without these caps, disk cache +
-        # per-peer receive buffers grow linearly during long streaming reads
-        # (measured ~50 MB per 500 games at depth 10), and eventually OOM.
-        self._session = lt.session()
-        settings = {
-            "download_rate_limit": max_download_rate,
-            "upload_rate_limit": max_upload_rate,
-            "connections_limit": 20,  # fewer peers => smaller recv-buffer sum
-            "active_downloads": 1,
-            "active_seeds": 1,
-            # Disk cache: we stream-read via open()/seek()/read() through the
-            # OS page cache, so libtorrent's own cache is pure overhead.
-            "cache_size": 16,  # 16 * 16 KB = 256 KB
-            "max_queued_disk_bytes": 128 * 1024,  # 128 KB (default 1 MB)
-            # THE BIG ONE: default (auto_mmap_write=2) mmaps the target file,
-            # so VmSize includes the full compressed file (~3 GB for 2017-03),
-            # saturating ulimit -v before we read a byte. Force pwrite(2)
-            # instead so the file isn't mapped into our address space.
-            "disk_write_mode": int(lt.mmap_write_mode_t.always_pwrite),
-            # Send buffer: we don't upload, keep it small.
-            "send_buffer_watermark": 64 * 1024,  # 64 KB
-            # Receive buffers: the big one. Default is 2 MB per peer.
-            "max_peer_recv_buffer_size": 256 * 1024,  # 256 KB per peer
-            # Turn off services we don't need for sequential streaming.
-            "enable_dht": False,
-            "enable_lsd": False,
-            "enable_upnp": False,
-            "enable_natpmp": False,
-        }
-        self._session.apply_settings(settings)
-
-        # Set up save directory
-        if save_dir is None:
-            self._temp_dir = tempfile.TemporaryDirectory()
-            self._save_dir = pathlib.Path(self._temp_dir.name)
-        else:
-            self._temp_dir = None
-            self._save_dir = save_dir
-            self._save_dir.mkdir(parents=True, exist_ok=True)
-
-        # Add torrent with sequential download
-        params = lt.add_torrent_params()
-        params.ti = self._info
-        params.save_path = str(self._save_dir)
-        params.flags |= lt.torrent_flags.sequential_download
-
-        self._handle = self._session.add_torrent(params)
-        self._file_path = self._save_dir / self._info.name()
-
-        # Wait for metadata and file allocation
-        while not self._handle.status().has_metadata:
-            time.sleep(0.1)
+        argv = [sys.executable, str(TORRENT_CHILD_SCRIPT), torrent_url]
+        if save_dir is not None:
+            save_dir = pathlib.Path(save_dir)
+            save_dir.mkdir(parents=True, exist_ok=True)
+            argv.append(str(save_dir))
+        self._proc = subprocess.Popen(
+            argv,
+            stdout=subprocess.PIPE,
+            stderr=None,  # Inherit parent stderr so child status prints to terminal
+            bufsize=0,
+        )
 
     @property
     def name(self) -> str:
-        return self._info.name()
+        return self._name
 
     @property
     def total_size(self) -> int:
@@ -189,101 +135,40 @@ class TorrentStream(io.RawIOBase):
         return False
 
     def seekable(self) -> bool:
-        return False  # Sequential only for streaming
-
-    def _wait_for_piece(self, piece_index: int, timeout: float = 300) -> bool:
-        """Wait for a specific piece to be downloaded."""
-        start = time.monotonic()
-        while True:
-            if self._handle.have_piece(piece_index):
-                return True
-            if time.monotonic() - start > timeout:
-                return False
-            # Prioritize this piece and nearby pieces
-            self._handle.piece_priority(piece_index, 7)  # Highest priority
-            time.sleep(0.1)
-
-    def _wait_for_bytes(self, start: int, end: int, timeout: float = 300) -> bool:
-        """Wait for a byte range to be available and prefetch ahead."""
-        start_piece = start // self._piece_length
-        end_piece = min((end - 1) // self._piece_length, self._num_pieces - 1)
-
-        # Prefetch: set high priority for pieces ahead of current read
-        prefetch_end = min(end_piece + self._prefetch_pieces, self._num_pieces - 1)
-        for piece_idx in range(end_piece + 1, prefetch_end + 1):
-            if not self._handle.have_piece(piece_idx):
-                self._handle.piece_priority(piece_idx, 6)  # High priority for prefetch
-
-        # Wait for the pieces we actually need now
-        for piece_idx in range(start_piece, end_piece + 1):
-            if not self._wait_for_piece(piece_idx, timeout):
-                return False
-        return True
+        return False
 
     def readinto(self, b: typing.Any) -> int:
-        """Read bytes into a pre-allocated buffer."""
         if self._closed:
             raise ValueError("I/O operation on closed file")
-
-        if self._position >= self._total_size:
-            return 0
-
-        # Calculate how much to read
-        to_read = min(len(b), self._total_size - self._position)
-        end_pos = self._position + to_read
-
-        # Wait for data to be available
-        if not self._wait_for_bytes(self._position, end_pos):
-            raise IOError(
-                f"Timeout waiting for torrent data at position {self._position}"
-            )
-
-        # Read from file
-        with open(self._file_path, "rb") as f:
-            f.seek(self._position)
-            data = f.read(to_read)
-
-        n = len(data)
-        b[:n] = data
-        self._position += n
+        n = self._proc.stdout.readinto(b)
+        if n == 0:
+            rc = self._proc.poll()
+            if rc is not None and rc != 0:
+                raise IOError(
+                    f"torrent subprocess (pid {self._proc.pid}) exited with code {rc}"
+                )
         return n
 
-    def read(self, size: int = -1) -> bytes:
-        """Read and return bytes."""
-        if self._closed:
-            raise ValueError("I/O operation on closed file")
-
-        if size < 0:
-            size = self._total_size - self._position
-
-        if self._position >= self._total_size:
-            return b""
-
-        to_read = min(size, self._total_size - self._position)
-        end_pos = self._position + to_read
-
-        # Wait for data
-        if not self._wait_for_bytes(self._position, end_pos):
-            raise IOError(
-                f"Timeout waiting for torrent data at position {self._position}"
-            )
-
-        # Read from file
-        with open(self._file_path, "rb") as f:
-            f.seek(self._position)
-            data = f.read(to_read)
-
-        self._position += len(data)
-        return data
-
     def close(self) -> None:
-        """Clean up torrent session."""
-        if not self._closed:
-            self._closed = True
-            if self._handle.is_valid():
-                self._session.remove_torrent(self._handle)
-            if self._temp_dir:
-                self._temp_dir.cleanup()
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self._proc.stdout.close()
+        except Exception:
+            pass
+        # Closing stdout sends SIGPIPE on next write; child's BrokenPipeError
+        # handler exits cleanly. Give it a moment, then escalate.
+        try:
+            self._proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            self._proc.terminate()
+            try:
+                self._proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                self._proc.kill()
+                self._proc.wait()
+        super().close()
 
     def __enter__(self) -> "TorrentStream":
         return self
@@ -299,27 +184,21 @@ def open_torrent_stream(
     prefetch_pieces: int = 32,
 ) -> TorrentStream:
     """
-    Open a torrent URL for streaming.
+    Open a torrent URL for streaming via an isolated subprocess.
 
     Args:
-        url: URL to the .torrent file (or data URL with .torrent appended)
-        save_dir: Directory to save downloaded data (default: temp dir)
-        max_download_rate: Max download speed in bytes/sec (0 = unlimited)
-        prefetch_pieces: Number of pieces to prefetch ahead (default 32 = ~32 MB)
-
-    Returns:
-        TorrentStream object that can be used as a file-like object
+        url: URL to the .torrent file (with or without .torrent suffix)
+        save_dir: Directory the child writes the downloaded file to. Default:
+            child uses a private TemporaryDirectory and cleans it on exit.
+        max_download_rate: ignored (kept for backward compat)
+        prefetch_pieces: ignored (child uses a fixed prefetch policy)
 
     Example:
         with open_torrent_stream("https://example.com/file.zst.torrent") as stream:
-            # stream is a file-like object
             data = stream.read(1024)
     """
-    # Ensure URL ends with .torrent
     torrent_url = url if url.endswith(".torrent") else url + ".torrent"
-    return TorrentStream(
-        torrent_url, save_dir, max_download_rate, prefetch_pieces=prefetch_pieces
-    )
+    return TorrentStream(torrent_url, save_dir=save_dir)
 
 
 # Months with known data issues - skip entirely
